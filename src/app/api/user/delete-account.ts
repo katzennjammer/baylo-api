@@ -25,7 +25,18 @@ import prisma from "@/lib/prisma"
 const DELETED_NAME = "Deleted user"
 
 export type DeleteOutcome =
-  | { ok: true; summary: DeletionSummary }
+  | {
+      ok: true
+      summary: DeletionSummary
+      /**
+       * Cloudinary public_ids of any ID photo still awaiting review.
+       *
+       * Handed to the CALLER rather than destroyed here, so the deletion
+       * transaction never holds open across a network round trip to a third
+       * party. See the note beside the deleteMany that produces them.
+       */
+      pendingIdImages: string[]
+    }
   | { ok: false; status: number; error: string }
 
 export interface DeletionSummary {
@@ -37,6 +48,8 @@ export interface DeletionSummary {
   messagesRedacted: number
   ledgerRowsPreserved: number
   ledgerRowsAnonymised: number
+  /** IdVerification rows removed. Removed, not scrubbed -- see below. */
+  idSubmissionsRemoved: number
   leavesRetained: number
 }
 
@@ -123,6 +136,35 @@ export async function deleteAccount(
     // before that address is overwritten below.
     await tx.passwordResetToken.deleteMany({ where: { email: user.email } })
 
+    // ── Government ID submissions ───────────────────────────────────────────
+    //
+    // ROWS REMOVED, NOT ANONYMISED — the only table in this function treated
+    // that way, and the exception is the point. Everything else here is
+    // retained-and-scrubbed because a ledger row or a message thread has a
+    // counterparty whose record would develop a hole. An IdVerification row has
+    // no counterparty: it is a digest of a government ID belonging solely to
+    // the person who has just asked to be forgotten, and RA 10173 does not
+    // leave much room for keeping it.
+    //
+    // AND THIS IS WHAT FREES THE ID. The spec's rule is that deletion releases
+    // the hash and suspension does not, and this delete is the whole
+    // implementation of the first half — the claimKey goes with the row, so the
+    // unique index no longer holds a slot for that ID and a genuine person who
+    // deleted their account can register again with the same document. A
+    // SUSPENDED account keeps its rows and therefore keeps its claim, which is
+    // what stops a banned user re-presenting the same ID on a fresh signup.
+    //
+    // THE AUDIT TRAIL SURVIVES. AdminAction rows point at these ids by plain
+    // string (targetId), with no foreign key back — so "who approved this, and
+    // when" is still answerable after the row it describes is gone, which is
+    // exactly the split the retention rule wants: keep the decision, drop the
+    // document.
+    const idImages = await tx.idVerification.findMany({
+      where: { userId },
+      select: { imagePublicId: true },
+    })
+    const idSubmissionsRemoved = await tx.idVerification.deleteMany({ where: { userId } })
+
     // ── Ledger ──────────────────────────────────────────────────────────────
     // Rows are PRESERVED — count and amounts untouched, so the invariant holds
     // — but their descriptions are free text that names counterparties, so the
@@ -175,8 +217,21 @@ export async function deleteAccount(
         messagesRedacted: messagesRedacted.count,
         ledgerRowsPreserved,
         ledgerRowsAnonymised: ledgerRows.length,
+        idSubmissionsRemoved: idSubmissionsRemoved.count,
         leavesRetained: leavesBefore,
       },
+      // Handed OUT of the transaction rather than destroyed inside it. A
+      // Cloudinary call in here would hold a database transaction open across a
+      // network round trip to a third party — and a third party having a bad
+      // afternoon would then roll back an account deletion the user asked for.
+      // Same rule as the decision route: the database commits, the file is
+      // dealt with afterwards, and a decided row with a live publicId is the
+      // retry set. (There is almost never anything here: only a PENDING
+      // submission still has an image, and only if the account is deleted
+      // before it is reviewed.)
+      pendingIdImages: idImages
+        .map((r) => r.imagePublicId)
+        .filter((v): v is string => v !== null),
     }
   })
 }

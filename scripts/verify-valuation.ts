@@ -87,7 +87,17 @@ async function main() {
   await cleanup()
 
   const user = await prisma.user.create({
-    data: { name: "ZZ Valuer", email: `${P}u-${Date.now()}@example.local`, isVerified: true },
+    data: {
+      name: "ZZ Valuer",
+      email: `${P}u-${Date.now()}@example.local`,
+      isVerified: true,
+      // Past the government-ID gate. This suite creates listings through the
+      // real POST /api/items, which requires it; without the stamp every
+      // creation here is a 403 and the valuation assertions all read undefined.
+      // Stamped rather than given an APPROVED IdVerification row -- the ID flow
+      // has its own harness in scripts/verify-id-verification.ts.
+      idVerifiedGrandfatheredAt: new Date(),
+    },
   })
   const token = await signAccessToken(user.id)
 

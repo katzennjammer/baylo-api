@@ -15,9 +15,14 @@ model User {
 
   // Account verification. This flag — never "password is null" — is what
   // "verified" means. Google sign-in (web callback and native token exchange)
-  // sets it; phone OTP will set this same flag when it lands, and nothing
-  // downstream will need to change. Flipping it false -> true is what triggers
-  // the VERIFY_ACCOUNT award and the one-time signup grant; see markVerified().
+  // sets it, and so does the emailed verification link. Flipping it false ->
+  // true is what triggers the VERIFY_ACCOUNT award and the one-time signup
+  // grant; see markVerified().
+  //
+  // NOT the government-ID check. That is IdVerification below, it is derived
+  // rather than flagged, and it gates posting and DPA proposals rather than the
+  // signup grant. The two are separate on purpose and must not be folded
+  // together.
   isVerified Boolean @default(false)
 
   // One-time signup grant (SIGNUP_GRANT_LEAVES), claimed at verification, never
@@ -137,6 +142,41 @@ model User {
   blocksMade      Block[]       @relation("Blocker")
   blocksReceived  Block[]       @relation("Blocked")
   adminActions    AdminAction[] @relation("AdminActor")
+
+  // -- Government ID verification ---------------------------------------------
+  //
+  // NOT `isVerified`, AND THE TWO MUST NOT BE CONFLATED. `isVerified` above
+  // means "this person controls this mailbox"; it costs nothing to obtain and
+  // it gates nothing except the signup grant. This is the second, much heavier
+  // one: a photographed government ID, reviewed by a human, gating the two acts
+  // that can cost somebody else real property -- posting an item and proposing
+  // a deferred agreement.
+  //
+  // THERE IS NO `idVerified` BOOLEAN ON THIS ROW, deliberately. The answer is
+  // derived from the rows below (an APPROVED IdVerification, or the
+  // grandfather stamp), for the reason the note on totalTrades records: a
+  // denormalised copy of a fact is a fact that can drift out of step with the
+  // rows that produced it, and this one decides whether a listing may exist.
+  // See isIdVerified() in @/lib/id-verification, which is the only reading.
+  idVerifications         IdVerification[] @relation("IdVerificationSubject")
+  idVerificationsReviewed IdVerification[] @relation("IdVerificationReviewer")
+
+  // The grandfather stamp: non-null means this account was let past the ID
+  // gate WITHOUT a review, at the moment the gate was introduced.
+  //
+  // A TIMESTAMP AND NOT A BOOLEAN, and a column rather than a synthetic
+  // IdVerification row. A synthetic row would need an idType and an
+  // idNumberHash that do not exist, would have to be excluded from the
+  // uniqueness index by hand, and would read in the admin queue as a decision
+  // somebody made. This says exactly what happened: nobody looked at an ID for
+  // this account, and here is when we decided not to. Cleared by an ADMIN if a
+  // grandfathered account should be made to submit after all.
+  idVerifiedGrandfatheredAt DateTime?
+
+  // Soft-delete and suspension sweeps. Raw CREATE INDEX in the old chain;
+  // declared here so they survive the squash.
+  @@index([deletedAt])
+  @@index([suspendedAt])
 }
 
 model Follow {
@@ -221,10 +261,10 @@ model EmailVerificationToken {
 }
 
 model Item {
-  id          String     @id @default(cuid())
+  id          String    @id @default(cuid())
   title       String
-  description String     @db.Text
-  images      String     @db.Text
+  description String    @db.Text
+  images      String    @db.Text
   category    Category
   condition   Condition
   // The FINAL value: what the owner is asking, after any override they made.
@@ -259,7 +299,7 @@ model Item {
   // the listing is done shopping for a friendlier number.
   revaluationCount Int @default(0)
 
-  status      ItemStatus @default(AVAILABLE)
+  status ItemStatus @default(AVAILABLE)
 
   // Free text only: what the owner wants in return. This column used to double
   // as a JSON envelope carrying the pickup coordinates, which is how a home
@@ -319,6 +359,13 @@ model Item {
 
   /// One dHash per photo. See ItemImageHash.
   imageHashes ItemImageHash[]
+
+  // Both created by raw CREATE INDEX in the pre-baseline chain and never
+  // declared here. Declaring them keeps the squashed baseline faithful.
+  // "hidden takedowns, and the AVAILABLE feed that must exclude them".
+  @@index([status, moderationHiddenAt])
+  // The comparables lookup: same source, same category.
+  @@index([valuationSource, category])
 }
 
 /// ONE PERCEPTUAL HASH PER PHOTO, WHICH IS THE POOL THE DUPLICATE CHECK SCANS.
@@ -617,6 +664,12 @@ enum NotificationType {
   // The outcome of a report the recipient filed. Google Play expects a reporter
   // to be told what happened, and /trust promises it in so many words.
   REPORT_RESOLVED
+  // The outcome of an ID submission. TWO TYPES AND NOT ONE: the approval is
+  // good news that unlocks posting, the rejection carries a specific fix and a
+  // remaining-attempts count, and a client that wants to style them differently
+  // should not have to read the message text to tell them apart.
+  ID_VERIFICATION_APPROVED
+  ID_VERIFICATION_REJECTED
 }
 
 enum FollowStatus {
@@ -822,7 +875,6 @@ enum ContractStatus {
 
 /**
  * Privilege. See the long note on User.role: nothing in the API writes it.
- *
  * MODERATOR and ADMIN are distinct even though every route below currently
  * accepts either. The split costs one enum value today and is the difference
  * between "revoke this person's moderation rights" and "there is one kind of
@@ -842,7 +894,6 @@ enum ReportTargetType {
 
 /**
  * Why the reporter says the content is wrong.
- *
  * SCREAMING_SNAKE in the database, matching every other enum here, and the wire
  * carries the lower-case forms ("prohibited_item", "scam_or_fraud") through an
  * explicit closed map in @/lib/moderation. That is the same call
@@ -873,7 +924,6 @@ enum ReportStatus {
 
 /**
  * One user's claim that one piece of content breaks the rules.
- *
  * The target is a (type, id) pair rather than three nullable foreign keys.
  * Nullable FKs would give the database a shape it can check -- a real
  * constraint that the listing exists -- and that is a genuine loss, taken
@@ -892,14 +942,15 @@ model Report {
   targetType ReportTargetType
   targetId   String
   category   ReportCategory
-  /** Free text from the reporter. Capped at MAX_REPORT_NOTES in @/lib/moderation. */
+  /**
+   * Free text from the reporter. Capped at MAX_REPORT_NOTES in @/lib/moderation.
+   */
   notes      String?          @db.Text
 
   status ReportStatus @default(OPEN)
 
   /**
    * "One OPEN report per reporter per target" as a database constraint.
-   *
    * MySQL treats NULLs as DISTINCT in a unique index -- the same property
    * TaskCompletion.refId leans on, inverted. This column holds the literal
    * "live" while the report is OPEN or REVIEWING and NULL once it is ACTIONED
@@ -908,7 +959,6 @@ model Report {
    * who was told "no" could never report that target again, which is wrong: a
    * seller who cleans up a listing and re-posts the same violation next month
    * has committed a new violation.
-   *
    * WRITTEN BY THE APPLICATION, in the same statement that sets `status`, and
    * never on its own -- see resolveReport() in @/lib/moderation, which is the
    * only code that moves either column. It was going to be a STORED generated
@@ -920,12 +970,16 @@ model Report {
    */
   openKey String? @db.VarChar(4)
 
-  /** Who closed it. SetNull rather than Cascade: the report outlives the staff account. */
-  resolvedById String?
-  resolvedBy   User?     @relation("ReportResolver", fields: [resolvedById], references: [id], onDelete: SetNull)
-  resolvedAt   DateTime?
-  /** What the reporter is told. Goes verbatim into the REPORT_RESOLVED notification. */
-  resolutionNote String? @db.Text
+  /**
+   * Who closed it. SetNull rather than Cascade: the report outlives the staff account.
+   */
+  resolvedById   String?
+  resolvedBy     User?     @relation("ReportResolver", fields: [resolvedById], references: [id], onDelete: SetNull)
+  resolvedAt     DateTime?
+  /**
+   * What the reporter is told. Goes verbatim into the REPORT_RESOLVED notification.
+   */
+  resolutionNote String?   @db.Text
 
   createdAt DateTime @default(now())
 
@@ -937,17 +991,18 @@ model Report {
   // "everything ever filed against this listing" -- the report detail screen.
   @@index([targetType, targetId])
   @@index([reporterId])
+  // See the note on AdminAction.reportId: declared so the FK's implicit index
+  // does not become the schema of record under a different name.
+  @@index([resolvedById])
 }
 
 /**
  * A one-way wall. blocker stops seeing, and stops being reachable by, blocked.
- *
  * ONE ROW, NOT TWO. A block is asymmetric as an act -- only the blocker chose it
  * and only the blocker can undo it -- and symmetric in effect, because every
  * enforcement point queries BOTH directions (blocksMade none + blocksReceived
  * none). Writing a mirror row would make "who blocked whom" unrecoverable,
  * which is the one fact a moderator reading a harassment report needs.
- *
  * WHAT A BLOCK DOES NOT DO: cancel a trade, void a DeferredContract, or delete
  * a message. See the note above enforceNotBlocked() in @/lib/blocking -- a
  * block that could rewind an obligation would be a debtor's escape hatch from
@@ -968,6 +1023,178 @@ model Block {
   @@index([blockedId])
 }
 
+/// Which government ID was presented.
+///
+/// STUDENT IDs ARE ABSENT AND THAT IS THE POINT OF THE LIST. They are held
+/// disproportionately by minors -- this platform is 18+, see User.dateOfBirth --
+/// and they are the easiest document here to forge convincingly, because every
+/// school prints its own and no reviewer can know what any given one looks
+/// like. The seven below are all issued by a national agency against a
+/// registry, which is what makes "does this look right?" a question a
+/// non-expert reviewer can actually answer.
+///
+/// SCREAMING_SNAKE here, lower_snake on the wire through the closed map in
+/// @/lib/id-verification -- the same call ReportCategory and SafeZoneType
+/// document, for the same reason.
+enum IdType {
+  NATIONAL_ID
+  DRIVERS_LICENCE
+  PASSPORT
+  UMID
+  PHILHEALTH
+  POSTAL_ID
+  VOTERS_ID
+}
+
+enum IdVerificationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+/// Why a submission was refused.
+///
+/// A CLOSED LIST AND NOT FREE TEXT, because the whole value of a rejection is
+/// that the person can fix it and try again. "Rejected" tells them nothing;
+/// "the photo is too blurry to read" tells them to retake it in better light.
+/// Free text would let a tired reviewer type "no" at 1am and burn one of the
+/// three attempts a real user gets.
+enum IdRejectionReason {
+  BLURRY_PHOTO
+  NAME_MISMATCH
+  EXPIRED_ID
+  WRONG_DOCUMENT_TYPE
+  NOT_GOVERNMENT_ID
+}
+
+/**
+ * One submitted government ID, and what was decided about it.
+ * THE RETENTION RULE IS THE DESIGN OF THIS TABLE, not a policy written beside
+ * it. This is government ID data under RA 10173, and the shape below is what
+ * makes "we do not keep a folder of scanned IDs" a structural fact rather than
+ * a promise:
+ * the ID NUMBER  is only ever stored as a SHA-256 digest. The plaintext
+ * exists in the request body and in nothing else -- not a
+ * column, not a log line, not the admin queue.
+ * the IMAGE      lives in a private Cloudinary folder for as long as the row
+ * is PENDING, and is destroyed when a decision is made.
+ * Approve or reject; the image goes either way.
+ * what SURVIVES  the digest, the ID type, the outcome, who decided it and
+ * when. Enough to audit a decision and enough to enforce one
+ * ID per account, and nothing else.
+ * A row is never deleted by a decision -- only by the deletion of the account
+ * it belongs to, which is what frees the ID for re-use. See deleteAccount().
+ */
+model IdVerification {
+  id String @id @default(cuid())
+
+  userId String
+  user   User   @relation("IdVerificationSubject", fields: [userId], references: [id], onDelete: Cascade)
+
+  idType IdType
+
+  /**
+   * SHA-256 of the normalised ID number. NEVER THE NUMBER.
+   * Normalisation (case, spaces, dashes) happens in @/lib/id-verification and
+   * has to, or "S01-2345-678" and "s012345678" are two different people to this
+   * column and the same person to a reviewer.
+   * SHA-256 and not bcrypt, matching EmailVerificationToken.tokenHash and for a
+   * related reason: this digest is looked up, not verified against a candidate.
+   * The uniqueness check is a unique-index hit on a digest computed from the
+   * submitted number, which a work factor would make impossible. The trade-off
+   * is honest and worth naming: an ID number is low-entropy enough to be
+   * brute-forced from a digest by anyone holding this table, so the digest is a
+   * defence against casual reading and against the number leaking into a
+   * backup, NOT against a determined attacker with the database. Storing the
+   * number itself would be strictly worse in every one of those cases.
+   */
+  idNumberHash String @db.VarChar(64)
+
+  /**
+   * "One government ID, one account" as a database constraint.
+   * The same trick as Report.openKey, and the same reason it cannot be a
+   * generated column. This holds a COPY of idNumberHash while the row is
+   * PENDING or APPROVED, and NULL once it is REJECTED. MySQL treats NULLs as
+   * distinct in a unique index, so the @@unique below permits exactly one live
+   * claim per ID number and any number of rejected ones.
+   * WHICH IS THE WHOLE RULE FROM THE SPEC, expressed once:
+   * REJECTED  frees the ID -- a real person whose photo was blurry must be
+   * able to send the same ID again, and so must a second household
+   * member if the first submission was a mistake.
+   * APPROVED  does not. Otherwise a suspended user creates a new account and
+   * re-presents the same ID, and the suspension means nothing.
+   * PENDING   does not either. Two accounts racing the same ID through the
+   * queue must not both be able to win.
+   * DELETED   frees it, by the row being removed with the account.
+   * WRITTEN BY THE APPLICATION, in the same statement that sets `status`, and
+   * never on its own. MariaDB 10.4.32 hangs the entire server on an UPDATE to a
+   * table with a STORED generated column inside a unique index; see the note on
+   * Report.openKey, which is where that was found out.
+   */
+  claimKey String? @db.VarChar(64)
+
+  status          IdVerificationStatus @default(PENDING)
+  rejectionReason IdRejectionReason?
+
+  /**
+   * Who decided. SetNull: the decision outlives the staff account that made it.
+   */
+  reviewedById String?
+  reviewedBy   User?     @relation("IdVerificationReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewedAt   DateTime?
+
+  submittedAt DateTime @default(now())
+
+  /**
+   * Which attempt this was: 1, 2 or 3.
+   * A SNAPSHOT, NOT THE ENFORCEMENT. The cap is enforced by counting this
+   * user's rows at submission time, because a stored counter and the rows it
+   * counts are two things that can disagree -- and the direction they disagree
+   * in here decides whether somebody gets a fourth try at a document they have
+   * already been refused three times for. This column is what the reviewer and
+   * the user read ("attempt 2 of 3"); the COUNT(*) is what refuses the fourth.
+   */
+  attemptCount Int
+
+  /**
+   * The uploaded photo, while it exists. NULL is the steady state.
+   * Both columns are populated only between submission and decision, and they
+   * are cleared on different schedules ON PURPOSE:
+   * imageUrl       nulled inside the decision transaction. Once a decision is
+   * made nothing may render this image again, and that must be
+   * true the instant the decision commits -- it cannot wait on
+   * a network call to Cloudinary.
+   * imagePublicId  nulled only once Cloudinary confirms the destroy. It is
+   * the delete key, so nulling it before the file is gone
+   * would strand the file with nothing left pointing at it.
+   * A decided row with a non-null imagePublicId is therefore exactly the set of
+   * images that still need destroying, which is what the retry sweep queries.
+   * See sweepUndeletedIdImages() in @/lib/id-verification.
+   */
+  imageUrl      String? @db.Text
+  imagePublicId String? @db.VarChar(255)
+
+  /**
+   * When Cloudinary confirmed the destroy.
+   */
+  imageDeletedAt      DateTime?
+  /**
+   * When a destroy last failed. Non-null with imagePublicId non-null = retry me.
+   */
+  imageDeleteFailedAt DateTime?
+
+  createdAt DateTime @default(now())
+
+  // The live claim on an ID number. See claimKey.
+  @@unique([claimKey])
+  // "this user's submissions, newest first" -- the status screen and the cap.
+  @@index([userId, submittedAt])
+  // The queue: PENDING, oldest first.
+  @@index([status, submittedAt])
+  // The retry sweep: decided rows whose image is still up there.
+  @@index([status, imagePublicId])
+}
+
 enum AdminActionKind {
   REPORT_REVIEWING
   REPORT_DISMISSED
@@ -980,6 +1207,8 @@ enum AdminActionKind {
   HUB_UPDATED
   HUB_DEACTIVATED
   HUB_REACTIVATED
+  ID_VERIFICATION_APPROVED
+  ID_VERIFICATION_REJECTED
 }
 
 enum AdminTargetType {
@@ -987,20 +1216,18 @@ enum AdminTargetType {
   LISTING
   USER
   HUB
+  ID_VERIFICATION
 }
 
 /**
  * The audit trail. Who did what, when, and why.
- *
  * Moderation without an audit row is indistinguishable from abuse: a suspended
  * user, a hidden listing and a dismissed report all look the same whether a
  * moderator followed the policy or settled a grudge, and the only difference
  * that can ever be recovered is the one that was written down at the time.
- *
  * `reason` is NOT NULL AND NOT DEFAULTED. Every route that writes one of these
  * requires the moderator to type it. An optional reason is a reason nobody
  * fills in.
- *
  * `actorId` has no onDelete, which on MySQL means RESTRICT: the database
  * refuses to delete a staff account that has moderated anything. Deleting a
  * moderator must not vacuum up the record of what they did.
@@ -1015,11 +1242,13 @@ model AdminAction {
   targetType AdminTargetType
   targetId   String
 
-  /** The report this action answers, when there is one. Bulk cleanup has none. */
+  /**
+   * The report this action answers, when there is one. Bulk cleanup has none.
+   */
   reportId String?
   report   Report? @relation(fields: [reportId], references: [id], onDelete: SetNull)
 
-  reason String @db.Text
+  reason String  @db.Text
   /**
    * JSON snapshot of what changed -- prior item status, prior suspension dates,
    * the listing title as it read at takedown. A plain Text column and not a
@@ -1033,6 +1262,11 @@ model AdminAction {
   @@index([actorId, createdAt])
   @@index([targetType, targetId])
   @@index([createdAt])
+  // Present in the database since the moderation migration; declared here so a
+  // baseline built from this schema reproduces it. Without the declaration MySQL
+  // still indexes reportId to satisfy the foreign key, but names it
+  // AdminAction_reportId_fkey -- same coverage, different name, permanent drift.
+  @@index([reportId])
 }
 
 // -- Safe-Zone Hubs ----------------------------------------------------------

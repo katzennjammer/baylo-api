@@ -33,6 +33,15 @@ import { SIGNUP_GRANT_LEAVES } from "../src/lib/task-constants"
 const BASE = process.env.ACCEPT_BASE ?? "http://127.0.0.1:3100"
 const SMTP_PORT = Number(process.env.ACCEPT_SMTP_PORT ?? 2525)
 const P = "zzmobileauth-"
+/**
+ * A date of birth for every fixture.
+ *
+ * REQUIRED by /api/auth/register since the 18+ gate landed (migration
+ * 20260903000000_user_date_of_birth). This suite predates it and had been
+ * failing on a 400 ever since; the fixtures are simply adults.
+ */
+const ADULT_DOB = "1995-06-15"
+
 const PASSWORD = "correct-horse-battery"
 
 let pass = 0
@@ -176,7 +185,7 @@ async function main() {
   const short = await req("/api/auth/register", {
     method: "POST",
     headers: jsonHeaders,
-    body: JSON.stringify({ name: "Short Pass", email: `${P}short-${stamp}@example.com`, password: "7chars!" }),
+    body: JSON.stringify({ name: "Short Pass", email: `${P}short-${stamp}@example.com`, password: "7chars!", dateOfBirth: ADULT_DOB }),
   })
   const shortIssues = (short.json.issues ?? []) as { field: string; message: string }[]
   check(
@@ -193,7 +202,7 @@ async function main() {
   const reg = await req("/api/auth/register", {
     method: "POST",
     headers: jsonHeaders,
-    body: JSON.stringify({ name: "Mobile Tester", email, password: PASSWORD }),
+    body: JSON.stringify({ name: "Mobile Tester", email, password: PASSWORD, dateOfBirth: ADULT_DOB }),
   })
   check("registration returns 201", reg.status === 201, `status=${reg.status} body=${JSON.stringify(reg.json)}`)
   check(
@@ -210,7 +219,7 @@ async function main() {
   const dupe = await req("/api/auth/register", {
     method: "POST",
     headers: jsonHeaders,
-    body: JSON.stringify({ name: "Mobile Tester", email, password: PASSWORD }),
+    body: JSON.stringify({ name: "Mobile Tester", email, password: PASSWORD, dateOfBirth: ADULT_DOB }),
   })
   check("re-registering the same address is a 409", dupe.status === 409, `status=${dupe.status}`)
 

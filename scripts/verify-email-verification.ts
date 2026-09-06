@@ -18,6 +18,9 @@ import net from "net"
 import prisma from "../src/lib/prisma"
 import { SIGNUP_GRANT_LEAVES, TASK_REWARDS } from "../src/lib/task-constants"
 
+/** Comfortably over 18. See the note at the first register call below. */
+const ADULT_DOB = "1995-06-15"
+
 const BASE = process.env.ACCEPT_BASE ?? "http://127.0.0.1:3100"
 const SMTP_PORT = Number(process.env.ACCEPT_SMTP_PORT ?? 2525)
 const P = "zzmailverify-"
@@ -198,7 +201,10 @@ async function main() {
 
   const regA = await req("/api/auth/register", {
     method: "POST", headers: jsonHeaders,
-    body: JSON.stringify({ name: "ZZ Verify A", email: emailA, password: PASSWORD }),
+    // dateOfBirth is REQUIRED by /api/auth/register since the 18+ gate landed
+    // (migration 20260903000000_user_date_of_birth). This suite predates it and
+    // had been failing on a 400 ever since; the fixture is simply an adult.
+    body: JSON.stringify({ name: "ZZ Verify A", email: emailA, password: PASSWORD, dateOfBirth: ADULT_DOB }),
   })
   check("register returns 201", regA.status === 201, JSON.stringify(regA.json))
   check("register reports the account as unverified", regA.json.isVerified === false)
@@ -295,7 +301,7 @@ async function main() {
 
   const regB = await req("/api/auth/register", {
     method: "POST", headers: jsonHeaders,
-    body: JSON.stringify({ name: "ZZ Verify B", email: emailB, password: PASSWORD }),
+    body: JSON.stringify({ name: "ZZ Verify B", email: emailB, password: PASSWORD, dateOfBirth: ADULT_DOB }),
   })
   check("register B returns 201", regB.status === 201, JSON.stringify(regB.json))
   const userB = await prisma.user.findUniqueOrThrow({ where: { email: emailB }, select: { id: true } })

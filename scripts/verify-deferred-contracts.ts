@@ -142,6 +142,13 @@ async function mkUser(tag: string, leaves = 0) {
       name: `ZZ ${tag}`,
       email: `${P}${tag}-${Date.now()}-${seq}@example.local`,
       isVerified: true,
+      // Past the government-ID gate. PROPOSING a DPA requires it (accepting
+      // deliberately does not), so a fixture debtor without it gets a 403 from
+      // POST /api/v1/contracts and every scenario below has nothing to test.
+      // Stamped rather than given an APPROVED IdVerification row: this suite is
+      // about contracts, and the ID flow has its own harness in
+      // scripts/verify-id-verification.ts.
+      idVerifiedGrandfatheredAt: new Date(),
       leaves,
       lifetimeLeaves: leaves,
     },

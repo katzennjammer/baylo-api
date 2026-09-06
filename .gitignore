@@ -33,6 +33,12 @@ yarn-error.log*
 # env files (can opt-in for committing if needed)
 .env*
 
+# ...except the template, which is the whole point of having one. `.env*` above
+# was matching `.env.example` too, so it was never committed — a fresh clone had
+# no template to copy and README step 3 ("cp .env.example .env") referred to a
+# file that was not there. Keep this negation below the pattern it undoes.
+!.env.example
+
 # vercel
 .vercel
 

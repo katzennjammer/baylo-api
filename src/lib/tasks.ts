@@ -278,8 +278,11 @@ export function awardTaskAsync(
  *
  * Award rules:
  *   VERIFY_ACCOUNT   — verified accounts only (User.isVerified). Set by Google
- *                      sign-in today and by phone OTP later; this rule does not
+ *                      sign-in and by email verification; this rule does not
  *                      care which. Never awarded for merely having a password.
+ *                      NOT the government-ID check in @/lib/id-verification —
+ *                      that one is a separate, much heavier gate and awards
+ *                      nothing.
  *   COMPLETE_PROFILE — avatar, bio and location all filled in.
  *   FIRST_LISTING    — has listed at least one item.
  *   VERIFIED_SWAP    — once per COMPLETED trade, new counterparty only.

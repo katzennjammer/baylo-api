@@ -15,9 +15,16 @@ type TaskDb = Pick<PrismaClient, "user" | "taskCompletion" | "leafTransaction" |
  * with no room for any second verification route.
  *
  * Every way of verifying funnels through here: the web Google callback, the
- * native Google token exchange, and phone OTP when it lands. A new route only
- * has to call markVerified() — the award and the grant come with it, and no
- * logic downstream of this function needs to change.
+ * native Google token exchange, and the emailed verification link. A new route
+ * only has to call markVerified() — the award and the grant come with it, and
+ * no logic downstream of this function needs to change.
+ *
+ * IT IS NOT THE GOVERNMENT-ID CHECK, and nothing here should ever be made to
+ * do double duty as one. That gate lives in @/lib/id-verification, is derived
+ * from IdVerification rows rather than from a flag, awards no Leaves, and
+ * governs two acts this flag governs neither of. A phone-OTP route was once
+ * planned as a third caller of this function; it was replaced by the ID check,
+ * which is deliberately NOT plumbed through here.
  *
  * Three things happen when the flag flips, and they are deliberately separate
  * from each other:

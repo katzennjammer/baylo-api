@@ -12,6 +12,7 @@ import { decodeCursor, encodeCursor, olderThan, paginate } from "@/lib/v1/cursor
 import { V1_ITEM_SELECT, V1_ITEM_OWNER_SELECT, v1ItemStatsSelect, v1Item, type V1ItemRow } from "@/lib/v1/item"
 import { taskLabel } from "@/lib/v1/taxonomy"
 import { loadStanding, publicStanding } from "@/lib/reputation-gate"
+import { loadIdVerificationState, publicIdVerification } from "@/lib/id-verification"
 
 export const dynamic = "force-dynamic"
 
@@ -137,6 +138,15 @@ export async function GET(req: NextRequest) {
   // says SIX queries, and it is now SIX PLUS FOUR.
   const standing = await loadStanding(viewerId)
 
+  // ── 8 ── the ID gate's state.
+  //
+  // Served for the same reason the tier is: so the client can grey out Post and
+  // SAY WHY, rather than letting somebody through seven wizard steps and a
+  // photo upload before a 403 tells them. Advisory, like everything else in
+  // this payload — the same query runs again inside POST /api/items, and
+  // nothing a client reports about its own verification is read back.
+  const idVerification = await loadIdVerificationState(viewerId)
+
   // Impact. computeImpactData() returns everything except the two derived
   // figures, which are computed here from the same trade set — no extra query.
   const base = computeImpactData(viewerId, trades)
@@ -202,6 +212,10 @@ export async function GET(req: NextRequest) {
       },
       // The tier, its limits, and the DPA state the limits govern.
       reputation: publicStanding(standing),
+      // Whether this account may post and propose, and what to do if not.
+      // NOT the same thing as `user.isVerified` two blocks up, which is the
+      // email check — see the header of @/lib/id-verification.
+      idVerification: publicIdVerification(idVerification),
       impact: {
         co2Avoided: Math.round(base.co2Avoided * 10) / 10,
         waterSaved: Math.round(base.waterSaved),

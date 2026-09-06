@@ -57,6 +57,7 @@ export default async function AdminLayout({ children }: { children: ReactNode })
         <strong style={{ fontSize: 15, letterSpacing: "-.01em" }}>Baylo moderation</strong>
         <nav style={{ display: "flex", gap: 16, fontSize: 14 }}>
           <Link href="/admin" style={{ color: "#444" }}>Queue</Link>
+          <Link href="/admin/id-verification" style={{ color: "#444" }}>ID checks</Link>
           <Link href="/admin/anomalies" style={{ color: "#444" }}>Anomalies</Link>
           <Link href="/admin/audit" style={{ color: "#444" }}>Audit log</Link>
         </nav>

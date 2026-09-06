@@ -89,7 +89,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         // Google sign-in verifies the account. This used to be implicit — a
         // Google user had no password, and "no password" was what the app read
         // as verified. It is now an explicit flag, set here and by the native
-        // endpoint, and phone OTP will set the same one.
+        // endpoint, and by email verification for credentials signup.
         //
         // markVerified() also awards VERIFY_ACCOUNT and the one-time signup
         // grant, and is idempotent, so a returning user credits nothing.

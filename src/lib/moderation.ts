@@ -200,8 +200,21 @@ export type AdminActionKind =
   | "HUB_UPDATED"
   | "HUB_DEACTIVATED"
   | "HUB_REACTIVATED"
+  // Government ID decisions. A third kind of entry again: not an act on a
+  // person's content and not one on shared infrastructure, but a decision about
+  // WHO SOMEBODY IS -- the only thing in this log that grants a privilege
+  // rather than removing one. It belongs in the same place for exactly that
+  // reason: an approval that let a forged ID through is the entry you most want
+  // to be able to find next to the suspensions that followed it.
+  //
+  // The row is the ONLY durable record of the decision. The submission's image
+  // is destroyed by the same transaction that writes this, and the ID number
+  // was never stored in the first place -- so "who approved this, and when" is
+  // answerable here or nowhere.
+  | "ID_VERIFICATION_APPROVED"
+  | "ID_VERIFICATION_REJECTED"
 
-export type AdminTargetType = "REPORT" | "LISTING" | "USER" | "HUB"
+export type AdminTargetType = "REPORT" | "LISTING" | "USER" | "HUB" | "ID_VERIFICATION"
 
 /** A Prisma client or a transaction client. */
 type Db = PrismaClient | Prisma.TransactionClient

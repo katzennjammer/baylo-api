@@ -5,6 +5,7 @@ import prisma from "@/lib/prisma"
 import { awardTaskAsync } from "@/lib/tasks"
 import { parseBody, updateUserSchema, deleteUserSchema } from "@/lib/validation"
 import { deleteAccount } from "./delete-account"
+import { destroyIdImage } from "@/lib/id-verification-image"
 
 export async function PATCH(req: NextRequest) {
   const session = await resolveSession()
@@ -87,6 +88,16 @@ export async function DELETE(req: NextRequest) {
   const outcome = await deleteAccount(session.user.id, parsed.data.password)
   if (!outcome.ok) {
     return NextResponse.json({ error: outcome.error }, { status: outcome.status })
+  }
+
+  // Any ID photo still awaiting review, destroyed AFTER the deletion has
+  // committed. Deliberately not inside deleteAccount()'s transaction: a
+  // Cloudinary round trip in there would hold the transaction open against a
+  // third party, and a third party having a bad afternoon would roll back a
+  // deletion the user asked for. Best-effort, and each call is already
+  // non-throwing — the deletion is not being undone over a stuck file.
+  for (const publicId of outcome.pendingIdImages) {
+    await destroyIdImage(publicId)
   }
 
   return NextResponse.json({ deleted: true, ...outcome.summary })

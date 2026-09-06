@@ -4,6 +4,7 @@ import { resolveSession } from "@/lib/api-auth"
 import prisma from "@/lib/prisma"
 import { DPA } from "@/lib/reputation-config"
 import { loadStanding } from "@/lib/reputation-gate"
+import { enforceIdVerifiedV1 } from "@/lib/id-verification"
 import {
   sweepLapsedContracts,
   netValueTo,
@@ -118,8 +119,9 @@ const proposeSchema = z.strictObject({
  * creditor propose would let one party manufacture the other's debt and leave
  * "accept" as the debtor's only defence — the reverse of the intended shape.
  *
- * Six refusals, in the order a proposal is most likely to be wrong:
+ * Seven refusals, in the order a proposal is most likely to be wrong:
  *
+ *   403  the caller has not verified a government ID              (the ID gate)
  *   404  no such trade, or the caller is not in it
  *   400  the trade is not in a state that can carry a contract
  *   403  fewer than DPA.minCompletedTradesToOwe completed trades  (rule 1)
@@ -132,6 +134,21 @@ export async function POST(req: NextRequest) {
   const session = await resolveSession()
   if (!session?.user?.id) return unauthenticated()
   const debtorId = session.user.id
+
+  // ── The ID gate ───────────────────────────────────────────────────────────
+  //
+  // PROPOSING is gated; ACCEPTING is not, and the two live in different files
+  // for exactly that reason — /contracts/[id]/accept has no equivalent of this
+  // block and must not grow one. A DPA is a promise to hand over Leaves later
+  // against an item received now, which is the closest thing on this platform
+  // to unsecured credit; the person MAKING that promise is the one whose
+  // identity has to be recoverable. The creditor accepting it took no risk they
+  // did not already choose.
+  //
+  // Same asymmetry as enforceCanInitiateTrade() twenty lines down: block the
+  // act that creates exposure, never the act that discharges it.
+  const unverified = await enforceIdVerifiedV1(debtorId, "propose")
+  if (unverified) return unverified
 
   const parsed = await parseJsonBody(req, proposeSchema)
   if (!parsed.ok) return parsed.response

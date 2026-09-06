@@ -6,6 +6,7 @@ import { createItemSchema, parseBody, categorySchema } from "@/lib/validation"
 import { imageHashRows, leadImageHash } from "@/lib/image-hashes"
 import { decideItemValue } from "@/lib/valuation-server"
 import { visibleItemWhere } from "@/lib/blocking"
+import { enforceIdVerifiedLegacy } from "@/lib/id-verification"
 import {
   ITEM_PUBLIC_SELECT,
   ITEM_PUBLIC_USER_SELECT,
@@ -90,6 +91,26 @@ export async function POST(req: NextRequest) {
     if (!session?.user?.id) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
+
+    // ── The ID gate ─────────────────────────────────────────────────────────
+    //
+    // One of exactly two places this gate exists; the other is POST
+    // /api/v1/contracts. Listing an item is the act that puts something in
+    // front of other people to trade for, so it is the act that has to be
+    // attached to a real, once-usable government ID.
+    //
+    // FIRST, BEFORE THE BODY IS EVEN PARSED. A 403 that arrives after the
+    // valuation model has run and the hub ids have been resolved is the same
+    // 403 with extra queries behind it, and the wizard has by then uploaded
+    // photos it will have to throw away.
+    //
+    // NOTE WHAT IS NOT GATED, one function down and elsewhere in the tree: GET
+    // on this route, browsing, searching, messaging, and accepting a trade. See
+    // the header of @/lib/id-verification for why the accept path is
+    // deliberately open — blocking it strands a counterparty in a trade they
+    // did not cause.
+    const unverified = await enforceIdVerifiedLegacy(session.user.id, "post")
+    if (unverified) return unverified
 
     const parsed = await parseBody(req, createItemSchema)
     if (!parsed.ok) return parsed.response
