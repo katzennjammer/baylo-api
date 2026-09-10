@@ -5,6 +5,7 @@ import bcrypt from "bcryptjs"
 import { randomInt } from "crypto"
 import { sendSwapConfirmationCode } from "@/lib/mailer"
 import { MAX_CODE_ATTEMPTS } from "@/lib/swap-code"
+import { sealCode } from "@/lib/swap-code-seal"
 
 /**
  * A confirmation code, from the CSPRNG.
@@ -79,18 +80,35 @@ export async function POST(
       bcrypt.hash(receiverCode, 10),
     ])
 
+    // The reversible copy, so each participant can be SHOWN their own code in
+    // the app rather than sent to find the email below while standing next to
+    // the person they are trading with.
+    //
+    // Sealed per row and bound to (tradeId, userId), so a value moved between
+    // rows by anyone with write access fails to open instead of handing one
+    // person's digits to another. `null` when SWAP_CODE_KEY is unset, which is a
+    // supported configuration: the column stays null, confirm/status answers
+    // `code: null`, and the client points the reader at the email exactly as it
+    // did before this existed. Nothing else in this route changes.
+    const senderSealed   = sealCode(senderCode,   tradeId, trade.senderId)
+    const receiverSealed = sealCode(receiverCode, tradeId, trade.receiverId)
+
     // Upsert — if a row for [tradeId, userId] already exists (e.g. expired),
     // overwrite it with a fresh code and reset used=false.
     await prisma.$transaction([
+      // `codeSealed` is written on BOTH branches, including the null case. On a
+      // reissue the previous seal has to be replaced or overwritten with null,
+      // never left behind -- a stale seal beside a fresh hash is the one state
+      // that would show somebody a code their partner cannot accept.
       prisma.swapConfirmationCode.upsert({
         where:  { tradeId_userId: { tradeId, userId: trade.senderId } },
-        create: { tradeId, userId: trade.senderId,   codeHash: senderHash,   used: false, attempts: 0, expiresAt },
-        update: { codeHash: senderHash,   used: false, attempts: 0, expiresAt },
+        create: { tradeId, userId: trade.senderId,   codeHash: senderHash,   codeSealed: senderSealed,   used: false, attempts: 0, expiresAt },
+        update: { codeHash: senderHash,   codeSealed: senderSealed,   used: false, attempts: 0, expiresAt },
       }),
       prisma.swapConfirmationCode.upsert({
         where:  { tradeId_userId: { tradeId, userId: trade.receiverId } },
-        create: { tradeId, userId: trade.receiverId, codeHash: receiverHash, used: false, attempts: 0, expiresAt },
-        update: { codeHash: receiverHash, used: false, attempts: 0, expiresAt },
+        create: { tradeId, userId: trade.receiverId, codeHash: receiverHash, codeSealed: receiverSealed, used: false, attempts: 0, expiresAt },
+        update: { codeHash: receiverHash, codeSealed: receiverSealed, used: false, attempts: 0, expiresAt },
       }),
       prisma.tradeRequest.update({
         where: { id: tradeId },

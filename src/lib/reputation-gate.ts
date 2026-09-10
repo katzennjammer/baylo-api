@@ -7,7 +7,12 @@ import {
   type TrustTier,
   type TierLimits,
 } from "@/lib/reputation"
-import { loadDebtorStanding, sweepLapsedContracts, type DebtorStanding } from "@/lib/contracts"
+import {
+  expireStaleProposals,
+  loadDebtorStanding,
+  sweepLapsedContracts,
+  type DebtorStanding,
+} from "@/lib/contracts"
 
 /**
  * Server-side enforcement of the reputation tiers.
@@ -50,6 +55,13 @@ export interface TraderStanding extends DebtorStanding {
  */
 export async function loadStanding(userId: string): Promise<TraderStanding> {
   await sweepLapsedContracts(prisma, { debtorId: userId })
+  // And the other half of the sweep: a PENDING_ACCEPT proposal past its own
+  // deadline lapses to DECLINED, freeing the slot it was holding. It runs here
+  // for exactly the reason the default sweep does — this function decides
+  // whether the user may propose, and a proposal nobody ever answered must not
+  // still be counted as a commitment by the time it does. See the note on
+  // expireStaleProposals().
+  await expireStaleProposals(prisma, { debtorId: userId })
 
   const [user, standing] = await Promise.all([
     prisma.user.findUnique({

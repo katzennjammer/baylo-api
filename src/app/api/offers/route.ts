@@ -3,6 +3,7 @@ import { resolveSession } from "@/lib/api-auth"
 import prisma from "@/lib/prisma"
 import pusher from "@/lib/pusher"
 import { availableLeaves } from "@/lib/leaves"
+import { expireStaleOffers } from "@/lib/offers"
 import { createOfferSchema, parseBody } from "@/lib/validation"
 import { enforceInitiateTrade } from "@/lib/reputation-gate"
 import { enforceNotBlocked } from "@/lib/blocking"
@@ -51,6 +52,11 @@ export async function POST(req: NextRequest) {
     if (gate.response) return gate.response
 
     if (offeredLeaves && offeredLeaves > 0) {
+      // Before the balance is measured, not after. A sender whose previous offer
+      // aged out an hour ago has those Leaves back, and refusing this one against
+      // a stale figure would be refusing them their own balance. See the note on
+      // expireStaleOffers().
+      await expireStaleOffers(prisma, { senderId: session.user.id })
       const available = await availableLeaves(prisma, session.user.id)
       if (offeredLeaves > available) {
         return NextResponse.json(
@@ -120,6 +126,16 @@ export async function POST(req: NextRequest) {
         message: `made you an offer on "${post.title}"`,
         link: `/dashboard/messages?partner=${session.user.id}`,
         actorId: session.user.id,
+        // The structured target, which this route was not writing at all.
+        //
+        // `link` is a WEB path and the mobile client cannot route from it, so
+        // every notification this route produced arrived on the phone with
+        // nothing to open — the newest and most actionable rows in the list were
+        // the only ones that were not tappable. See the `Notification` model's
+        // note for the vocabulary; "conversation" carries the OTHER
+        // participant's id, which from the recipient's side is the sender.
+        entityType: "conversation",
+        entityId: session.user.id,
       },
     })
 

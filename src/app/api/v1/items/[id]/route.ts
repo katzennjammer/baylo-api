@@ -5,6 +5,7 @@ import prisma from "@/lib/prisma"
 import { preciseAccessItemIds } from "@/lib/item-visibility"
 import { visibleItemWhere } from "@/lib/blocking"
 import { loadEffectiveTiers } from "@/lib/contracts"
+import { expireStaleOffers } from "@/lib/offers"
 import { ok, unauthenticated, notFound } from "@/lib/v1/envelope"
 import { parseQuery } from "@/lib/v1/query"
 import { V1_ITEM_SELECT, V1_ITEM_OWNER_SELECT, V1_ITEM_SAFEZONE_SELECT, v1ItemStatsSelect, v1Item, type V1ItemRow } from "@/lib/v1/item"
@@ -99,6 +100,13 @@ export async function GET(
   if (!item || item.status === "REMOVED") return notFound("Item not found")
 
   const isOwner = item.userId === viewerId
+
+  // `viewer.existingOfferId` below is what puts the app on §5.2's pending-offer
+  // screen instead of the composer, so a lapsed offer has to be EXPIRED before
+  // it is read or somebody is held on a screen about an offer that is over.
+  // Scoped to this viewer AND this listing: the narrowest sweep that fixes the
+  // field this route actually serves.
+  if (!isOwner) await expireStaleOffers(prisma, { senderId: viewerId, postId: item.id })
 
   // ── 2, 3, 4, 5, 6 ── concurrent: none depends on another.
   const [access, existingOffer, tradeable, viewerRow, tiers] = await Promise.all([

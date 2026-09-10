@@ -53,6 +53,7 @@ export async function POST(
     where: { id },
     select: {
       ...V1_CONTRACT_SELECT,
+      offerId: true,
       trade: {
         select: {
           id: true, status: true, senderId: true, receiverId: true, offeredLeaves: true,
@@ -82,7 +83,37 @@ export async function POST(
     )
   }
 
+  /*
+   * ── AN OFFER-BORNE CONTRACT IS NOT ACCEPTED HERE ──────────────────────────
+   *
+   * It is accepted by ACCEPTING THE OFFER. PATCH /api/offers/[id] with
+   * `action: "accept"` re-runs every check below, creates the TradeRequest,
+   * re-points this contract at it and moves it to ACTIVE — all in one
+   * transaction, because the creditor consenting to the swap and consenting to
+   * the promise are one decision and splitting them produces a window in which
+   * the trade exists and the promise does not.
+   *
+   * Refused rather than quietly redirected: a client that called this would
+   * otherwise get a success for an acceptance that left the offer PENDING, and
+   * the two would disagree about whether a deal had happened. The path to call
+   * instead is named in the response.
+   */
+  if (!contract.tradeId) {
+    // 409 rather than 400: the body is well-formed and the caller is the right
+    // person — it is the state that makes the request wrong, and `meta.rule` is
+    // where every other v1 gate puts the branchable reason.
+    return conflict(
+      "This agreement was proposed with an offer. Accepting the offer accepts it — there is no separate step.",
+      {
+        rule: "DPA_ACCEPTED_WITH_OFFER",
+        offerId: contract.offerId,
+        acceptVia: contract.offerId ? `/api/offers/${contract.offerId}` : null,
+      },
+    )
+  }
+
   const trade = contract.trade
+  if (!trade) return notFound("Contract not found")
   if (trade.status !== "ACCEPTED" && trade.status !== "CONFIRMING") {
     return invalid(
       `The underlying trade is ${trade.status} and can no longer carry a deferred agreement.`,

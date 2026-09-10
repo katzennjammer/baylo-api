@@ -5,9 +5,12 @@ import prisma from "@/lib/prisma"
 import { DPA } from "@/lib/reputation-config"
 import { loadStanding } from "@/lib/reputation-gate"
 import { enforceIdVerifiedV1 } from "@/lib/id-verification"
+import { expireStaleOffers } from "@/lib/offers"
 import {
   sweepLapsedContracts,
   netValueTo,
+  offerAsTradeSides,
+  parseOfferedItemIds,
   termBounds,
   COMMITTING_STATUSES,
 } from "@/lib/contracts"
@@ -104,11 +107,28 @@ export async function GET(req: NextRequest) {
 
 // ── POST: propose ────────────────────────────────────────────────────────────
 
-const proposeSchema = z.strictObject({
-  tradeId: z.string().min(1).max(64),
-  amountLeaves: z.number().int().min(1, "A deferred amount must be at least 1 Leaf").max(1_000_000),
-  deadline: futureInstant,
-})
+/**
+ * EXACTLY ONE OF `tradeId` / `offerId`.
+ *
+ * A promise is about one deal. Sending both would be asking which of two deals
+ * this debt belongs to, and there is no defensible answer — so the union is
+ * refined rather than left to a first-one-wins rule at the handler, which is
+ * the shape that eventually resolves a caller's bug silently.
+ */
+const proposeSchema = z
+  .strictObject({
+    tradeId: z.string().min(1).max(64).optional(),
+    offerId: z.string().min(1).max(64).optional(),
+    amountLeaves: z
+      .number()
+      .int()
+      .min(1, "A deferred amount must be at least 1 Leaf")
+      .max(1_000_000),
+    deadline: futureInstant,
+  })
+  .refine((v) => (v.tradeId ? 1 : 0) + (v.offerId ? 1 : 0) === 1, {
+    message: "Send exactly one of tradeId or offerId",
+  })
 
 /**
  * POST /api/v1/contracts — the debtor proposes.
@@ -152,47 +172,125 @@ export async function POST(req: NextRequest) {
 
   const parsed = await parseJsonBody(req, proposeSchema)
   if (!parsed.ok) return parsed.response
-  const { tradeId, amountLeaves, deadline } = parsed.data
+  const { tradeId, offerId, amountLeaves, deadline } = parsed.data
 
-  const trade = await prisma.tradeRequest.findUnique({
-    where: { id: tradeId },
-    select: {
-      id: true,
-      status: true,
-      senderId: true,
-      receiverId: true,
-      offeredLeaves: true,
-      offeredItem: { select: { id: true, title: true, valueLeaves: true } },
-      requestedItem: { select: { id: true, title: true, valueLeaves: true } },
-    },
-  })
-  // 404 rather than 403 for a trade the caller is not in — the same disclosure
-  // rule the rest of v1 follows.
-  if (!trade) return notFound("Trade not found")
-  if (trade.senderId !== debtorId && trade.receiverId !== debtorId) {
-    return notFound("Trade not found")
+  /*
+   * ── Resolve the subject: a trade, or an offer ─────────────────────────────
+   *
+   * Both branches produce the same three things — the counterparty, the value
+   * sides, and the id to attach to — so everything below this block is written
+   * once and does not know which it got. The refusals differ only in what
+   * "carryable" means for each row, and each says so in its own message.
+   */
+  let creditorId: string
+  let sides: Parameters<typeof netValueTo>[0]
+  let attach: { tradeId: string } | { offerId: string }
+  let existingWhere: { tradeId: string } | { offerId: string }
+
+  if (tradeId) {
+    const trade = await prisma.tradeRequest.findUnique({
+      where: { id: tradeId },
+      select: {
+        id: true,
+        status: true,
+        senderId: true,
+        receiverId: true,
+        offeredLeaves: true,
+        offeredItem: { select: { id: true, title: true, valueLeaves: true } },
+        requestedItem: { select: { id: true, title: true, valueLeaves: true } },
+      },
+    })
+    // 404 rather than 403 for a trade the caller is not in — the same disclosure
+    // rule the rest of v1 follows.
+    if (!trade) return notFound("Trade not found")
+    if (trade.senderId !== debtorId && trade.receiverId !== debtorId) {
+      return notFound("Trade not found")
+    }
+
+    // The contract must be agreed BEFORE the swap settles. After COMPLETED the
+    // items have changed hands and a "promise" to pay the difference is just an
+    // unsecured request.
+    if (trade.status !== "ACCEPTED" && trade.status !== "CONFIRMING") {
+      return invalid(
+        `A deferred agreement can only be attached to an accepted trade that has not yet completed (this one is ${trade.status})`,
+      )
+    }
+
+    creditorId = trade.senderId === debtorId ? trade.receiverId : trade.senderId
+    sides = trade
+    attach = { tradeId: trade.id }
+    existingWhere = { tradeId: trade.id }
+  } else {
+    // A promise cannot be attached to an offer that has already aged out. Swept
+    // first so the refusal below reads "already expired" rather than accepting a
+    // proposal onto something nobody can answer any more.
+    await expireStaleOffers(prisma, { senderId: debtorId })
+
+    const offer = await prisma.offer.findUnique({
+      where: { id: offerId! },
+      select: {
+        id: true,
+        status: true,
+        senderId: true,
+        receiverId: true,
+        offeredLeaves: true,
+        offeredItems: true,
+        post: { select: { id: true, valueLeaves: true } },
+      },
+    })
+    if (!offer) return notFound("Offer not found")
+
+    /*
+     * ONLY THE SENDER MAY ATTACH A PROMISE TO AN OFFER, and this is a stronger
+     * rule than the trade branch's "either party".
+     *
+     * On a trade both sides are already committed and either may turn out to be
+     * the one owing the difference. An offer is one person's proposal that the
+     * other has not answered; letting the RECEIVER attach a promise to it would
+     * let them manufacture a debt in the sender's name and then accept their own
+     * offer to activate it. The receiver's move is to decline and counter.
+     */
+    if (offer.senderId !== debtorId) return notFound("Offer not found")
+
+    // Only a live offer. An answered one either became a trade — in which case
+    // the promise belongs on the trade — or is off the table entirely.
+    if (offer.status !== "PENDING") {
+      return invalid(
+        `This offer is already ${offer.status.toLowerCase()} and can no longer carry a deferred agreement.`,
+      )
+    }
+
+    const itemIds = parseOfferedItemIds(offer.offeredItems)
+    const offeredRows = itemIds.length
+      ? await prisma.item.findMany({
+          where: { id: { in: itemIds } },
+          select: { id: true, valueLeaves: true },
+        })
+      : []
+
+    creditorId = offer.receiverId
+    // Reduced to TradeSides so ONE value calculation serves both attachment
+    // points — see the note on offerAsTradeSides().
+    sides = offerAsTradeSides({
+      senderId: offer.senderId,
+      receiverId: offer.receiverId,
+      offeredLeaves: offer.offeredLeaves,
+      post: offer.post,
+      offeredItems: offeredRows,
+    })
+    attach = { offerId: offer.id }
+    existingWhere = { offerId: offer.id }
   }
 
-  // The contract must be agreed BEFORE the swap settles. After COMPLETED the
-  // items have changed hands and a "promise" to pay the difference is just an
-  // unsecured request; before ACCEPTED there is no agreed trade to attach to.
-  if (trade.status !== "ACCEPTED" && trade.status !== "CONFIRMING") {
-    return invalid(
-      `A deferred agreement can only be attached to an accepted trade that has not yet completed (this one is ${trade.status})`,
-    )
-  }
-
-  const creditorId = trade.senderId === debtorId ? trade.receiverId : trade.senderId
-
-  // One live contract per trade. A DECLINED or FULFILLED one does not block a
+  // One live contract per subject. A DECLINED or FULFILLED one does not block a
   // fresh proposal — a creditor who said no to 300 Leaves may well say yes to
-  // 150 — which is why this filters on status rather than on the trade alone.
+  // 150 — which is why this filters on status rather than on the row alone.
   const existing = await prisma.deferredContract.findFirst({
-    where: { tradeId, status: { in: [...COMMITTING_STATUSES] } },
+    where: { ...existingWhere, status: { in: [...COMMITTING_STATUSES] } },
     select: { id: true, status: true },
   })
   if (existing) {
-    return conflict("This trade already has a deferred agreement", {
+    return conflict("This already has a deferred agreement", {
       contractId: existing.id,
       status: existing.status,
     })
@@ -247,7 +345,7 @@ export async function POST(req: NextRequest) {
   // A DPA covers the gap between two unequal items. Deferring more than the gap
   // is not deferring a difference, it is borrowing, and this feature is not a
   // loan facility.
-  const net = netValueTo(trade, debtorId)
+  const net = netValueTo(sides, debtorId)
   if (net === null) {
     return invalid(
       "Both items need a Leaf value before their difference can be deferred (a Leaves-for-item trade has no item difference to defer).",
@@ -274,7 +372,9 @@ export async function POST(req: NextRequest) {
 
   const contract = await prisma.deferredContract.create({
     data: {
-      tradeId,
+      // Exactly one of the two, from the branch above. See `contractSubject()`
+      // in @/lib/contracts for why this is not a database constraint.
+      ...attach,
       debtorId,
       creditorId,
       amountLeaves,
@@ -295,6 +395,17 @@ export async function POST(req: NextRequest) {
       // having seen the endpoint that justifies it.
       creditorPreviewPath: `/api/v1/contracts/${contract.id}/preview`,
       valueDifferenceLeaves: net,
+      /**
+       * Which side this promise hangs off, said plainly so a client does not
+       * have to infer it from which id came back non-null.
+       *
+       * An offer-borne contract is accepted by ACCEPTING THE OFFER — there is no
+       * separate accept step for it, and PATCH /api/offers/[id] performs both in
+       * one transaction. A client that wired a second "accept the agreement"
+       * call after an offer acceptance would be calling an endpoint that has
+       * already 409'd itself.
+       */
+      attachedTo: tradeId ? "trade" : "offer",
     },
   )
 }

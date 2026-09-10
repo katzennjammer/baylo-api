@@ -589,6 +589,27 @@ model SwapConfirmationCode {
   codeHash String
   used     Boolean      @default(false)
 
+  /**
+   * The same code, sealed so its OWNER can be shown it. AES-256-GCM, keyed from
+   * SWAP_CODE_KEY in the environment and never from anything in this database.
+   *
+   * ADDITIVE, NOT A REPLACEMENT. `codeHash` above is still what confirm/submit
+   * verifies against and nothing about the guess budget changes; this column is
+   * read on exactly one path -- the owner asking confirm/status for their own
+   * code -- so a fault here cannot make a wrong code verify.
+   *
+   * NULL is a first-class value. A deployment with no key seals nothing, the
+   * status route answers `code: null`, and the client points the reader at the
+   * email exactly as it does today. Rotating the key leaves old rows unopenable
+   * and that is a fifteen-minute problem, not a data-loss one -- see the long
+   * note in @/lib/swap-code-seal.
+   *
+   * The ciphertext is bound to (tradeId, userId) as GCM additional authenticated
+   * data, so a value moved between rows by anyone with write access fails to
+   * open rather than yielding one person's digits to another.
+   */
+  codeSealed String? @db.Text
+
   // Wrong guesses against THIS code. A 6-digit code is a 1-in-a-million secret
   // only while the number of guesses is bounded; unbounded, a trade participant
   // can grind their partner's code and complete a "verified in-person swap"
@@ -670,6 +691,13 @@ enum NotificationType {
   // should not have to read the message text to tell them apart.
   ID_VERIFICATION_APPROVED
   ID_VERIFICATION_REJECTED
+  /**
+   * An offer of the recipient's own aged out unanswered. Sent to the SENDER
+   * only — the receiver is the one who did not reply, and telling them so is a
+   * reproach rather than information. It carries the released Leaves in its
+   * message because that is the part the sender can act on.
+   */
+  OFFER_EXPIRED
 }
 
 enum FollowStatus {
@@ -727,12 +755,45 @@ model Offer {
   status        OfferStatus @default(PENDING)
   createdAt     DateTime    @default(now())
   updatedAt     DateTime    @updatedAt
+
+  /**
+   * Deferred agreements proposed alongside this offer.
+   *
+   * A LIST rather than one, for the same reason the trade side is a list: a
+   * creditor who declines a 300-Leaf promise may well accept a 150-Leaf one,
+   * and the DECLINED row stays because it is a fact about this debtor. At most
+   * one is ever in a COMMITTING status — enforced by the one-at-a-time rule in
+   * @/lib/reputation-gate, not by a unique index.
+   */
+  contracts DeferredContract[]
 }
 
 enum OfferStatus {
   PENDING
   ACCEPTED
   DECLINED
+  /**
+   * The SENDER retracted it. Not the same act as DECLINED, which is the
+   * receiver refusing, and the two must stay distinct: they are performed by
+   * different people and they say different things about the sender.
+   *
+   * Terminal, like the other two. `availableLeaves()` counts only PENDING
+   * offers, so withdrawing releases the sender's pledged Leaves the moment the
+   * status moves — no separate release step, and nothing to get out of step.
+   */
+  WITHDRAWN
+  /**
+   * Nobody acted within the window. Not DECLINED and not WITHDRAWN: those are
+   * things a person DID, and this is the absence of one. Collapsing it into
+   * DECLINED would tell a sender, permanently, that they were refused by
+   * somebody who never opened the message.
+   *
+   * The window is `OFFER_EXPIRY_DAYS` in @/lib/offers and is measured from
+   * `createdAt` rather than stored per row — see the note there. Reached by a
+   * lazy sweep on the read paths that measure a balance, because nothing on
+   * this deployment runs on a schedule.
+   */
+  EXPIRED
 }
 
 enum LeafTxType {
@@ -805,9 +866,34 @@ model LeafTransaction {
 // to it. If defaulting wiped the balance, defaulting would be the cheap way to
 // pay, and the deadline would be a suggestion.
 model DeferredContract {
-  id      String       @id @default(cuid())
-  tradeId String
-  trade   TradeRequest @relation(fields: [tradeId], references: [id], onDelete: Cascade)
+  id String @id @default(cuid())
+
+  /**
+   * WHAT THIS PROMISE IS ATTACHED TO. Exactly one of these is set at creation;
+   * after an offer is accepted BOTH are set.
+   *
+   * A DPA used to require an already-ACCEPTED TradeRequest, which meant the
+   * promise could not exist at the moment it was actually made — someone
+   * proposing "I'll settle 100 by 6 Oct" alongside an offer had nowhere to
+   * record it until the other party said yes. That inverted the feature: the
+   * promise is the thing being decided ON, so it has to be a row before the
+   * decision, not after it.
+   *
+   * So a contract may now hang off an Offer. When the offer is accepted the
+   * accept path fills in `tradeId` against the TradeRequest it creates and
+   * KEEPS `offerId` — the offer is where this promise came from, and that
+   * provenance is worth more than the nullability it costs.
+   *
+   * NOT ENFORCED BY THE DATABASE. "Exactly one at creation, at least one
+   * always" is a CHECK constraint, which Prisma cannot express and MariaDB
+   * 10.4 would not inherit through `prisma migrate` anyway. It is enforced in
+   * `assertContractSubject()` and at both creation sites; a row with neither is
+   * a bug, and `contractSubject()` throws rather than guessing.
+   */
+  tradeId String?
+  trade   TradeRequest? @relation(fields: [tradeId], references: [id], onDelete: Cascade)
+  offerId String?
+  offer   Offer?        @relation(fields: [offerId], references: [id], onDelete: Cascade)
 
   // The debtor is always the PROPOSER. A contract is a promise to pay, and the
   // only person who can make it is the person who will owe it; the creditor's
@@ -853,6 +939,8 @@ model DeferredContract {
   @@index([creditorId, status])
   @@index([status, deadline])
   @@index([tradeId])
+  // The offer-accept path looks a contract up by offer, and so does withdraw.
+  @@index([offerId])
 }
 
 enum ContractStatus {
@@ -1209,6 +1297,13 @@ enum AdminActionKind {
   HUB_REACTIVATED
   ID_VERIFICATION_APPROVED
   ID_VERIFICATION_REJECTED
+  /**
+   * An offer of the recipient's own aged out unanswered. Sent to the SENDER
+   * only — the receiver is the one who did not reply, and telling them so is a
+   * reproach rather than information. It carries the released Leaves in its
+   * message because that is the part the sender can act on.
+   */
+  OFFER_EXPIRED
 }
 
 enum AdminTargetType {

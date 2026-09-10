@@ -84,8 +84,16 @@ export const unauthenticated = () =>
  */
 export const notFound = (what = "Not found") => fail("NOT_FOUND", what)
 
-/** 400 with a human-readable reason. */
-export const invalid = (message: string) => fail("VALIDATION_ERROR", message)
+/**
+ * 400 with a human-readable reason, and optionally the figures behind it.
+ *
+ * `meta` matches `forbidden` and `conflict`, which have taken it from the start.
+ * It is where a branchable `rule` and the numbers a client wants to render go —
+ * "you have 130 Leaves and this needs 180" is a message, and `{ balance: 130,
+ * requested: 180 }` is what lets a screen draw it without parsing the sentence.
+ */
+export const invalid = (message: string, meta: Record<string, unknown> = {}) =>
+  fail("VALIDATION_ERROR", message, meta)
 
 /** 403. The caller is who they say they are and still may not do this. */
 export const forbidden = (message: string, meta: Record<string, unknown> = {}) =>

@@ -13,6 +13,20 @@ type LeafDb = Pick<PrismaClient, "user" | "offer">
  * Leaves a user can still commit right now: their Leaf total minus everything
  * already promised to offers that are still PENDING.
  *
+ * ── THIS FUNCTION DOES NOT SWEEP, AND THE CALLER MUST ───────────────────────
+ *
+ * "Still PENDING" is a status, and an offer past its three-day window is only
+ * EXPIRED once something has moved it. `expireStaleOffers()` in @/lib/offers is
+ * what moves it, and every path that reads this figure calls it FIRST — POST
+ * /api/offers, PATCH /api/offers/[id], GET /api/v1/trades, GET /api/leaves and
+ * the withdraw route all do.
+ *
+ * It is not called from in here on purpose. This function takes a narrow `LeafDb`
+ * so it can run against a transaction client, and a sweep that wrote from inside
+ * somebody else's transaction would widen the blast radius of any rollback to
+ * include offers that had nothing to do with it. The cost is that a new caller
+ * has to remember; this note is where they will look.
+ *
  * Both the "make an offer" path and the "accept an offer" path must go through
  * this, otherwise a user can pledge the same leaves to several open offers and
  * over-commit. When re-checking an existing offer, pass its id as

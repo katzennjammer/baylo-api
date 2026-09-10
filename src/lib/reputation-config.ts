@@ -61,36 +61,110 @@ export interface TierLimits {
 }
 
 /**
- * The tier table. Tune freely — nothing reads these numbers except
- * @/lib/reputation-gate, and nothing caches them.
+ * ── THE ONE TABLE THAT IS HAND-SET ──────────────────────────────────────────
  *
- * The shape of the ladder, if not the exact numbers: a New Trader can neither
- * owe nor reach for anything expensive, because they have no history to lose.
- * Every tier above them buys a larger cap with completed trades, which is the
- * only currency the gates accept.
+ * The most valuable item each tier may ACQUIRE. Everything else about a tier's
+ * exposure is derived from this, so there is exactly one column of numbers to
+ * tune and the two halves cannot drift apart.
+ *
+ * WHY THESE WERE RAISED. The floor tier was 200, and a New Trader could not
+ * offer on most of the marketplace at all — a 480-Leaf pair of shoes was out of
+ * reach on day one, which made the tier system read as a wall rather than as a
+ * ladder. The point of the bottom rung is to cap EXPOSURE, not to make the app
+ * unusable before anybody has traded once; 600 covers the ordinary listing and
+ * still stops a brand-new account reaching for a laptop.
+ *
+ * `null` at the top is unlimited and is deliberate: a Top Trader has 25+
+ * completed trades and a rating to protect, which is the only enforcement this
+ * platform has.
  */
-export const TIER_LIMITS: Record<TrustTier, TierLimits> = {
-  "New Trader": {
-    maxItemValueLeaves: 200,
-    mayProposeDpa: false,
-    maxOutstandingDebtLeaves: 0,
-  },
-  "Rising Trader": {
-    maxItemValueLeaves: 600,
-    mayProposeDpa: true,
-    maxOutstandingDebtLeaves: 150,
-  },
-  "Trusted Trader": {
-    maxItemValueLeaves: 2000,
-    mayProposeDpa: true,
-    maxOutstandingDebtLeaves: 500,
-  },
-  "Top Trader": {
-    maxItemValueLeaves: null,
-    mayProposeDpa: true,
-    maxOutstandingDebtLeaves: 1500,
-  },
+export const TIER_MAX_ITEM_VALUE: Record<TrustTier, number | null> = {
+  "New Trader": 600,
+  "Rising Trader": 900,
+  "Trusted Trader": 3000,
+  "Top Trader": null,
 }
+
+/**
+ * How much of an item's value a tier may promise rather than pay.
+ *
+ * ── WHY THE DEBT CEILING IS DERIVED AND NOT WRITTEN DOWN ────────────────────
+ *
+ * The two used to be independent tables and they had drifted into a shape that
+ * did not mean anything: a Top Trader could ACQUIRE an item of any value but
+ * never OWE more than 1,500, so the ceiling stopped tracking what the tier was
+ * allowed to reach for. Deriving one from the other makes that impossible —
+ * raise what a tier may acquire and what it may promise moves with it.
+ *
+ * A THIRD, and the reasoning: a DPA covers the GAP between two unequal items,
+ * so the ceiling is a statement about how mismatched a swap a tier may propose.
+ * At one third, somebody reaching for an item at their cap must already be
+ * putting up two thirds of its value. At one half — the other obvious choice —
+ * a tier may promise as much as it brings, which is a materially different bet
+ * for the creditor and is not what "settle the difference" describes.
+ */
+export const DEBT_TO_ITEM_CAP_RATIO = 1 / 3
+
+/**
+ * The floor tier owes NOTHING, and this is not derived from anything.
+ *
+ * A New Trader has fewer than three completed trades. The DPA's only
+ * enforcement is reputational — a default costs a tier, a public record and the
+ * ability to start new trades — and somebody who has not finished a trade yet
+ * has none of those to forfeit. Lending to them is lending to the one person
+ * the mechanism cannot reach, so the answer is zero at any item cap, and
+ * `mayProposeDpa: false` says the same thing a second way.
+ */
+const FLOOR_TIER: TrustTier = "New Trader"
+
+/**
+ * The top tier's ceiling, in Leaves.
+ *
+ * Explicit because its item cap is `null` and one third of unlimited is
+ * unlimited — which is the one number this feature must never permit. An
+ * unbounded promise on a platform with no repossession is an unbounded loss,
+ * and the tier that has earned the most trust is also the one that could do the
+ * most damage with it.
+ */
+const TOP_TIER_DEBT_CEILING = 3000
+
+/** The ceiling one tier's item cap implies. See the three notes above. */
+export function debtCeilingFor(tier: TrustTier): number {
+  if (tier === FLOOR_TIER) return 0
+  const itemCap = TIER_MAX_ITEM_VALUE[tier]
+  if (itemCap === null) return TOP_TIER_DEBT_CEILING
+  return Math.round(itemCap * DEBT_TO_ITEM_CAP_RATIO)
+}
+
+/**
+ * The tier table, built rather than typed.
+ *
+ * Tune `TIER_MAX_ITEM_VALUE` and the ratio; nothing else reads these numbers
+ * except @/lib/reputation-gate, and nothing caches them. What this currently
+ * produces:
+ *
+ *   New Trader       acquire   600   owe      0   (floored, never derived)
+ *   Rising Trader    acquire   900   owe    300
+ *   Trusted Trader   acquire 3,000   owe  1,000
+ *   Top Trader       acquire   any   owe  3,000   (explicit, see above)
+ *
+ * `maxConcurrentAsDebtor` is still 1, so a tier's ceiling is also its
+ * per-agreement cap. That is one lever left deliberately untouched while these
+ * numbers are observed.
+ */
+export const TIER_LIMITS: Record<TrustTier, TierLimits> = Object.fromEntries(
+  (Object.keys(TIER_MAX_ITEM_VALUE) as TrustTier[]).map((tier) => [
+    tier,
+    {
+      maxItemValueLeaves: TIER_MAX_ITEM_VALUE[tier],
+      // Redundant with a ceiling of 0 and stated anyway: it is the field a gate
+      // reads to refuse a proposal outright, and a reader of that gate should
+      // not have to know that zero means the same thing.
+      mayProposeDpa: debtCeilingFor(tier) > 0,
+      maxOutstandingDebtLeaves: debtCeilingFor(tier),
+    } satisfies TierLimits,
+  ]),
+) as Record<TrustTier, TierLimits>
 
 // ── Default consequences ─────────────────────────────────────────────────────
 //

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { resolveSession } from "@/lib/api-auth";
 import prisma from "@/lib/prisma";
 import { availableLeaves } from "@/lib/leaves";
+import { expireStaleOffers } from "@/lib/offers";
 
 export async function GET() {
   const session = await resolveSession();
@@ -9,6 +10,13 @@ export async function GET() {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   const userId = session.user.id;
+
+  // Before the balance is read, and NOT inside the Promise.all below: the sweep
+  // writes, and `availableLeaves()` has to see the result of it. Racing the two
+  // would report the stale figure about half the time, which is worse than not
+  // sweeping at all — an intermittently wrong balance is the kind nobody can
+  // reproduce. See the note on expireStaleOffers().
+  await expireStaleOffers(prisma, { senderId: userId });
 
   const [user, transactions, available] = await Promise.all([
     prisma.user.findUnique({

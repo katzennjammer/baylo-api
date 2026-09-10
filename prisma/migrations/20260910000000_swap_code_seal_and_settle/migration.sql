@@ -1,0 +1,42 @@
+-- One additive column, and a note about what deliberately is not here.
+--
+-- ── 1. SwapConfirmationCode.codeSealed ─────────────────────────────────────
+--
+-- A reversible copy of the confirmation code, so its OWNER can be shown it in
+-- the app instead of being sent to find an email while standing next to the
+-- person they are trading with. AES-256-GCM under SWAP_CODE_KEY, which lives in
+-- the environment and never in this database -- so a dump of this column is
+-- inert. `codeHash` is untouched and is still what confirm/submit verifies
+-- against. See the long note in src/lib/swap-code-seal.ts for the threat model.
+--
+-- NULLABLE, AND NULL IS A REAL ANSWER RATHER THAN A MISSING ONE. Rows written
+-- before this migration have no seal and never will; a deployment that sets no
+-- key writes none either. Both cases answer `code: null` on confirm/status and
+-- the client falls back to the email line it already draws. That is why this
+-- needs no backfill: there is nothing to recover, because the plaintext of an
+-- old code exists only in an inbox, and every one of them expired within
+-- fifteen minutes of being issued anyway.
+--
+-- TEXT rather than VARCHAR(n). The serialised form is
+-- `v1.<iv>.<tag>.<ciphertext>` in base64url and its length is a function of the
+-- scheme; pinning a width here would make a future scheme a schema change.
+ALTER TABLE `SwapConfirmationCode` ADD COLUMN `codeSealed` TEXT NULL;
+
+-- ── 2. LeafTransaction is unchanged ────────────────────────────────────────
+--
+-- Deliberately noted rather than silently absent. The new deliberate-settlement
+-- endpoint writes the SAME CONTRACT_PAY / CONTRACT_COLLECT ledger pair that
+-- applyEarningsToContracts() already writes, through the same helper, so the
+-- ledger needs no new type and the invariant
+--
+--     SUM(User.leaves) == SUM(LeafTransaction.amount)
+--
+-- holds across it for exactly the reason it already held: both sides of every
+-- payment move inside one transaction.
+--
+-- ── NO GENERATED COLUMNS, NO INDEX CHANGES ─────────────────────────────────
+--
+-- Both statements above are plain ADD COLUMN on tables with no stored generated
+-- columns involved. This matters on 10.4.32: an UPDATE touching a stored
+-- generated column that participates in a unique index wedges the server, and
+-- the safe shape is to keep schema changes to appends that no index depends on.

@@ -3,10 +3,12 @@ import { z } from "zod"
 import { resolveSession } from "@/lib/api-auth"
 import prisma from "@/lib/prisma"
 import { leafBalances } from "@/lib/leaves"
+import { expireStaleOffers } from "@/lib/offers"
 import { ok, unauthenticated, invalid } from "@/lib/v1/envelope"
 import { parseQuery, paginationShape, MAX_LIMIT } from "@/lib/v1/query"
 import { decodeCursor, encodeCursor, paginate, cursorDate } from "@/lib/v1/cursor"
 import { SAFE_ZONE_HUB_SELECT, v1Hub, type SafeZoneHubRow } from "@/lib/safe-zones"
+import { COMMITTING_STATUSES } from "@/lib/contracts"
 
 export const dynamic = "force-dynamic"
 
@@ -23,6 +25,12 @@ export const dynamic = "force-dynamic"
  *   3    trades page
  *   4    offers
  *   5    pending incoming count
+ *   6    values for the items inside those offers -- skipped when there are none
+ *
+ * The sixth is the price of `offeredItems` being a client-written JSON blob
+ * rather than a relation: the ids in it can be trusted as identifiers and
+ * nothing in it can be trusted as a fact, so the values are looked up. Both
+ * items on a TRADE are real relations and cost nothing extra.
  *
  * `kind` is the whole point of D2. The client is never told that
  * offeredItemId === requestedItemId means anything, because here it does not
@@ -49,7 +57,28 @@ function firstImage(raw: string | null | undefined): string | null {
   }
 }
 
-const ITEM_BRIEF = { id: true, title: true, images: true, status: true } as const
+/**
+ * The item shape every row on this route carries.
+ *
+ * `valueLeaves` IS ON IT NOW. It was not, and its absence was the single thing
+ * that made this endpoint unable to describe what it is about: the Trades screen
+ * is a screen about value gaps — "your Vans 440 for his Air Max 480", "his
+ * guitar 1,450 for your chair 760" — and without the numbers every one of those
+ * lines degraded to two bare titles.
+ *
+ * It costs nothing. `valueLeaves` is a column on the same rows already being
+ * selected; this is one more field on an existing SELECT, not a join and not a
+ * query. NULLABLE, and null means "never valued" rather than "worth nothing" —
+ * listings that predate the valuation model have it, and a client that renders
+ * a null as 0 is stating a falsehood the wire did not.
+ */
+const ITEM_BRIEF = {
+  id: true,
+  title: true,
+  images: true,
+  status: true,
+  valueLeaves: true,
+} as const
 const USER_BRIEF = { id: true, name: true, avatar: true } as const
 
 export async function GET(req: NextRequest) {
@@ -64,6 +93,11 @@ export async function GET(req: NextRequest) {
   if (parsed.data.cursor && !cursor) return invalid("Malformed cursor")
 
   const states = tab === "active" ? ACTIVE_STATES : HISTORY_STATES
+
+  // The lazy offer sweep, on the read that surfaces both halves of the harm: the
+  // available balance below, and the `offers` list further down. Scoped to this
+  // viewer as sender — their own stale offers are the ones holding their Leaves.
+  await expireStaleOffers(prisma, { senderId: viewerId })
 
   // ── 1, 2 ── balances.
   const balances = await leafBalances(prisma, viewerId)
@@ -110,6 +144,12 @@ export async function GET(req: NextRequest) {
       receiverId: true,
       sender: { select: USER_BRIEF },
       receiver: { select: USER_BRIEF },
+      // The two ids as well as the rows. A pure-Leaves trade stores the LISTING
+      // in both columns as a placeholder, and comparing them is the only way to
+      // tell that apart from a real item offered alongside Leaves. See the note
+      // beside `offeredItem` below.
+      offeredItemId: true,
+      requestedItemId: true,
       offeredItem: { select: ITEM_BRIEF },
       requestedItem: { select: ITEM_BRIEF },
       // Code state, so canConfirm is a real answer rather than a guess from
@@ -134,6 +174,17 @@ export async function GET(req: NextRequest) {
       post: { select: ITEM_BRIEF },
       sender: { select: USER_BRIEF },
       receiver: { select: USER_BRIEF },
+      // A deferred agreement proposed WITH this offer, now that one can be.
+      //
+      // Sent so the offer card can say "and a promise of 100 by 6 Oct" rather
+      // than showing a swap that looks unequal for no reason — and so the
+      // creditor knows to open the preview before accepting. At most one is ever
+      // in a COMMITTING status; the take is belt and braces.
+      contracts: {
+        where: { status: { in: [...COMMITTING_STATUSES] } },
+        select: { id: true, amountLeaves: true, deadline: true, status: true },
+        take: 1,
+      },
     },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take: MAX_LIMIT,
@@ -168,10 +219,30 @@ export async function GET(req: NextRequest) {
       kind,
       offeredLeaves: t.offeredLeaves,
       counterparty,
-      // On a leaves trade the "offered item" column holds the listing itself as
-      // a placeholder. It is not a real offered item, so it is not sent.
+      /*
+       * ── SUPPRESSED ONLY WHEN IT IS ACTUALLY A PLACEHOLDER ────────────────
+       *
+       * A pure-Leaves trade stores the LISTING in both item columns, so the
+       * "offered item" is not a real one and must not be sent — a recipient
+       * shown their own listing as the thing being offered to them is the
+       * confusion this guard exists to prevent.
+       *
+       * THE TEST IS ID EQUALITY, NOT `kind`. It used to be `kind === "leaves"`,
+       * and that was wrong for the most common interesting trade there is: an
+       * item PLUS some Leaves. `kind` is derived from `offeredLeaves > 0`, so a
+       * Vans offered with 40 Leaves on top came through as `kind: "leaves"` and
+       * its offered item was thrown away — which is exactly the case the design
+       * writes as "Vans 440 for Air Max 480 · 40 added". The Trades screen could
+       * not draw the left-hand side of its own worked example.
+       *
+       * `kind` STAYS DERIVED FROM THE COLUMN and is not changed here. The route's
+       * own note about never inferring `kind` from id equality still stands and
+       * is a different question from this one: `kind` asks what is moving, this
+       * asks whether a particular row is real. `netValueTo()` in @/lib/contracts
+       * makes the same distinction with the same test, for the same reason.
+       */
       offeredItem:
-        kind === "leaves"
+        t.offeredItemId === t.requestedItemId
           ? null
           : { ...t.offeredItem, image: firstImage(t.offeredItem.images), images: undefined },
       requestedItem: {
@@ -190,19 +261,74 @@ export async function GET(req: NextRequest) {
     }
   })
 
+  /*
+   * ── VALUES FOR `offeredItems`, LOOKED UP RATHER THAN TRUSTED ──────────────
+   *
+   * `Offer.offeredItems` is a JSON string the CLIENT sent at offer time. It
+   * holds `{ id, title, image }` and it is client-asserted: a caller can put any
+   * title in it, and could put any `valueLeaves` in it if the shape had one.
+   *
+   * So the values do not come from there. The ids do, and the values come from
+   * the Item table in one query — the same treatment `post` already gets by
+   * being a real relation. A client that renders the number this returns is
+   * rendering something the server stands behind.
+   *
+   * One query for the whole page, capped by MAX_LIMIT offers times however many
+   * items each carries. Skipped entirely when there are no offers.
+   */
+  const offeredItemIds = [
+    ...new Set(
+      offerRows.flatMap((o) => {
+        try {
+          const parsed: unknown = JSON.parse(o.offeredItems)
+          return Array.isArray(parsed)
+            ? parsed
+                .filter((x): x is Record<string, unknown> => !!x && typeof x === "object")
+                .map((x) => String(x.id ?? ""))
+                .filter(Boolean)
+            : []
+        } catch {
+          return []
+        }
+      }),
+    ),
+  ]
+
+  const offeredItemValues = new Map<string, number | null>()
+  if (offeredItemIds.length > 0) {
+    const rows = await prisma.item.findMany({
+      where: { id: { in: offeredItemIds } },
+      select: { id: true, valueLeaves: true },
+    })
+    for (const r of rows) offeredItemValues.set(r.id, r.valueLeaves)
+  }
+
   const offers = offerRows.map((o) => {
     const isSender = o.senderId === viewerId
-    let offeredItems: { id: string; title: string; image: string | null }[] = []
+    let offeredItems: {
+      id: string
+      title: string
+      image: string | null
+      /** From the Item table, not from the stored JSON. See the note above. */
+      valueLeaves: number | null
+    }[] = []
     try {
       const parsedItems: unknown = JSON.parse(o.offeredItems)
       if (Array.isArray(parsedItems)) {
         offeredItems = parsedItems
           .filter((x): x is Record<string, unknown> => !!x && typeof x === "object")
-          .map((x) => ({
-            id: String(x.id ?? ""),
-            title: typeof x.title === "string" ? x.title : "Item",
-            image: typeof x.image === "string" ? x.image : null,
-          }))
+          .map((x) => {
+            const itemId = String(x.id ?? "")
+            return {
+              id: itemId,
+              title: typeof x.title === "string" ? x.title : "Item",
+              image: typeof x.image === "string" ? x.image : null,
+              // `?? null` covers two different cases with the same answer: the
+              // item was never valued, and the item no longer exists. Neither is
+              // a number, and neither is zero.
+              valueLeaves: offeredItemValues.get(itemId) ?? null,
+            }
+          })
       }
     } catch {
       offeredItems = []
@@ -216,6 +342,23 @@ export async function GET(req: NextRequest) {
       offeredLeaves: o.offeredLeaves,
       message: o.message,
       counterparty: isSender ? o.receiver : o.sender,
+      /**
+       * Null when this offer carries no promise, which is most of them.
+       *
+       * `previewPath` is named rather than left for the client to build, for the
+       * same reason POST /api/v1/contracts names it: a client should not be able
+       * to construct an accept flow without having seen the endpoint that
+       * justifies it.
+       */
+      contract: o.contracts[0]
+        ? {
+            id: o.contracts[0].id,
+            amountLeaves: o.contracts[0].amountLeaves,
+            deadline: o.contracts[0].deadline,
+            status: o.contracts[0].status,
+            previewPath: `/api/v1/contracts/${o.contracts[0].id}/preview`,
+          }
+        : null,
       createdAt: o.createdAt,
     }
   })

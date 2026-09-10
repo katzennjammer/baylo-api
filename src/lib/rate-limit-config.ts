@@ -48,6 +48,21 @@ export const RATE_LIMITS = {
   /** Guessing a partner's 6-digit swap code. Also capped per code in the DB. */
   confirmSubmit: { limit: 20, windowMs: HOUR },
   /**
+   * Paying down a deferred agreement on purpose. Keyed on the debtor's user id.
+   *
+   * NOT ABOUT ABUSE OF SOMEBODY ELSE — a debtor settling their own debt harms
+   * nobody, and the amount is bounded twice over by what is owed and by what
+   * they hold. It is about WRITE RATE against a balance: every call opens a
+   * transaction that moves two users' Leaves and writes two ledger rows, and an
+   * unbounded loop against it is a way to make the ledger the slowest table in
+   * the database. Twelve an hour is far above any real settlement pattern
+   * (nobody pays one contract twelve times in an hour) and far below a loop.
+   *
+   * The conditional write in payContract() is what stops a double-tap paying
+   * twice; this is what stops a script trying.
+   */
+  contractSettle: { limit: 12, windowMs: HOUR },
+  /**
    * Filing a report. Keyed on the reporter's user id, not their IP.
    *
    * AN UNLIMITED REPORT ENDPOINT IS A HARASSMENT TOOL. The abuse is not

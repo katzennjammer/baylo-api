@@ -354,61 +354,167 @@ export async function applyEarningsToContracts(
     const unpaid = Math.max(0, c.amountLeaves - c.amountPaidLeaves)
     if (unpaid === 0) continue
 
-    const pay = Math.min(unpaid, balance)
-    const nowPaid = c.amountPaidLeaves + pay
-    const fulfilled = nowPaid >= c.amountLeaves
-
-    // Conditional on the paid figure this loop read, so two concurrent payment
-    // runs cannot both spend the same headroom on the same contract.
-    const moved = await db.deferredContract.updateMany({
-      where: {
-        id: c.id,
-        amountPaidLeaves: c.amountPaidLeaves,
-        status: { in: [...OWING_STATUSES] },
-      },
-      data: {
-        amountPaidLeaves: nowPaid,
-        // A defaulted contract paid off in full becomes FULFILLED. defaultedAt
-        // is NOT cleared — the default stays on the record permanently — but
-        // the status change is what releases the trading restriction. That is
-        // the "leave a path out" requirement, and this line is it.
-        ...(fulfilled ? { status: "FULFILLED" as const, fulfilledAt: paidAt } : {}),
-      },
+    const paid = await payContract(db, {
+      contract: c,
+      debtorId,
+      amount: Math.min(unpaid, balance),
+      paidAt,
+      // The sweep is opportunistic: another writer landing on the same contract
+      // between the read and the write means "already handled", not a failure.
+      // The deliberate path wants the opposite answer -- see the flag's note.
+      strict: false,
     })
-    if (moved.count !== 1) continue
+    if (!paid) continue
 
-    await db.user.update({ where: { id: debtorId }, data: { leaves: { decrement: pay } } })
-    await db.user.update({ where: { id: c.creditorId }, data: { leaves: { increment: pay } } })
-
-    // lifetimeLeaves is untouched on both sides. It is the monotonic
-    // earned-ever figure that ranks key off, and moving Leaves between two
-    // users is not earning — a trade settlement does not touch it either.
-    await db.leafTransaction.create({
-      data: {
-        userId: debtorId,
-        type: "CONTRACT_PAY",
-        amount: -pay,
-        description: `Deferred agreement payment (${pay} Leaves)`,
-        contractId: c.id,
-        eventAt: paidAt,
-      },
-    })
-    await db.leafTransaction.create({
-      data: {
-        userId: c.creditorId,
-        type: "CONTRACT_COLLECT",
-        amount: pay,
-        description: `Deferred agreement payment received (${pay} Leaves)`,
-        contractId: c.id,
-        eventAt: paidAt,
-      },
-    })
-
-    balance -= pay
-    payments.push({ contractId: c.id, creditorId: c.creditorId, amount: pay, fulfilled })
+    balance -= paid.amount
+    payments.push(paid)
   }
 
   return payments
+}
+
+/**
+ * ONE PAYMENT AGAINST ONE CONTRACT. The only place Leaves move for a debt.
+ *
+ * ── WHY THIS IS A FUNCTION AND NOT TWO COPIES ───────────────────────────────
+ *
+ * There are two ways a contract gets paid down and they differ only in how the
+ * amount is chosen:
+ *
+ *   applyEarningsToContracts()  the debtor earns, and whatever they earned goes
+ *                               to the oldest debt first, without being asked.
+ *   POST /contracts/[id]/settle the debtor names an amount and a contract.
+ *
+ * Everything after that decision is identical — the conditional status write,
+ * the two balance moves, the CONTRACT_PAY / CONTRACT_COLLECT ledger pair — and
+ * it is the part that must not drift. A second copy of this would be a second
+ * chance to write one ledger row and not the other, which is precisely the
+ * failure the invariant below exists to make impossible.
+ *
+ * ── MUST RUN INSIDE A TRANSACTION ───────────────────────────────────────────
+ *
+ *     SUM(User.leaves) == SUM(LeafTransaction.amount)
+ *
+ * holds at every commit boundary because both balances and both ledger rows
+ * move in one statement sequence. Called outside a transaction, a crash between
+ * the two `user.update` calls mints or destroys Leaves. Every caller passes a
+ * `tx`.
+ *
+ * ── THE STATUS WRITE IS THE CONCURRENCY CONTROL ─────────────────────────────
+ *
+ * `updateMany` is conditional on the `amountPaidLeaves` the caller read AND on
+ * the contract still being in an owing status. Two requests racing the same
+ * contract both run it; exactly one gets `count: 1` and the other pays nothing.
+ * That is what stops a double-tap on a Settle button paying twice, and it is
+ * also why the amount is validated against a figure read in the same
+ * transaction rather than one the client sent.
+ *
+ * `lifetimeLeaves` is untouched on both sides. It is the monotonic earned-ever
+ * figure ranks key off, and moving Leaves between two users is not earning — a
+ * trade settlement does not touch it either.
+ *
+ * Returns `null` when the conditional write lost, and see `strict` for what a
+ * caller should do about that.
+ */
+export async function payContract(
+  db: ContractDb,
+  input: {
+    /** Read in the same transaction. `amountPaidLeaves` is the CAS witness. */
+    contract: {
+      id: string
+      creditorId: string
+      amountLeaves: number
+      amountPaidLeaves: number
+    }
+    debtorId: string
+    /** Already clamped to the unpaid remainder and to the debtor's balance. */
+    amount: number
+    paidAt?: Date
+    /**
+     * What losing the conditional write means to this caller.
+     *
+     * `false` (the sweep): another writer got there first, which is a normal
+     * outcome of two credits landing at once. Skip the contract and carry on.
+     *
+     * `true` (a deliberate settlement): the debtor asked to pay a specific
+     * amount against a specific contract and it did not happen. Silently paying
+     * nothing while answering 200 would tell somebody their debt had moved when
+     * it had not, so the route needs to know and answers 409.
+     */
+    strict?: boolean
+  },
+): Promise<ContractPayment | null> {
+  const { contract: c, debtorId, amount } = input
+  const paidAt = input.paidAt ?? new Date()
+
+  if (amount <= 0) return null
+
+  const nowPaid = c.amountPaidLeaves + amount
+  const fulfilled = nowPaid >= c.amountLeaves
+
+  const moved = await db.deferredContract.updateMany({
+    where: {
+      id: c.id,
+      amountPaidLeaves: c.amountPaidLeaves,
+      status: { in: [...OWING_STATUSES] },
+    },
+    data: {
+      amountPaidLeaves: nowPaid,
+      // A defaulted contract paid off in full becomes FULFILLED. defaultedAt is
+      // NOT cleared — the default stays on the record permanently — but the
+      // status change is what releases the trading restriction. That is the
+      // "leave a path out" requirement, and this line is it.
+      ...(fulfilled ? { status: "FULFILLED" as const, fulfilledAt: paidAt } : {}),
+    },
+  })
+  if (moved.count !== 1) {
+    if (input.strict) {
+      throw new ContractRaceError(
+        "This agreement changed while the payment was being made. Nothing was taken.",
+      )
+    }
+    return null
+  }
+
+  await db.user.update({ where: { id: debtorId }, data: { leaves: { decrement: amount } } })
+  await db.user.update({ where: { id: c.creditorId }, data: { leaves: { increment: amount } } })
+
+  await db.leafTransaction.create({
+    data: {
+      userId: debtorId,
+      type: "CONTRACT_PAY",
+      amount: -amount,
+      description: `Deferred agreement payment (${amount} Leaves)`,
+      contractId: c.id,
+      eventAt: paidAt,
+    },
+  })
+  await db.leafTransaction.create({
+    data: {
+      userId: c.creditorId,
+      type: "CONTRACT_COLLECT",
+      amount: amount,
+      description: `Deferred agreement payment received (${amount} Leaves)`,
+      contractId: c.id,
+      eventAt: paidAt,
+    },
+  })
+
+  return { contractId: c.id, creditorId: c.creditorId, amount, fulfilled }
+}
+
+/**
+ * Thrown by `payContract({ strict: true })` when the conditional write lost.
+ *
+ * A named class rather than a string so the route can tell it from a genuine
+ * database failure and answer 409 instead of 500 — retrying with the same body
+ * may well succeed, which is exactly the distinction CONFLICT exists to make.
+ */
+export class ContractRaceError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = "ContractRaceError"
+  }
 }
 
 // ── Value arithmetic ─────────────────────────────────────────────────────────
@@ -464,4 +570,169 @@ export function extensionBounds(deadline: Date) {
     earliest: new Date(deadline.getTime() + DPA.minExtensionDays * DAY_MS),
     latest: new Date(deadline.getTime() + DPA.maxExtensionDays * DAY_MS),
   }
+}
+
+// ── What a contract is attached to ───────────────────────────────────────────
+
+/**
+ * The sides of a deal, whichever row the contract hangs off.
+ *
+ * A DPA needs three facts and nothing else: who the two parties are, what each
+ * is handing over, and what Leaves are already moving. A TradeRequest carries
+ * those directly; an Offer carries them in a different shape — the listing is
+ * what the SENDER receives and `offeredItems` is what they give — and the
+ * arithmetic is identical once both are reduced to this.
+ *
+ * `netValueTo()` takes `TradeSides`, so shaping an offer into it is what lets
+ * exactly one value calculation serve both attachment points. A second
+ * `netValueToFromOffer()` would be the same subtraction written twice, and the
+ * two would drift the first time the Leaves term changed.
+ */
+export interface OfferSides {
+  senderId: string
+  receiverId: string
+  offeredLeaves: number | null
+  /** The listing. The sender RECEIVES this — it is the receiver's item. */
+  post: { id: string; valueLeaves: number | null }
+  /** What the sender puts up. Parsed from `Offer.offeredItems`, values joined. */
+  offeredItems: { id: string; valueLeaves: number | null }[]
+}
+
+/**
+ * An offer, in `TradeSides` terms.
+ *
+ * MAPPING NOTE, and it is the one thing to get right here. On a TradeRequest,
+ * `offeredItem` is the SENDER's and `requestedItem` is what they want. An Offer
+ * is the same relationship: `offeredItems` is the sender's side, `post` is what
+ * they want. So `offeredItem := offeredItems`, `requestedItem := post`, and the
+ * sender/receiver ids carry over unchanged — `netValueTo()`'s sender branch
+ * then computes `requested − offered − leaves`, which is exactly the gap the
+ * offer screen draws.
+ *
+ * MULTIPLE OFFERED ITEMS ARE SUMMED, and an unvalued one poisons the sum to
+ * null rather than counting as zero. That is the same rule `netValueTo()`
+ * already applies to a single unvalued item, and for the same reason: a DPA is
+ * an agreement about a specific difference, and with an unvalued item there is
+ * no difference to agree about.
+ *
+ * `id` on the synthesised offered item matters: `netValueTo()` returns null
+ * when both ids match, which is how it detects the leaves-for-item placeholder.
+ * A Leaves-only offer has an empty `offeredItems`, so it is given the post's own
+ * id and correctly reports no item difference.
+ */
+export function offerAsTradeSides(offer: OfferSides): TradeSides {
+  const values = offer.offeredItems.map((i) => i.valueLeaves)
+  const anyUnvalued = values.some((v) => v === null)
+  const total = anyUnvalued ? null : values.reduce<number>((n, v) => n + (v ?? 0), 0)
+
+  return {
+    senderId: offer.senderId,
+    receiverId: offer.receiverId,
+    offeredLeaves: offer.offeredLeaves,
+    offeredItem: {
+      // Empty means a Leaves-only offer: no second item, so the same id on both
+      // sides, which is the signal netValueTo() already reads as "no gap".
+      id: offer.offeredItems[0]?.id ?? offer.post.id,
+      valueLeaves: offer.offeredItems.length === 0 ? null : total,
+    },
+    requestedItem: { id: offer.post.id, valueLeaves: offer.post.valueLeaves },
+  }
+}
+
+/**
+ * `Offer.offeredItems` is a JSON string written by a client. Parsed defensively.
+ *
+ * The same shape `PATCH /api/offers/[id]` already parses on the accept path,
+ * lifted here so both read it identically: anything that is not an object with
+ * a non-empty string `id` is dropped, and a malformed blob yields `[]` rather
+ * than throwing. A Leaves-only offer legitimately has none.
+ */
+export function parseOfferedItemIds(raw: string): string[] {
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed
+      .filter((x): x is { id?: unknown } => !!x && typeof x === "object")
+      .map((x) => x.id)
+      .filter((id): id is string => typeof id === "string" && id.length > 0)
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Which row a contract hangs off, as a checked union.
+ *
+ * THROWS on a row with neither, and that is deliberate. "Exactly one at
+ * creation, at least one always" is a CHECK constraint the schema cannot carry
+ * (Prisma cannot express one, and MariaDB 10.4 would not receive it through a
+ * generated migration), so it is enforced here and at both creation sites. A
+ * contract attached to nothing is not a state to render defensively around —
+ * it is a bug, and it should surface as one rather than as a screen quietly
+ * missing its trade block.
+ */
+export type ContractSubject =
+  | { kind: "trade"; tradeId: string }
+  | { kind: "offer"; offerId: string }
+
+export function contractSubject(row: {
+  id: string
+  tradeId: string | null
+  offerId: string | null
+}): ContractSubject {
+  // The trade wins when both are set, which is the state an offer-born contract
+  // reaches once its offer is accepted. At that point the trade is the live
+  // object — it is what settles, what the deadline sweep is about, and what the
+  // creditor is looking at — and the offer is provenance.
+  if (row.tradeId) return { kind: "trade", tradeId: row.tradeId }
+  if (row.offerId) return { kind: "offer", offerId: row.offerId }
+  throw new Error(`DeferredContract ${row.id} is attached to neither a trade nor an offer`)
+}
+
+/**
+ * A stale proposal is not a debt, and this is what stops it behaving like one.
+ *
+ * ── THE HAZARD THIS CLOSES ──────────────────────────────────────────────────
+ *
+ * PENDING_ACCEPT is a COMMITTING status: it fills the debtor's one contract
+ * slot and counts against their tier ceiling. Nothing expired it. A creditor
+ * who simply never answered therefore locked the debtor out of proposing
+ * anything, to anyone, permanently — the deadline sweep only touches ACTIVE
+ * rows, so the proposal sat there forever.
+ *
+ * That was already true for trade-borne proposals and was survivable, because a
+ * proposal needed an accepted trade and both parties were already talking.
+ * Offers are the opposite: they are sent to strangers who may never reply, and
+ * an offer that expires on its own would otherwise leave its contract behind.
+ *
+ * So a PENDING_ACCEPT proposal lapses on its own deadline, exactly like an
+ * ACTIVE one — but to DECLINED, never to DEFAULTED. Nobody broke a promise
+ * here; a promise was made, nobody answered, and it stopped being on the table.
+ * `defaultedAt` is NOT stamped, so this costs the debtor no tier and no record.
+ */
+export async function expireStaleProposals(
+  db: ContractDb,
+  scope: { debtorId?: string; contractId?: string } = {},
+): Promise<number> {
+  const now = new Date()
+  const stale = await db.deferredContract.findMany({
+    where: {
+      status: "PENDING_ACCEPT",
+      deadline: { lt: now },
+      ...(scope.debtorId ? { debtorId: scope.debtorId } : {}),
+      ...(scope.contractId ? { id: scope.contractId } : {}),
+    },
+    select: { id: true },
+  })
+  if (stale.length === 0) return 0
+
+  let expired = 0
+  for (const { id } of stale) {
+    const res = await db.deferredContract.updateMany({
+      where: { id, status: "PENDING_ACCEPT" },
+      data: { status: "DECLINED" },
+    })
+    expired += res.count
+  }
+  return expired
 }

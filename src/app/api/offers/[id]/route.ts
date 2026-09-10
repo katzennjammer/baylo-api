@@ -3,8 +3,16 @@ import { resolveSession } from "@/lib/api-auth"
 import prisma from "@/lib/prisma"
 import pusher from "@/lib/pusher"
 import { availableLeaves } from "@/lib/leaves"
+import { expireStaleOffers } from "@/lib/offers"
 import { offerActionSchema, parseBody } from "@/lib/validation"
-import { enforceAcceptTrade } from "@/lib/reputation-gate"
+import { enforceAcceptTrade, loadStanding } from "@/lib/reputation-gate"
+import { DPA } from "@/lib/reputation-config"
+import {
+  COMMITTING_STATUSES,
+  netValueTo,
+  offerAsTradeSides,
+  parseOfferedItemIds,
+} from "@/lib/contracts"
 
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -12,6 +20,12 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
     const { id: offerId } = await params
+
+    // Sweep before reading the row, so an offer that aged out is seen as EXPIRED
+    // rather than accepted three days late. Scoped to nothing — the id is not a
+    // sender or a post, and one row's worth of sweep is what this costs.
+    await expireStaleOffers(prisma)
+
     const parsed = await parseBody(req, offerActionSchema)
     if (!parsed.ok) return parsed.response
     const { action } = parsed.data
@@ -19,9 +33,17 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     const offer = await prisma.offer.findUnique({
       where: { id: offerId },
       include: {
-        post: { select: { title: true } },
+        post: { select: { id: true, title: true, valueLeaves: true } },
         sender: { select: { id: true, name: true } },
         receiver: { select: { id: true, name: true } },
+        // A promise proposed alongside this offer, if there is one. At most one
+        // is ever in a COMMITTING status — the one-at-a-time rule — so this is
+        // a findFirst in list clothing.
+        contracts: {
+          where: { status: { in: [...COMMITTING_STATUSES] } },
+          select: { id: true, amountLeaves: true, deadline: true, debtorId: true, status: true },
+          take: 1,
+        },
       },
     })
     if (!offer) return NextResponse.json({ error: "Offer not found" }, { status: 404 })
@@ -70,6 +92,9 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     // leaves already committed to the sender's other still-pending offers. This
     // offer is excluded from that sum so it is not counted against itself.
     if (action === "accept" && offer.offeredLeaves && offer.offeredLeaves > 0) {
+      // The SENDER's other offers, not the accepter's: it is the sender's balance
+      // this is measured against, and one of their other offers may have lapsed.
+      await expireStaleOffers(prisma, { senderId: offer.senderId })
       const available = await availableLeaves(prisma, offer.senderId, { excludeOfferId: offerId })
       if (offer.offeredLeaves > available) {
         return NextResponse.json(
@@ -79,8 +104,125 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       }
     }
 
+    /*
+     * ── THE PROMISE, IF THERE IS ONE ──────────────────────────────────────────
+     *
+     * A DPA proposed alongside this offer is accepted BY accepting the offer.
+     * The creditor read the debtor's record on the preview screen and is now
+     * saying yes to the whole arrangement; splitting consent into two taps would
+     * leave a window in which the trade exists and the promise does not, and the
+     * settlement gate would block the trade until the second tap arrived.
+     *
+     * So every check /api/v1/contracts/[id]/accept would have run, runs here,
+     * BEFORE anything is written. The debtor's standing can have moved since
+     * they proposed — a default swept in, another contract accepted, an item
+     * revalued — and the creditor must not be able to accept an arrangement the
+     * server would then refuse to honour.
+     */
+    const pendingContract = offer.contracts[0] ?? null
+
+    if (action === "accept" && pendingContract) {
+      const debtor = await loadStanding(pendingContract.debtorId)
+
+      if (debtor.completedTrades < DPA.minCompletedTradesToOwe) {
+        return NextResponse.json(
+          {
+            error: `This offer includes a promise, and ${offer.sender?.name ?? "the sender"} now has ${debtor.completedTrades} completed trades — a debtor needs ${DPA.minCompletedTradesToOwe}. Accepting without the promise is not possible; ask them to send a new offer.`,
+            code: "DPA_MIN_COMPLETED_TRADES",
+          },
+          { status: 409 },
+        )
+      }
+      if (!debtor.limits.mayProposeDpa) {
+        return NextResponse.json(
+          {
+            error: `This offer includes a promise, and ${offer.sender?.name ?? "the sender"} is now a ${debtor.tier} and can no longer hold one.`,
+            code: "TIER_MAY_NOT_PROPOSE",
+          },
+          { status: 409 },
+        )
+      }
+
+      // Other open contracts, this one excluded — it is PENDING_ACCEPT and so is
+      // already counted in openContracts/committedDebt by loadStanding().
+      const otherOpen = await prisma.deferredContract.count({
+        where: {
+          debtorId: pendingContract.debtorId,
+          status: { in: [...COMMITTING_STATUSES] },
+          id: { not: pendingContract.id },
+        },
+      })
+      if (otherOpen >= DPA.maxConcurrentAsDebtor) {
+        return NextResponse.json(
+          {
+            error: "The sender has taken on another deferred agreement since making this offer.",
+            code: "DPA_ONE_AT_A_TIME",
+          },
+          { status: 409 },
+        )
+      }
+
+      const ceiling = debtor.limits.maxOutstandingDebtLeaves
+      const otherCommitted = Math.max(0, debtor.committedDebt - pendingContract.amountLeaves)
+      if (otherCommitted + pendingContract.amountLeaves > ceiling) {
+        return NextResponse.json(
+          {
+            error: `Accepting would put the sender at ${otherCommitted + pendingContract.amountLeaves} Leaves owed, over the ${ceiling} their tier allows.`,
+            code: "TIER_DEBT_CEILING",
+          },
+          { status: 409 },
+        )
+      }
+
+      // The value difference, re-derived: an item's valueLeaves may have been
+      // edited between the offer being sent and this moment.
+      const itemIds = parseOfferedItemIds(offer.offeredItems)
+      const offeredRows = itemIds.length
+        ? await prisma.item.findMany({
+            where: { id: { in: itemIds } },
+            select: { id: true, valueLeaves: true },
+          })
+        : []
+      const net = netValueTo(
+        offerAsTradeSides({
+          senderId: offer.senderId,
+          receiverId: offer.receiverId,
+          offeredLeaves: offer.offeredLeaves,
+          post: offer.post,
+          offeredItems: offeredRows,
+        }),
+        pendingContract.debtorId,
+      )
+      if (net === null || pendingContract.amountLeaves > net) {
+        return NextResponse.json(
+          {
+            error: `The value difference is now ${net ?? "undefined"} Leaves, which no longer covers the ${pendingContract.amountLeaves} promised. Ask for a new offer.`,
+            code: "DPA_AMOUNT_EXCEEDS_DIFFERENCE",
+          },
+          { status: 409 },
+        )
+      }
+    }
+
     const newStatus = action === "accept" ? "ACCEPTED" : "DECLINED"
     await prisma.offer.update({ where: { id: offerId }, data: { status: newStatus } })
+
+    /*
+     * A DECLINED offer takes its promise with it.
+     *
+     * DECLINED, not DEFAULTED: nobody broke anything. The debtor proposed, the
+     * creditor said no, and the row stays as the durable fact that somebody
+     * looked at these numbers and refused — which is the same reasoning
+     * /contracts/[id]/decline gives for not deleting it. Critically it also
+     * FREES THE DEBTOR'S ONE CONTRACT SLOT immediately; leaving it PENDING_ACCEPT
+     * would lock them out of proposing to anyone else for good.
+     */
+    if (action === "decline" && pendingContract) {
+      await prisma.deferredContract.updateMany({
+        where: { id: pendingContract.id, status: "PENDING_ACCEPT" },
+        data: { status: "DECLINED" },
+      })
+    }
 
     // Create an active TradeRequest so both users see it in "Active Trades"
     let tradeRecord: { id: string; offeredItemTitle: string; requestedItemTitle: string } | null = null
@@ -113,6 +255,37 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
             offeredLeaves:  offer.offeredLeaves ?? null,
           },
         })
+        /*
+         * ── THE PROMISE MOVES TO THE TRADE, AND BECOMES ACTIVE ──────────────
+         *
+         * `tradeId` is filled in and `offerId` is KEPT. Every downstream piece
+         * of machinery is trade-keyed — the settlement gate reads
+         * `{ tradeId, status: "PENDING_ACCEPT" }`, the deadline sweep and
+         * auto-payment both work off the contract row, and the creditor's
+         * preview prefers the trade once there is one — so re-pointing is what
+         * makes an offer-borne contract indistinguishable from a trade-borne one
+         * from here on. The offer stays as provenance.
+         *
+         * ACTIVE in the SAME statement, conditional on PENDING_ACCEPT. Two taps
+         * on Accept produce one ACTIVE contract and one no-op rather than two
+         * acceptances, which is the same guard /contracts/[id]/accept uses.
+         *
+         * NOT INSIDE A TRANSACTION WITH THE TRADE CREATE, and that is worth
+         * being honest about rather than quiet: this whole handler is a sequence
+         * of separate writes already (the offer update, the trade create, the
+         * notification, the message), and wrapping only these two would suggest
+         * a guarantee the rest of the path does not have. The failure mode if
+         * this write is lost is a trade whose promise is still PENDING_ACCEPT —
+         * which the settlement gate then blocks, loudly, rather than letting the
+         * swap complete with an unrecorded debt. That is the safe direction.
+         */
+        if (pendingContract) {
+          await prisma.deferredContract.updateMany({
+            where: { id: pendingContract.id, status: "PENDING_ACCEPT" },
+            data: { tradeId: trade.id, status: "ACTIVE", acceptedAt: new Date() },
+          })
+        }
+
         tradeRecord = {
           id: trade.id,
           offeredItemTitle:   isItemSwap
@@ -135,6 +308,26 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
           : `declined your offer on "${offer.post.title}"`,
         link: `/dashboard/messages?partner=${session.user.id}`,
         actorId: session.user.id,
+        /*
+         * The structured target, which this route was not writing.
+         *
+         * An ACCEPT has a real trade to point at — `tradeRecord` was created a
+         * few lines up — so this writes the FINE-GRAINED ('trade', <tradeId>)
+         * pair rather than the coarse pre-v1 ('trade', null) that every existing
+         * row in this table carries. That is the vocabulary the schema note
+         * describes as "v1 and later", and this is the first route to produce it
+         * for a trade.
+         *
+         * `tradeRecord` is null only if the TradeRequest create threw — the
+         * catch above logs and continues rather than failing the accept. There
+         * is then no trade to open, and the conversation is the truthful target.
+         *
+         * A DECLINE never has one: nothing was created, and the thread is where
+         * the conversation about it continues.
+         */
+        ...(tradeRecord
+          ? { entityType: "trade", entityId: tradeRecord.id }
+          : { entityType: "conversation", entityId: session.user.id }),
       },
     })
 
