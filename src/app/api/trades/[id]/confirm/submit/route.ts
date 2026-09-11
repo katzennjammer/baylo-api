@@ -162,13 +162,55 @@ export async function POST(
       data:  { used: true },
     })
 
-    // The claim was validated before any mutation happened (see above); this is
-    // only the write, and it runs after the code has been verified so that a
-    // failed confirmation cannot record a meetup that was never confirmed.
-    if (body.safeZoneHubId) {
+    /*
+     * ── THE CLAIM, AND THE ONE PLACE THE PLAN IS ALLOWED TO BECOME ONE ───────
+     *
+     * The explicit claim was validated before any mutation happened (see above);
+     * this is only the write, and it runs after the code has been verified so
+     * that a failed confirmation cannot record a meetup that was never
+     * confirmed.
+     *
+     * WHEN THE CALLER NAMES NO HUB, AN AGREED PLAN STANDS IN FOR ONE. Two people
+     * who arranged Parkmall, both said yes to it, travelled there and have now
+     * exchanged codes in person should not be asked a second time where they
+     * are. This is the only code path that copies `meetupHubId` into
+     * `safeZoneHubId`, and every condition on it matters:
+     *
+     *   `meetupAgreedAt` MUST BE SET. A standing proposal is ONE person's
+     *   suggestion. Treating it as a claim would let somebody mint the 10-Leaf
+     *   SAFEZONE_MEETUP award by proposing a hub the other party never answered
+     *   — the exact conflation keeping these two columns apart exists to
+     *   prevent. An unanswered plan claims nothing.
+     *
+     *   THE CODES HAVE ALREADY MATCHED. We are past the bcrypt compare, so the
+     *   two of them are demonstrably together. The plan is not evidence; the
+     *   codes are, and the plan only supplies the place name.
+     *
+     *   AN EXPLICIT `safeZoneHubId` STILL WINS. Plans change on the day and the
+     *   parties are the authority on where they actually ended up.
+     *
+     *   A PLAN THAT NO LONGER VALIDATES IS DROPPED, NOT FATAL. Either listing
+     *   may have stopped naming that hub since the plan was agreed. The caller
+     *   did not ask for this claim, so a stale one costs them their award and
+     *   nothing else — failing the whole confirmation over it would strand two
+     *   people who just swapped in person.
+     */
+    let claimHubId = body.safeZoneHubId ?? null
+
+    if (!claimHubId && trade.meetupHubId && trade.meetupAgreedAt) {
+      const planClaim = await resolveMeetupHub(
+        prisma,
+        trade.meetupHubId,
+        trade.offeredItemId,
+        trade.requestedItemId,
+      )
+      if (planClaim.ok) claimHubId = trade.meetupHubId
+    }
+
+    if (claimHubId) {
       await prisma.tradeRequest.update({
         where: { id: tradeId },
-        data:  { safeZoneHubId: body.safeZoneHubId },
+        data:  { safeZoneHubId: claimHubId },
       })
     }
 

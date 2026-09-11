@@ -7,12 +7,16 @@ import { markVerified } from "@/lib/verification"
 import { rateLimit, clientIp } from "@/lib/rate-limit"
 import { RATE_LIMITS } from "@/lib/rate-limit-config"
 
+const googleEnabled = Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET)
+
 export const { handlers, auth, signIn, signOut } = NextAuth({
   providers: [
-    Google({
-      clientId: process.env.GOOGLE_CLIENT_ID!,
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
-    }),
+    ...(googleEnabled ? [
+      Google({
+        clientId: process.env.GOOGLE_CLIENT_ID!,
+        clientSecret: process.env.GOOGLE_CLIENT_SECRET!,
+      }),
+    ] : []),
     Credentials({
       credentials: {
         email: { label: "Email", type: "email" },
@@ -47,7 +51,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         // Lowercased, matching the native endpoint and the Google exchange.
         const user = await prisma.user.findUnique({ where: { email } })
 
-        if (!user || !user.password) return null
+        if (!user || !user.password || !user.isVerified) return null
 
         const isValid = await bcrypt.compare(
           credentials.password as string,

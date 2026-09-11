@@ -22,6 +22,7 @@ function parseFirstImage(images: string): string | null {
 }
 
 export default async function RegisterPage() {
+  const googleEnabled = Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET)
   const [rawSwaps, userCount, recentUsers] = await Promise.all([
     prisma.tradeRequest.findMany({
       where: { status: "COMPLETED" },
@@ -64,6 +65,7 @@ export default async function RegisterPage() {
       swaps={swaps}
       userCount={userCount}
       recentUsers={recentUsers}
+      googleEnabled={googleEnabled}
     />
   )
 }

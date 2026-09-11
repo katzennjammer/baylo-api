@@ -143,7 +143,7 @@ function LeavesSwatch({ amount }: { amount: number }) {
   )
 }
 
-function LoginForm({ swaps, userCount, recentUsers }: { swaps: SwapDisplay[]; userCount: number; recentUsers: RecentUser[] }) {
+function LoginForm({ swaps, userCount, recentUsers, googleEnabled }: { swaps: SwapDisplay[]; userCount: number; recentUsers: RecentUser[]; googleEnabled: boolean }) {
   const router = useRouter()
   const params = useSearchParams()
   const callbackUrl = params.get("callbackUrl") || "/dashboard"
@@ -418,19 +418,24 @@ function LoginForm({ swaps, userCount, recentUsers }: { swaps: SwapDisplay[]; us
           {/* Google */}
           <button
             type="button"
-            onClick={() => signIn("google", { callbackUrl: `/loading-screen?next=${encodeURIComponent(callbackUrl)}` })}
+            disabled={!googleEnabled}
+            onClick={() => {
+              if (!googleEnabled) return
+              signIn("google", { callbackUrl: `/loading-screen?next=${encodeURIComponent(callbackUrl)}` })
+            }}
             style={{
               marginTop: 12, width: "100%",
               display: "flex", alignItems: "center", justifyContent: "center", gap: 10,
               fontFamily: "var(--ff)", fontWeight: 600, fontStretch: "106%", fontSize: 15,
               color: "var(--text)", background: "var(--card)",
               border: "1.5px solid var(--line)", borderRadius: 12,
-              padding: "12px 20px", cursor: "pointer",
+              padding: "12px 20px", cursor: googleEnabled ? "pointer" : "not-allowed",
               transition: "border-color .2s, background .2s",
+              opacity: googleEnabled ? 1 : 0.55,
             }}
           >
             <GoogleIcon />
-            Continue with Google
+            {googleEnabled ? "Continue with Google" : "Google sign-in unavailable"}
           </button>
 
           {/* single signup path */}
@@ -461,10 +466,10 @@ function LoginForm({ swaps, userCount, recentUsers }: { swaps: SwapDisplay[]; us
   )
 }
 
-export default function LoginClient({ swaps, userCount, recentUsers }: { swaps: SwapDisplay[]; userCount: number; recentUsers: RecentUser[] }) {
+export default function LoginClient({ swaps, userCount, recentUsers, googleEnabled }: { swaps: SwapDisplay[]; userCount: number; recentUsers: RecentUser[]; googleEnabled: boolean }) {
   return (
     <Suspense>
-      <LoginForm swaps={swaps} userCount={userCount} recentUsers={recentUsers} />
+      <LoginForm swaps={swaps} userCount={userCount} recentUsers={recentUsers} googleEnabled={googleEnabled} />
     </Suspense>
   )
 }

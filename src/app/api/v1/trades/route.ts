@@ -8,6 +8,7 @@ import { ok, unauthenticated, invalid } from "@/lib/v1/envelope"
 import { parseQuery, paginationShape, MAX_LIMIT } from "@/lib/v1/query"
 import { decodeCursor, encodeCursor, paginate, cursorDate } from "@/lib/v1/cursor"
 import { SAFE_ZONE_HUB_SELECT, v1Hub, type SafeZoneHubRow } from "@/lib/safe-zones"
+import { MEETUP_SELECT, v1MeetupPlan } from "@/lib/meetup"
 import { COMMITTING_STATUSES } from "@/lib/contracts"
 
 export const dynamic = "force-dynamic"
@@ -138,6 +139,13 @@ export async function GET(req: NextRequest) {
       // with the first, which is exactly how the offeredLeaves bug happened.
       safeZoneHubId: true,
       safeZoneHub: { select: SAFE_ZONE_HUB_SELECT },
+      // The meetup PLAN, on the list rather than behind its own request. The
+      // Trades screen already runs three queries to draw itself and an accepted
+      // row has to say "Renz suggested Parkmall, Sat 2pm" to be worth tapping;
+      // a fourth round trip per row to find that out is how that line ends up
+      // not being drawn at all. Five columns on a SELECT already happening, plus
+      // the hub join the claim above is already paying for.
+      ...MEETUP_SELECT,
       createdAt: true,
       updatedAt: true,
       senderId: true,
@@ -255,6 +263,13 @@ export async function GET(req: NextRequest) {
       safeZoneMeetup: t.safeZoneHubId !== null,
       /** Which hub, when one was claimed. NULL for every trade that named none. */
       safeZoneHub: t.safeZoneHub ? v1Hub(t.safeZoneHub as SafeZoneHubRow) : null,
+      /*
+       * Where and when they have ARRANGED to meet — a different fact from the
+       * two fields above it, which are what they CLAIMED afterwards. Null until
+       * somebody proposes; `plan.agreedAt` is null while one proposal stands
+       * unanswered. Nothing on this object awards anything.
+       */
+      meetup: v1MeetupPlan(t),
       canConfirm,
       createdAt: t.createdAt,
       updatedAt: t.updatedAt,

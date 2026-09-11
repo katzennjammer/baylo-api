@@ -435,7 +435,62 @@ model TradeRequest {
   /// honest-user-safe radius in a dense commercial strip would cover several
   /// other hubs anyway. The honest position is the one written above.
   safeZoneHubId String?
-  safeZoneHub   SafeZoneHub? @relation(fields: [safeZoneHubId], references: [id], onDelete: Restrict)
+  safeZoneHub   SafeZoneHub? @relation("MeetupClaim", fields: [safeZoneHubId], references: [id], onDelete: Restrict)
+
+  /// ── THE MEETUP PLAN ───────────────────────────────────────────────────────
+  ///
+  /// Where and when the parties have ARRANGED to meet. This is a different fact
+  /// from `safeZoneHubId` directly above it, and the two must never be merged:
+  ///
+  ///   `safeZoneHubId`  is the CLAIM. "We met here", asserted afterwards, at
+  ///                    confirm/submit. It is what the SAFEZONE_MEETUP reward
+  ///                    keys off -- the condition is literally
+  ///                    `safeZoneHubId IS NOT NULL`.
+  ///   `meetupHubId`    is the PLAN. "Let us meet here", asserted beforehand,
+  ///                    by one party and agreed by the other. It awards nothing.
+  ///
+  /// WRITING A PLAN INTO THE CLAIM WOULD MINT 10 LEAVES FOR A MEETING THAT HAS
+  /// NOT HAPPENED, and would do it at the moment somebody merely SUGGESTED a
+  /// place. A plan is not evidence; only the pair of typed codes is. The plan
+  /// does become the DEFAULT for the claim at confirmation -- the parties should
+  /// not be asked twice -- but it is copied across by the confirm route, after
+  /// the codes match, and never read as the claim itself.
+  ///
+  /// THE FOUR COLUMNS MOVE TOGETHER. Three states, and nothing else is legal:
+  ///
+  ///   no plan    all four NULL
+  ///   proposed   hub + at + proposedBySender set, agreedAt NULL
+  ///   agreed     all four set
+  ///
+  /// The invariant is enforced in the meetup routes rather than by a CHECK
+  /// constraint, which MariaDB 10.4 will parse and Prisma will not model. Every
+  /// write of these columns goes through one of the two routes and each writes
+  /// the whole group.
+  meetupHubId String?
+  meetupHub   SafeZoneHub? @relation("MeetupPlan", fields: [meetupHubId], references: [id], onDelete: Restrict)
+
+  /// When they have arranged to meet. A real timestamp rather than free text:
+  /// two people agreeing to "sat afternoon ha" have not agreed on anything a
+  /// reminder, a sort, or the other person's calendar can act on.
+  meetupAt DateTime?
+
+  /// "the bench outside, I'll have the blue bag". The detail a hub id and a
+  /// timestamp cannot carry. Optional, short, and never load-bearing.
+  meetupNote String? @db.VarChar(200)
+
+  /// WHICH SIDE proposed the standing plan -- deliberately a side and not a
+  /// userId. A `meetupProposedById` FK can point at somebody who is not in this
+  /// trade, and then "you cannot accept your own proposal" is guarding against
+  /// a state the column let us write in the first place. A boolean against
+  /// `senderId`/`receiverId` cannot be wrong, and rendering "Renz suggested"
+  /// only ever needed to know which of the two names to use.
+  meetupProposedBySender Boolean?
+
+  /// Set when the OTHER side agrees. NULL with a hub set means one proposal is
+  /// standing and unanswered. A counter-proposal overwrites the plan and clears
+  /// this, which is why there is no separate decline: countering IS declining,
+  /// and it leaves something on the table instead of a hole.
+  meetupAgreedAt DateTime?
 
   senderId   String
   sender     User   @relation("SentRequests", fields: [senderId], references: [id])
@@ -698,6 +753,21 @@ enum NotificationType {
    * message because that is the part the sender can act on.
    */
   OFFER_EXPIRED
+  /**
+   * The other party proposed, or agreed, a place and time to meet.
+   *
+   * TWO NEW VALUES RATHER THAN REUSING TRADE_ACCEPTED, because this column is
+   * the EVENT and a proposal is not an acceptance — the model's own note draws
+   * that line. They also need different words and different urgency: a proposal
+   * is a question waiting on the recipient, an agreement is a settled fact.
+   *
+   * Both carry entityType "meetup", which is a NEW routing token and not
+   * "trade": a trade notification opens the confirmation codes, and sending
+   * somebody there to answer "can you do Saturday?" would put a 15-minute code
+   * on screen days before the meeting.
+   */
+  MEETUP_PROPOSED
+  MEETUP_AGREED
 }
 
 enum FollowStatus {
@@ -1437,9 +1507,15 @@ model SafeZoneHub {
 
   items ItemSafeZone[]
 
-  /// Trades whose parties claimed they met here. Restrict on that side too, so
+  /// Trades whose parties CLAIMED they met here. Restrict on that side too, so
   /// a hub carrying meetup history is as undeletable as one carrying listings.
-  trades TradeRequest[]
+  trades TradeRequest[] @relation("MeetupClaim")
+
+  /// Trades that have ARRANGED to meet here and not yet confirmed. The claim
+  /// above is what happened; this is what is planned. Named relations because
+  /// there are now two of them between this pair of models -- see the block on
+  /// `TradeRequest.meetupHubId` for why they are not one column.
+  meetupPlans TradeRequest[] @relation("MeetupPlan")
 
   /// The picker's query: active hubs in one city. Both filter columns, in the
   /// order the WHERE clause names them.

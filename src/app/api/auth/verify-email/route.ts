@@ -80,8 +80,8 @@ export async function GET(req: NextRequest) {
   if (wantsHtml) {
     const base = process.env.NEXTAUTH_URL ?? req.nextUrl.origin
     const target = result.ok
-      ? new URL("/dashboard?verified=1", base)
-      : new URL(`/dashboard?verifyError=${result.reason}`, base)
+      ? new URL("/auth/verify-email?status=success", base)
+      : new URL(`/auth/verify-email?status=error&reason=${result.reason}`, base)
     return NextResponse.redirect(target)
   }
 
