@@ -60,10 +60,10 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
     // ── Reputation gate, ACCEPT path ──
     //
-    // The accepter is acquiring the offered items, so the tier value ceiling
-    // applies to those. The defaulted-trader block does not: accepting is the
-    // one move a defaulter must keep, because Leaves arriving this way are what
-    // pays their debt down.
+    // The accepter is acquiring the offered items, so the premium bracket gate
+    // and the tier value ceiling apply to those. The defaulted-trader block does
+    // not: accepting is the one move a defaulter must keep, because Leaves
+    // arriving this way are what pays their debt down.
     //
     // offeredItems is a JSON blob written by the client. Only well-formed
     // string ids are passed on; enforceAcceptTrade() looks them up in Item and

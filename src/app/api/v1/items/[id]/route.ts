@@ -1,4 +1,6 @@
 import { NextRequest } from "next/server"
+import { valueNeedsPremium } from "@/lib/brackets"
+import { isPremium } from "@/lib/premium"
 import { z } from "zod"
 import { resolveSession } from "@/lib/api-auth"
 import prisma from "@/lib/prisma"
@@ -126,7 +128,10 @@ export async function GET(
           orderBy: [{ createdAt: "desc" }, { id: "desc" }],
           take: 50,
         }),
-    prisma.user.findUnique({ where: { id: viewerId }, select: { leaves: true } }),
+    prisma.user.findUnique({
+      where: { id: viewerId },
+      select: { leaves: true, premiumUntil: true },
+    }),
     // The same function the contract gates enforce with, so the badge on this
     // screen can never promise something the server would then refuse.
     loadEffectiveTiers(prisma, [{ id: item.userId, rating: item.user.rating }]),
@@ -152,6 +157,21 @@ export async function GET(
       // An owner cannot offer on their own listing, and neither can anyone once
       // it has left AVAILABLE.
       canOffer: !isOwner && item.status === "AVAILABLE",
+      // Why the offer control is LOCKED for this viewer, when it is. The only
+      // value today is "premium": the listing sits in PREMIUM_MIN_BRACKET or
+      // above and the viewer has no live subscription. Sent as a reason rather
+      // than folded into `canOffer` because the two draw different controls --
+      // `canOffer: false` is an inert button ("not available"), a lock is an
+      // explanation with the listing left fully in view. Advisory: the same
+      // check runs in enforcePremiumForListing() on every POST /api/offers.
+      //
+      // Not computed for the owner. A person cannot offer on their own listing
+      // whatever bracket it is in, and a padlock on your own item would read as
+      // a claim about you.
+      offerLock:
+        !isOwner && valueNeedsPremium(item.valueLeaves) && !isPremium(viewerRow?.premiumUntil)
+          ? ("premium" as const)
+          : null,
       leaves: viewerRow?.leaves ?? 0,
       tradeableItems: tradeable.map((t) => ({
         id: t.id,

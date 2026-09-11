@@ -13,6 +13,8 @@ import {
   sweepLapsedContracts,
   type DebtorStanding,
 } from "@/lib/contracts"
+import { bracketOf, PREMIUM_MIN_BRACKET, valueNeedsPremium } from "@/lib/brackets"
+import { isPremium } from "@/lib/premium"
 
 /**
  * Server-side enforcement of the reputation tiers.
@@ -42,6 +44,8 @@ export interface TraderStanding extends DebtorStanding {
   /** The base tier after DPA defaults are charged against it. THIS is enforced on. */
   tier: TrustTier
   limits: TierLimits
+  /** isPremium(User.premiumUntil) at load time. See @/lib/premium. */
+  premium: boolean
 }
 
 /**
@@ -66,12 +70,13 @@ export async function loadStanding(userId: string): Promise<TraderStanding> {
   const [user, standing] = await Promise.all([
     prisma.user.findUnique({
       where: { id: userId },
-      select: { rating: true },
+      select: { rating: true, premiumUntil: true },
     }),
     loadDebtorStanding(prisma, userId),
   ])
 
   const rating = user?.rating ?? 0
+  const premium = isPremium(user?.premiumUntil)
   // completedTrades, not User.totalTrades. The counter has drifted above the
   // real count on live data (two users sit one and two trades high), and a gate
   // that opens early is not a gate.
@@ -81,7 +86,7 @@ export async function loadStanding(userId: string): Promise<TraderStanding> {
     hasUnsettledDefault: standing.hasUnsettledDefault,
   })
 
-  return { ...standing, userId, rating, baseTier, tier, limits: getTierLimits(tier) }
+  return { ...standing, userId, rating, baseTier, tier, limits: getTierLimits(tier), premium }
 }
 
 /** 403 in the shape the pre-v1 routes use: `{ error }`. */
@@ -129,6 +134,70 @@ export function enforceCanInitiateTrade(standing: TraderStanding): NextResponse 
       outstandingDebt: standing.outstandingDebt,
     },
   )
+}
+
+// ── The premium bracket gate ─────────────────────────────────────────────────
+
+/**
+ * Refuses a non-subscriber ACQUIRING an item in bracket PREMIUM_MIN_BRACKET or
+ * above -- on either path.
+ *
+ * Both paths, for the same reason the tier cap runs on both: it is a rule
+ * about what a person takes in, and a rule that only bound proposers would be
+ * avoided by asking the other side to propose. A non-subscriber whose own
+ * listing draws an offer of a bracket-7 item is acquiring that item exactly as
+ * if they had gone and asked for it; the accept tap is the same trade in the
+ * other direction. What is NOT gated is giving: a non-subscriber may offer or
+ * hand over their own bracket-9 item to anyone, because the exposure being
+ * gated belongs to the side that receives it. (Until 11 Sep 2026 this was
+ * propose-only, with the accept side left open as "a toll on selling"; that
+ * reading missed that the acceptor is also the one receiving.)
+ *
+ * Ordered AFTER the default block (where the path has one) and BEFORE the tier
+ * cap, deliberately. The lock is a property of the ITEM -- everyone sees the
+ * same padlock on the same tile -- while the tier cap is a property of the
+ * viewer. If the cap were checked first, the same bracket-8 item would refuse
+ * a New Trader with a tier message and a Trusted Trader with a premium one,
+ * and the bracket-7 rule would look arbitrary. The client mirrors this order
+ * on item detail.
+ *
+ * An unvalued item passes, for the same reason it passes the tier cap: it has
+ * no bracket to be in.
+ *
+ * `path` picks the copy. The mobile accept screen shows the message verbatim,
+ * and "only proposing on it is locked" on a screen where the person is
+ * accepting would name the wrong tap.
+ */
+export async function enforcePremiumForListing(
+  standing: TraderStanding,
+  itemIds: string[],
+  path: "propose" | "accept" = "propose",
+): Promise<NextResponse | null> {
+  if (standing.premium) return null
+
+  const ids = itemIds.filter(Boolean)
+  if (ids.length === 0) return null
+
+  const rows = await prisma.item.findMany({
+    where: { id: { in: ids } },
+    select: { id: true, title: true, valueLeaves: true },
+  })
+  const gated = rows.find((r) => valueNeedsPremium(r.valueLeaves))
+  if (!gated) return null
+
+  const lead =
+    `Trading at bracket ${PREMIUM_MIN_BRACKET} and above needs a premium subscription, ` +
+    `which is coming soon. `
+  const tail =
+    path === "accept"
+      ? `"${gated.title}" is in that bracket, so accepting it is locked. The offer stays where it is.`
+      : `"${gated.title}" stays visible; only proposing on it is locked.`
+  return forbidden(lead + tail, {
+    code: "PREMIUM_REQUIRED",
+    bracket: bracketOf(gated.valueLeaves as number),
+    minBracket: PREMIUM_MIN_BRACKET,
+    path,
+  })
 }
 
 // ── The item-value ceiling ───────────────────────────────────────────────────
@@ -182,10 +251,12 @@ export async function enforceItemValueCeiling(
 }
 
 /**
- * The two gates that every trade-initiating route applies together.
+ * The three gates that every trade-initiating route applies together.
  *
- * One call so a new initiating path cannot pick up half the protection, which
- * is the realistic way this gets broken later.
+ * One call so a new initiating path cannot pick up a third of the protection,
+ * which is the realistic way this gets broken later. Order: default block,
+ * premium bracket, tier cap -- see enforcePremiumForListing() for why premium
+ * sits above the cap.
  */
 export async function enforceInitiateTrade(
   userId: string,
@@ -194,13 +265,18 @@ export async function enforceInitiateTrade(
   const standing = await loadStanding(userId)
   const blocked = enforceCanInitiateTrade(standing)
   if (blocked) return { response: blocked }
+  const locked = await enforcePremiumForListing(standing, acquiringItemIds)
+  if (locked) return { response: locked }
   const capped = await enforceItemValueCeiling(standing, acquiringItemIds)
   if (capped) return { response: capped }
   return { response: null, standing }
 }
 
 /**
- * The accept path: value ceiling only, never the default block.
+ * The accept path: premium bracket, then value ceiling -- never the default
+ * block. Same order as the initiate path with the first gate removed, so a
+ * bracket-7 item answers PREMIUM_REQUIRED to a non-subscriber on either side
+ * of the trade.
  *
  * A separate function rather than a flag on the one above, so that the
  * difference between the two paths is visible at every call site instead of
@@ -211,6 +287,8 @@ export async function enforceAcceptTrade(
   acquiringItemIds: string[],
 ): Promise<{ response: NextResponse } | { response: null; standing: TraderStanding }> {
   const standing = await loadStanding(userId)
+  const locked = await enforcePremiumForListing(standing, acquiringItemIds, "accept")
+  if (locked) return { response: locked }
   const capped = await enforceItemValueCeiling(standing, acquiringItemIds)
   if (capped) return { response: capped }
   return { response: null, standing }
@@ -228,6 +306,8 @@ export function publicStanding(standing: TraderStanding) {
   return {
     tier: standing.tier,
     baseTier: standing.baseTier,
+    /** isPremium(premiumUntil). Advisory here; enforced by enforcePremiumForListing(). */
+    premium: standing.premium,
     completedTrades: standing.completedTrades,
     rating: standing.rating,
     limits: {

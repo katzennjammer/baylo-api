@@ -67,6 +67,20 @@ model User {
   // token issued before deletion stops working immediately.
   deletedAt DateTime?
 
+  // Premium subscription. Null or in the past means not subscribed; there is no
+  // boolean beside it, because a boolean would have to be flipped back by a job
+  // when the term ends and this column simply stops being true.
+  //
+  // NOTHING WRITES THIS YET. Play Billing is the only lawful way to sell a
+  // digital subscription inside the Android app and there is no Play Console
+  // account to test it against, so the column is set by hand
+  // (scripts/set-premium.ps1) and read by ONE place: isPremium() in
+  // @/lib/premium. What it gates is ACQUIRING an item whose value bracket is
+  // PREMIUM_MIN_BRACKET or above -- proposing for one, or accepting an offer
+  // of one -- see @/lib/brackets. It never hides a listing and never gates
+  // giving one away.
+  premiumUntil DateTime?
+
   items                   Item[]
   sentRequests            TradeRequest[]           @relation("SentRequests")
   receivedRequests        TradeRequest[]           @relation("ReceivedRequests")

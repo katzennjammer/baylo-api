@@ -171,8 +171,9 @@ export async function PATCH(req: NextRequest) {
     if (status === "ACCEPTED") {
       // ── Reputation gate, ACCEPT path ──
       //
-      // The value ceiling applies -- the receiver is acquiring offeredItem --
-      // but the defaulted-trader block deliberately does NOT. Accepting is how
+      // The premium bracket gate and the value ceiling apply -- the receiver is
+      // acquiring offeredItem -- but the defaulted-trader block deliberately
+      // does NOT. Accepting is how
       // a defaulter earns their way out; see enforceCanInitiateTrade().
       const gate = await enforceAcceptTrade(myId, [trade.offeredItemId])
       if (gate.response) return gate.response
