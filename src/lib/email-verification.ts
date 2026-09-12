@@ -8,7 +8,7 @@ import { markVerified, type VerificationResult } from "@/lib/verification"
  *
  * Until this existed, `markVerified()` had exactly two callers, both Google, so
  * an account created with an email and a password could never become verified —
- * and the 50-Leaf signup grant, which is gated on verification, was unreachable
+ * and the signup grant, which is gated on verification, was unreachable
  * for it. This module is the third caller, and it deliberately adds nothing to
  * what verification *means*: it proves control of the mailbox and then hands off
  * to the same function Google sign-in uses. The award, the grant, the ledger

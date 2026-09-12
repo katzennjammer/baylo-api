@@ -35,7 +35,7 @@
  * the ledger unbalanced fails loudly instead of quietly seeding a broken world.
  *
  * What moves Leaves here, mirroring the real code paths exactly:
- *   SIGNUP_GRANT   +50 to each of the four accounts (SIGNUP_GRANT_LEAVES),
+ *   SIGNUP_GRANT   +20 to each of the four accounts (SIGNUP_GRANT_LEAVES),
  *                  matching claimSignupGrant() in @/lib/verification.
  *   TRADE_SPEND    negative, on the sender of a settled trade.
  *   TRADE_RECEIVE  the equal and opposite positive row on the receiver.
@@ -46,7 +46,7 @@
  * `lifetimeLeaves` is NOT the balance. It is monotonic and only a positive
  * award raises it -- a signup grant or a task reward -- which is why receiving
  * Leaves in a trade leaves it alone. It is what the rank ladder keys off. So
- * all four accounts sit at lifetimeLeaves 50 regardless of how their spendable
+ * all four accounts sit at lifetimeLeaves 20 regardless of how their spendable
  * balance moved. That asymmetry is the design, not an oversight.
  *
  * No TASK_REWARD rows are seeded. Task awards are capped, partner-gated and
@@ -127,7 +127,7 @@ const prisma = new PrismaClient({
 // ever changes, the assertion in main() catches the drift on the next run.
 // ─────────────────────────────────────────────────────────────────────────────
 
-const SIGNUP_GRANT_LEAVES = 50
+const SIGNUP_GRANT_LEAVES = 20
 const BCRYPT_ROUNDS = 12
 
 /**
@@ -182,8 +182,8 @@ const USERS: SeedUser[] = [
     location: "Cebu City",
     bio: "Declutters faster than she accumulates. Mostly books and plants.",
     dateOfBirth: "1996-04-12",
-    // 50 grant - 20 spent on the laptop trade.
-    leaves: 30,
+    // 20 grant - 20 spent on the laptop trade.
+    leaves: 0,
     lifetimeLeaves: SIGNUP_GRANT_LEAVES,
     totalTrades: 1,
   },
@@ -194,8 +194,8 @@ const USERS: SeedUser[] = [
     location: "Mandaue City",
     bio: "Fixes old electronics. If it has a battery, he has opinions about it.",
     dateOfBirth: "1993-11-30",
-    // 50 grant + 20 received on the laptop trade.
-    leaves: 70,
+    // 20 grant + 20 received on the laptop trade.
+    leaves: 40,
     lifetimeLeaves: SIGNUP_GRANT_LEAVES,
     totalTrades: 1,
   },
@@ -206,8 +206,8 @@ const USERS: SeedUser[] = [
     location: "Lapu-Lapu City",
     bio: "Cyclist. Trades gear seasonally and never keeps a spare wheel long.",
     dateOfBirth: "1999-07-08",
-    // 50 grant - 15 spent on the console trade.
-    leaves: 35,
+    // 20 grant - 15 spent on the console trade.
+    leaves: 5,
     lifetimeLeaves: SIGNUP_GRANT_LEAVES,
     totalTrades: 1,
   },
@@ -218,8 +218,8 @@ const USERS: SeedUser[] = [
     location: "Talisay City",
     bio: "Furniture restorer. Will take your broken chair off your hands.",
     dateOfBirth: "1991-02-25",
-    // 50 grant + 15 received on the console trade.
-    leaves: 65,
+    // 20 grant + 15 received on the console trade.
+    leaves: 35,
     lifetimeLeaves: SIGNUP_GRANT_LEAVES,
     totalTrades: 1,
   },

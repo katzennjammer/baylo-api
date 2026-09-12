@@ -11,7 +11,7 @@ import type { Prisma, PrismaClient } from "@/generated/prisma/client"
  *
  * It is NOT `User.isVerified`, and the two must never be folded together.
  * `isVerified` means "controls this mailbox": it is free, instant, and it gates
- * the 50-Leaf signup grant. This is the heavy one — a photographed government
+ * the 20-Leaf signup grant. This is the heavy one — a photographed government
  * ID, looked at by a human — and it gates exactly two acts:
  *
  *   REQUIRES IT      POST /api/items          (listing an item)

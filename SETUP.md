@@ -133,12 +133,12 @@ This turns the empty database into something you can actually click through:
 
 | Email | Password | |
 |---|---|---|
-| `maria@baylo.test` | `BayloDev123!` | 30 Leaves · has a pending offer waiting for an answer |
-| `jun@baylo.test` | `BayloDev123!` | 70 Leaves |
-| `aya@baylo.test` | `BayloDev123!` | 35 Leaves |
-| `carlo@baylo.test` | `BayloDev123!` | 65 Leaves · sent the pending offer |
+| `maria@baylo.test` | `BayloDev123!` | 0 Leaves · has a pending offer waiting for an answer |
+| `jun@baylo.test` | `BayloDev123!` | 40 Leaves |
+| `aya@baylo.test` | `BayloDev123!` | 5 Leaves |
+| `carlo@baylo.test` | `BayloDev123!` | 35 Leaves · sent the pending offer |
 
-All four are verified (so login works and the 50-Leaf signup grant is already
+All four are verified (so login works and the 20-Leaf signup grant is already
 paid) and **grandfathered past ID verification**, so they can post listings
 without submitting a government ID.
 
@@ -265,7 +265,7 @@ powershell -ExecutionPolicy Bypass -File scripts/backup-baylo.ps1 -VerifyOnly pa
 
 ## Pasa Leaves, in one paragraph
 
-Leaves have **no mint**. They enter the system only as a 50-Leaf signup grant at
+Leaves have **no mint**. They enter the system only as a 20-Leaf signup grant at
 email verification and as capped task rewards; between users they move only
 through a settled trade, which writes a matched `TRADE_SPEND` / `TRADE_RECEIVE`
 pair in one transaction. The system-wide invariant is therefore

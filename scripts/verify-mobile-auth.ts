@@ -20,7 +20,7 @@
 //                            separately, per IP. The fourth resend is spent at
 //                            the end of section 5 to prove the 429.
 //   4. verify-email (POST) — the native transport for the emailed token
-//   5. the grant           — exactly 50 Leaves, exactly once, and the
+//   5. the grant           — exactly SIGNUP_GRANT_LEAVES, exactly once, and the
 //                            whole-database ledger invariant either side of it
 //   6. google/token        — reachable, and failing closed on a forged token
 //
@@ -311,8 +311,8 @@ async function main() {
   check("redemption succeeds", verify.status === 200 && verify.json.verified === true, JSON.stringify(verify.json))
   check("it reports this as the call that flipped the flag", verify.json.alreadyVerified === false, JSON.stringify(verify.json))
 
-  // ── 5. Exactly 50 Leaves, exactly once ────────────────────────────────────
-  console.log("\n[5] the grant — exactly 50 Leaves, exactly once")
+  // ── 5. Exactly SIGNUP_GRANT_LEAVES, exactly once ─────────────────────────
+  console.log(`\n[5] the grant — exactly ${SIGNUP_GRANT_LEAVES} Leaves, exactly once`)
 
   const afterUser = await prisma.user.findUniqueOrThrow({
     where: { id: userId },
@@ -350,9 +350,10 @@ async function main() {
   check("lifetimeLeaves moved by the same amount", lifetimeDelta === balanceDelta, `delta=${lifetimeDelta}`)
 
   // What the VERIFY screen displays. `leavesAwarded` is grant + task, not the
-  // grant alone — the 50 is the welcome grant and the rest is VERIFY_ACCOUNT
-  // paid through the ordinary task path. Worth pinning: a client that showed
-  // this number as "your 50-Leaf grant" would be wrong by the task reward.
+  // grant alone — SIGNUP_GRANT_LEAVES is the welcome grant and the rest is
+  // VERIFY_ACCOUNT paid through the ordinary task path. Worth pinning: a client
+  // that showed this number as "your 20-Leaf grant" would be wrong by the task
+  // reward, which is why the clients quote VERIFY_CREDIT_LEAVES instead.
   check(
     `verify-email reported leavesAwarded = ${SIGNUP_GRANT_LEAVES} + ${taskTotal}`,
     verify.json.leavesAwarded === SIGNUP_GRANT_LEAVES + taskTotal,

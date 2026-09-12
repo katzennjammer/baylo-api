@@ -70,7 +70,18 @@ export const NEW_PARTNER_WINDOW_DAYS = 30
 // WEEKLY_TASK_LEAF_CAP — the exemption falls out of it being written as a
 // SIGNUP_GRANT ledger row rather than a TASK_REWARD one, which is what the cap
 // sums. Paid by markVerified(); see @/lib/verification.
-export const SIGNUP_GRANT_LEAVES = 50
+//
+// 50 → 20 on 11 Sep 2026. Note that a verifying user never sees this number on
+// its own: markVerified() pays the grant AND the VERIFY_ACCOUNT task in the
+// same call, so the figure that lands in their balance is
+// VERIFY_CREDIT_LEAVES below (30 today). Copy that names what verifying is
+// worth must quote THAT, not this — see the mailer and the mobile client.
+export const SIGNUP_GRANT_LEAVES = 20
+
+// What a user actually sees credited when they verify: the grant plus the
+// one-time VERIFY_ACCOUNT reward, which markVerified() pays together. Every
+// piece of user-facing copy that promises a number for verifying reads this.
+export const VERIFY_CREDIT_LEAVES = SIGNUP_GRANT_LEAVES + TASK_REWARDS.VERIFY_ACCOUNT
 
 // ── Recognition ranks ────────────────────────────────────────────────────────
 // Ranked on lifetimeLeaves, never on the spendable balance — otherwise a user
