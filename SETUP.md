@@ -214,6 +214,10 @@ lives in the server's memory.
 `scripts/migrate-mysql-to-postgres.ts` is the one-shot data move from the old
 MariaDB database. See [Coming from MySQL](#coming-from-mysql-teammates-read-this).
 
+`scripts/backup-baylo-pg.ps1` backs up the live database and verifies the dump;
+`scripts/pg-backup.ts` is the no-install dumper it falls back to, and also
+restores and rehearses. See [Backups](#backups).
+
 `scripts/backup-baylo.ps1`, `baseline-existing-db.ps1`, `set-premium.ps1` and
 `apply-leaves-migration.ps1` shell out to XAMPP's `mysql.exe` and are **MySQL
 only**. They still work against the fallback database and nothing else.
@@ -376,26 +380,86 @@ live one, so the revert is a matter of moving a `#`.
 
 ### Backups
 
-**There is no verified Postgres backup script yet.** This is the biggest open
-item after the migration and it matters more than usual on this project: the
-Supabase free tier does *not* take automatic backups, and this database has
-been corrupted three times in its life.
+`scripts/backup-baylo-pg.ps1` dumps the Supabase database and then **verifies**
+the dump before calling it a backup. It is the Postgres counterpart of
+`backup-baylo.ps1` and applies the same five checks, for the same reason: on
+26 Aug 2026 a backup reported success and was 991 bytes of nothing.
+
+```bash
+powershell -ExecutionPolicy Bypass -File scripts/backup-baylo-pg.ps1
+powershell -ExecutionPolicy Bypass -File scripts/backup-baylo-pg.ps1 -Keep 14        # prune to the last 14
+powershell -ExecutionPolicy Bypass -File scripts/backup-baylo-pg.ps1 -VerifyOnly D:\BAYLO\backups\baylo-pg-....sql
+```
+
+The checks: the dump tool's real exit code (never through a pipeline), a size
+floor, the completion trailer, a table count, and actual row data. Plus a sixth
+the MySQL script could not make — the dump records its own per-table row counts
+and the ledger invariant, and both are read back and compared against the live
+database, so a file that lost half a table disagrees with itself and is
+rejected. A failed dump is renamed `*.FAILED` and the script exits non-zero.
+
+**This matters more here than it would elsewhere.** The Supabase free tier takes
+**no automatic backups**. A hosted database is not a backed-up database.
 
 `scripts/backup-baylo.ps1` still exists and still works, but it dumps the
 **MySQL fallback**, not the live database.
 
-For Postgres, until a verifying script exists, use `pg_dump` from the
-PostgreSQL client tools (`winget install PostgreSQL.PostgreSQL.17` installs
-them; you do not need to run the server it comes with):
+#### With or without pg_dump
 
-```bash
-pg_dump "$DATABASE_URL" --schema=public --no-owner --no-privileges --format=plain --file="D:\BAYLO\backups\baylo-pg-$(date +%Y%m%d-%H%M%S).sql"
+`pg_dump` is the standard tool and the script prefers it whenever it is on PATH
+(or at `C:\Program Files\PostgreSQL\*\bin`, or passed as `-PgDumpPath`). It is
+a separate install:
+
+```powershell
+winget install -e --id PostgreSQL.PostgreSQL.17
 ```
 
-and check the file the way `backup-baylo.ps1` would: size, a `-- PostgreSQL
-database dump complete` trailer, 25 `CREATE TABLE`, at least one `COPY ... FROM
-stdin`. A backup that has not been verified is a file. Restore with
-`psql "$DATABASE_URL" < file.sql` into an *empty* project.
+That installs a server you do not have to run; the client tools are what you
+want, and they land in `C:\Program Files\PostgreSQL\17\bin`. **Version 17 or
+newer** — an older `pg_dump` refuses to read a 17 server, and the script detects
+that and falls back rather than write a doubtful file.
+
+**You do not need it.** With no PostgreSQL install at all, the script uses
+`scripts/pg-backup.ts`, which speaks to the database through `pg` — already a
+dependency — and writes a plain-SQL **data-only** dump. The trade-off, stated
+plainly:
+
+| | `pg_dump` | `pg-backup.ts` fallback |
+|---|---|---|
+| Install needed | yes | none |
+| Captures schema | yes | no — the schema is `prisma/migrations` |
+| Restore | `psql "$DATABASE_URL" -f file.sql` | `prisma migrate deploy`, then `pg-backup.ts restore file.sql` |
+| Needs this repo to restore | no | **yes** |
+
+The fallback's dependency on the repo is the reason to install `pg_dump`
+eventually. It is not a reason to go unprotected in the meantime.
+
+#### Restoring, and rehearsing it
+
+```bash
+# into a database whose schema is built and whose tables are empty
+npx prisma migrate deploy
+npx tsx --env-file=.env scripts/pg-backup.ts restore D:\BAYLO\backups\baylo-pg-....sql
+```
+
+`restore` refuses a target that already has rows unless you pass `--force`,
+which truncates every table first. The whole restore is one transaction: it
+lands completely or not at all.
+
+**A backup nobody has restored is a hypothesis.** Rehearse one without touching
+anything:
+
+```bash
+npx tsx --env-file=.env scripts/pg-backup.ts drill D:\BAYLO\backups\baylo-pg-....sql
+```
+
+`drill` builds the entire schema from the migrations in a throwaway
+`restore_drill` schema beside `public`, loads the dump into it, compares every
+table against both the file's own trailer and the live database, checks the
+ledger invariant in the restored copy, confirms timestamps came back as the
+same instants, and drops the schema again. `public` is only ever read, no locks
+are taken on it, and it is safe to run while the app is up. Run it after any
+change to the schema or to the dumper.
 
 ---
 
