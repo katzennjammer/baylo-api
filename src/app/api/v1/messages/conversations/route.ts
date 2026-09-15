@@ -45,6 +45,12 @@ export async function GET(req: NextRequest) {
   // column here is camelCase, so each one is double-quoted -- including the
   // aliases, or `lastAt` would come back as `lastat` and ThreadRow would read
   // undefined. `read` is a boolean column: compare to false, not 0.
+  //
+  // The partner is derived ONCE, in the innermost subquery, and everything
+  // above groups and filters on that column. MySQL let the CASE expression be
+  // repeated in SELECT, GROUP BY and the block filter; Postgres requires the
+  // grouped expression to match textually, and since every ${viewerId} is a
+  // separate bound parameter ($1, $2, ...) two copies of the CASE never do.
   const threads = await prisma.$queryRaw<ThreadRow[]>`
     SELECT
       t."partnerId" AS "partnerId",
@@ -67,20 +73,21 @@ export async function GET(req: NextRequest) {
           AND m3."read" = false
       ) AS "unreadCount"
     FROM (
-      SELECT
-        CASE WHEN m."senderId" = ${viewerId} THEN m."receiverId" ELSE m."senderId" END AS "partnerId",
-        MAX(m."createdAt") AS "lastAt"
-      FROM "Message" m
-      WHERE (m."senderId" = ${viewerId} OR m."receiverId" = ${viewerId})
-        AND NOT EXISTS (
-          SELECT 1
-          FROM "Block" b
-          WHERE (
-            (b."blockerId" = ${viewerId} AND b."blockedId" = CASE WHEN m."senderId" = ${viewerId} THEN m."receiverId" ELSE m."senderId" END)
-            OR (b."blockedId" = ${viewerId} AND b."blockerId" = CASE WHEN m."senderId" = ${viewerId} THEN m."receiverId" ELSE m."senderId" END)
-          )
-        )
-      GROUP BY CASE WHEN m."senderId" = ${viewerId} THEN m."receiverId" ELSE m."senderId" END
+      SELECT p."partnerId", MAX(p."createdAt") AS "lastAt"
+      FROM (
+        SELECT
+          CASE WHEN m."senderId" = ${viewerId} THEN m."receiverId" ELSE m."senderId" END AS "partnerId",
+          m."createdAt"
+        FROM "Message" m
+        WHERE m."senderId" = ${viewerId} OR m."receiverId" = ${viewerId}
+      ) p
+      WHERE NOT EXISTS (
+        SELECT 1
+        FROM "Block" b
+        WHERE (b."blockerId" = ${viewerId} AND b."blockedId" = p."partnerId")
+           OR (b."blockedId" = ${viewerId} AND b."blockerId" = p."partnerId")
+      )
+      GROUP BY p."partnerId"
     ) t
     WHERE ${
       cAt && cId
