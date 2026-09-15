@@ -195,6 +195,34 @@ The schema is `prisma/schema.prisma` — 25 models, MariaDB via
 (not `node_modules`), so `npx prisma generate` is required after a fresh clone
 and after any schema change.
 
+### Reverting to MySQL (while the Postgres migration is in progress)
+
+The Postgres work lives on the `postgres-migration` branch. `main` is still
+MySQL and still works against the XAMPP database, which has not been touched.
+Reverting is **three commands, not one line in `.env`** — the Prisma client is
+generated per database engine and `src/generated/prisma` is gitignored, so it
+belongs to whichever branch last ran `generate`:
+
+```bash
+git checkout main
+npx prisma generate
+# then make sure .env has the MySQL line, and restart the dev server:
+#   DATABASE_URL="mysql://root:@127.0.0.1:3306/baylo"
+```
+
+That is the whole revert. Nothing on `main` knows Postgres exists. If the
+running dev server was started on the branch, stop it and start it again —
+a running `next dev` keeps the old generated client in memory.
+
+Going the other way (back onto the branch) is the same shape:
+`git checkout postgres-migration && npx prisma generate`, with the Supabase
+`DATABASE_URL` in `.env`.
+
+If the MySQL database itself is damaged, the most recent verified dump is in
+`D:\BAYLOackups\` (named `baylo-YYYYMMDD-HHMMSS.sql`); restore it with
+`mysql -u root < that-file.sql`. Confirm `scripts/backup-baylo.ps1 -VerifyOnly`
+passes on the file before you restore from it.
+
 ### One baseline migration
 
 `prisma/migrations/` holds exactly one migration,
