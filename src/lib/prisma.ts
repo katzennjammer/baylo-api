@@ -1,19 +1,15 @@
 import { PrismaClient } from "@/generated/prisma/client"
-import { PrismaMariaDb } from "@prisma/adapter-mariadb"
+import { PrismaPg } from "@prisma/adapter-pg"
 
-function parseDbUrl(url: string) {
-  const u = new URL(url)
-  return {
-    host: u.hostname,
-    port: u.port ? parseInt(u.port) : 3306,
-    user: u.username || undefined,
-    password: u.password || undefined,
-    database: u.pathname.slice(1) || undefined,
-  }
-}
-
+// Postgres (Supabase) via the pg driver adapter. Prisma 7's `prisma-client`
+// generator has no built-in engine, so an adapter is required, not optional.
+//
+// The pool is small on purpose. Supabase's session pooler hands each client a
+// real backend for the life of its connection, and the free tier allows few of
+// them; a dev server hot-reloading with a 10-connection default would exhaust
+// that on its own. Five is plenty for one dev server plus one script.
 function createPrismaClient() {
-  const adapter = new PrismaMariaDb(parseDbUrl(process.env.DATABASE_URL!))
+  const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL!, max: 5 })
   return new PrismaClient({ adapter })
 }
 

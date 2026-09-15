@@ -13,26 +13,15 @@
 // Import from the custom generator output path, NOT "@prisma/client"
 // (schema.prisma: output = "../src/generated/prisma")
 import { PrismaClient } from "../src/generated/prisma/client"
-import { PrismaMariaDb } from "@prisma/adapter-mariadb"
+import { PrismaPg } from "@prisma/adapter-pg"
 import sharp from "sharp"
-
-function parseDbUrl(url: string) {
-  const u = new URL(url)
-  return {
-    host:     u.hostname,
-    port:     u.port ? parseInt(u.port) : 3306,
-    user:     u.username || undefined,
-    password: u.password || undefined,
-    database: u.pathname.slice(1) || undefined,
-  }
-}
 
 if (!process.env.DATABASE_URL) {
   console.error("DATABASE_URL is not set. Run with: npx tsx --env-file=.env scripts/rehash-items.ts")
   process.exit(1)
 }
 
-const adapter = new PrismaMariaDb(parseDbUrl(process.env.DATABASE_URL))
+const adapter = new PrismaPg({ connectionString: process.env.DATABASE_URL, max: 2 })
 const prisma  = new PrismaClient({ adapter })
 
 async function computeDHash(buffer: Buffer): Promise<string> {

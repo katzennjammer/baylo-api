@@ -4,8 +4,8 @@
 // that were actually asked for:
 //
 //   - every endpoint returns its whole screen payload in ONE call
-//   - the REAL SQL query count per endpoint, measured against MariaDB's own
-//     Com_select counter rather than counted by eye from the source
+//   - the REAL SQL query count per endpoint, measured against Postgres's own
+//     pg_stat_statements call counter rather than counted by eye from the source
 //   - 401 without auth, 200 with a Bearer token and no cookie
 //   - a non-participant gets coarsened coordinates and a null address
 //   - cursor pagination: page 1, page 2, no duplicates, no gaps
@@ -26,15 +26,22 @@ function check(name: string, cond: boolean, detail = "") {
 }
 
 // ── Query counting ───────────────────────────────────────────────────────────
-// Com_select counts SELECTs server-wide. The harness is the only client, so the
-// delta across one request is that request's SELECT count, minus the cost of
-// the two counter reads themselves — measured rather than assumed.
+// pg_stat_statements counts every statement server-wide, the way MariaDB's
+// Com_select did before the move to Postgres. Supabase ships the extension
+// enabled. The harness is the only client, so the delta across one request is
+// that request's SELECT count, minus the cost of the two counter reads
+// themselves — measured rather than assumed.
+//
+// SUM(calls) over SELECTs only, so the probe's own writes do not count. COUNT
+// comes back as bigint on Postgres; Number() it.
 
 async function comSelect(): Promise<number> {
-  const rows = await prisma.$queryRaw<{ Variable_name: string; Value: string }[]>`
-    SHOW GLOBAL STATUS LIKE 'Com_select'
+  const rows = await prisma.$queryRaw<{ n: bigint | number | null }[]>`
+    SELECT COALESCE(SUM(calls), 0) AS n
+    FROM pg_stat_statements
+    WHERE query ILIKE 'SELECT%'
   `
-  return Number(rows[0]?.Value ?? 0)
+  return Number(rows[0]?.n ?? 0)
 }
 
 let probeOverhead = 0
@@ -153,7 +160,7 @@ async function main() {
 
   // 2. Envelope shape and real query counts.
   console.log("\n2. envelope + REAL query count per endpoint")
-  console.log(`   (Com_select delta, probe overhead ${probeOverhead} calibrated out)`)
+  console.log(`   (pg_stat_statements SELECT-call delta, probe overhead ${probeOverhead} calibrated out)`)
   const counts: Record<string, number> = {}
   for (const r of routes) {
     const m = await measure(r, token)

@@ -188,7 +188,7 @@ export async function GET(req: NextRequest) {
     ...(category ? { category: { in: category } } : {}),
     ...(condition ? { condition } : {}),
     ...leafRange,
-    ...(q ? { OR: [{ title: { contains: q } }, { description: { contains: q } }] } : {}),
+    ...(q ? { OR: [{ title: { contains: q, mode: "insensitive" as const } }, { description: { contains: q, mode: "insensitive" as const } }] } : {}),
     ...(box ?? {}),
   }
 

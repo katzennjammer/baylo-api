@@ -25,7 +25,7 @@ export async function GET(req: NextRequest) {
   const now = new Date()
   const where = {
     ...(q
-      ? { OR: [{ name: { contains: q } }, { email: { contains: q } }] }
+      ? { OR: [{ name: { contains: q, mode: "insensitive" as const } }, { email: { contains: q, mode: "insensitive" as const } }] }
       : {}),
     ...(role ? { role } : {}),
     ...(status === "active"

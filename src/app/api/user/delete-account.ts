@@ -183,7 +183,7 @@ export async function deleteAccount(
     }
     // The counterparty's side of a settled trade names THIS user by name.
     await tx.leafTransaction.updateMany({
-      where: { description: { contains: user.name }, userId: { not: userId } },
+      where: { description: { contains: user.name, mode: "insensitive" as const }, userId: { not: userId } },
       data: { description: "Leaves moved in a completed trade" },
     })
 

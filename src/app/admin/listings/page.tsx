@@ -35,7 +35,7 @@ export default async function ListingsPage({ searchParams }: Props) {
   const listings = await prisma.item.findMany({
     where: {
       AND: [
-        ...(q ? [{ OR: [{ title: { contains: q } }, { user: { name: { contains: q } } }, { user: { email: { contains: q } } }] }] : []),
+        ...(q ? [{ OR: [{ title: { contains: q, mode: "insensitive" as const } }, { user: { name: { contains: q, mode: "insensitive" as const } } }, { user: { email: { contains: q, mode: "insensitive" as const } } }] }] : []),
         ...(status === "hidden"
           ? [{ moderationHiddenAt: { not: null } }]
           : status

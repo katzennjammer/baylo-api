@@ -83,7 +83,7 @@
 import "dotenv/config"
 
 import { PrismaClient } from "../src/generated/prisma/client"
-import { PrismaMariaDb } from "@prisma/adapter-mariadb"
+import { PrismaPg } from "@prisma/adapter-pg"
 import bcrypt from "bcryptjs"
 import { SAFE_ZONE_HUB_SEED } from "../scripts/safezone-hub-data"
 
@@ -96,17 +96,6 @@ import { SAFE_ZONE_HUB_SEED } from "../scripts/safezone-hub-data"
 // has to exit. Same adapter, same URL, explicit lifetime.
 // ─────────────────────────────────────────────────────────────────────────────
 
-function parseDbUrl(url: string) {
-  const u = new URL(url)
-  return {
-    host: u.hostname,
-    port: u.port ? parseInt(u.port) : 3306,
-    user: u.username || undefined,
-    password: u.password || undefined,
-    database: u.pathname.slice(1) || undefined,
-  }
-}
-
 if (!process.env.DATABASE_URL) {
   console.error(
     "\n  DATABASE_URL is not set.\n" +
@@ -116,7 +105,7 @@ if (!process.env.DATABASE_URL) {
 }
 
 const prisma = new PrismaClient({
-  adapter: new PrismaMariaDb(parseDbUrl(process.env.DATABASE_URL)),
+  adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL, max: 2 }),
 })
 
 // ─────────────────────────────────────────────────────────────────────────────

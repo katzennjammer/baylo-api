@@ -70,7 +70,7 @@ export async function GET(req: NextRequest) {
         status: "AVAILABLE",
         ...visibleItemWhere(viewerId),
         ...(categoryFilter?.success ? { category: categoryFilter.data } : {}),
-        ...(q ? { OR: [{ title: { contains: q } }, { description: { contains: q } }] } : {}),
+        ...(q ? { OR: [{ title: { contains: q, mode: "insensitive" as const } }, { description: { contains: q, mode: "insensitive" as const } }] } : {}),
       },
       select: { ...ITEM_PUBLIC_SELECT, user: { select: ITEM_PUBLIC_USER_SELECT } },
       orderBy: { createdAt: "desc" },

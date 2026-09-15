@@ -41,49 +41,53 @@ export async function GET(req: NextRequest) {
   const cAt = cursorDate(cursor)
   const cId = cursor?.id ?? null
 
+  // Postgres folds unquoted identifiers to lower case, and every table and
+  // column here is camelCase, so each one is double-quoted -- including the
+  // aliases, or `lastAt` would come back as `lastat` and ThreadRow would read
+  // undefined. `read` is a boolean column: compare to false, not 0.
   const threads = await prisma.$queryRaw<ThreadRow[]>`
     SELECT
-      t.partnerId AS partnerId,
-      t.lastAt AS lastAt,
+      t."partnerId" AS "partnerId",
+      t."lastAt" AS "lastAt",
       (
-        SELECT m2.id
-        FROM Message m2
+        SELECT m2."id"
+        FROM "Message" m2
         WHERE (
-          (m2.senderId = ${viewerId} AND m2.receiverId = t.partnerId)
-          OR (m2.receiverId = ${viewerId} AND m2.senderId = t.partnerId)
+          (m2."senderId" = ${viewerId} AND m2."receiverId" = t."partnerId")
+          OR (m2."receiverId" = ${viewerId} AND m2."senderId" = t."partnerId")
         )
-        ORDER BY m2.createdAt DESC, m2.id DESC
+        ORDER BY m2."createdAt" DESC, m2."id" DESC
         LIMIT 1
-      ) AS lastMessageId,
+      ) AS "lastMessageId",
       (
         SELECT COUNT(*)
-        FROM Message m3
-        WHERE m3.receiverId = ${viewerId}
-          AND m3.senderId = t.partnerId
-          AND m3.read = 0
-      ) AS unreadCount
+        FROM "Message" m3
+        WHERE m3."receiverId" = ${viewerId}
+          AND m3."senderId" = t."partnerId"
+          AND m3."read" = false
+      ) AS "unreadCount"
     FROM (
       SELECT
-        CASE WHEN m.senderId = ${viewerId} THEN m.receiverId ELSE m.senderId END AS partnerId,
-        MAX(m.createdAt) AS lastAt
-      FROM Message m
-      WHERE (m.senderId = ${viewerId} OR m.receiverId = ${viewerId})
+        CASE WHEN m."senderId" = ${viewerId} THEN m."receiverId" ELSE m."senderId" END AS "partnerId",
+        MAX(m."createdAt") AS "lastAt"
+      FROM "Message" m
+      WHERE (m."senderId" = ${viewerId} OR m."receiverId" = ${viewerId})
         AND NOT EXISTS (
           SELECT 1
-          FROM Block b
+          FROM "Block" b
           WHERE (
-            (b.blockerId = ${viewerId} AND b.blockedId = CASE WHEN m.senderId = ${viewerId} THEN m.receiverId ELSE m.senderId END)
-            OR (b.blockedId = ${viewerId} AND b.blockerId = CASE WHEN m.senderId = ${viewerId} THEN m.receiverId ELSE m.senderId END)
+            (b."blockerId" = ${viewerId} AND b."blockedId" = CASE WHEN m."senderId" = ${viewerId} THEN m."receiverId" ELSE m."senderId" END)
+            OR (b."blockedId" = ${viewerId} AND b."blockerId" = CASE WHEN m."senderId" = ${viewerId} THEN m."receiverId" ELSE m."senderId" END)
           )
         )
-      GROUP BY CASE WHEN m.senderId = ${viewerId} THEN m.receiverId ELSE m.senderId END
+      GROUP BY CASE WHEN m."senderId" = ${viewerId} THEN m."receiverId" ELSE m."senderId" END
     ) t
     WHERE ${
       cAt && cId
-        ? Prisma.sql`(t.lastAt < ${cAt} OR (t.lastAt = ${cAt} AND t.partnerId < ${cId}))`
+        ? Prisma.sql`(t."lastAt" < ${cAt} OR (t."lastAt" = ${cAt} AND t."partnerId" < ${cId}))`
         : Prisma.sql`1 = 1`
     }
-    ORDER BY t.lastAt DESC, t.partnerId DESC
+    ORDER BY t."lastAt" DESC, t."partnerId" DESC
     LIMIT ${limit + 1}
   `
 

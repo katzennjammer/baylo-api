@@ -266,27 +266,28 @@ async function main() {
   // The requirement is that the exclusion happens in SQL, so print the SQL.
   // Prisma compiles the relation filter into NOT EXISTS subqueries; EXPLAIN
   // over the equivalent statement shows the same shape the ORM emits.
+  // Postgres: identifiers are quoted (unquoted names fold to lower case) and
+  // placeholders are positional ($1, $2) rather than `?`.
   console.log("\n  The feed query's block filter, as SQL:")
   const explain = await prisma.$queryRawUnsafe<Record<string, unknown>[]>(
-    `EXPLAIN SELECT i.id, i.title FROM Item i
-       WHERE i.status = 'AVAILABLE'
-         AND i.moderationHiddenAt IS NULL
-         AND NOT EXISTS (SELECT 1 FROM Block b WHERE b.blockerId = i.userId AND b.blockedId = ?)
-         AND NOT EXISTS (SELECT 1 FROM Block b WHERE b.blockedId = i.userId AND b.blockerId = ?)`,
+    `EXPLAIN SELECT i."id", i."title" FROM "Item" i
+       WHERE i."status" = 'AVAILABLE'
+         AND i."moderationHiddenAt" IS NULL
+         AND NOT EXISTS (SELECT 1 FROM "Block" b WHERE b."blockerId" = i."userId" AND b."blockedId" = $1)
+         AND NOT EXISTS (SELECT 1 FROM "Block" b WHERE b."blockedId" = i."userId" AND b."blockerId" = $2)`,
     alice.id, alice.id,
   )
   for (const row of explain) {
-    // EXPLAIN returns BigInt columns (rows, filtered), which JSON.stringify
-    // refuses outright rather than coercing.
-    console.log(`    ${JSON.stringify(row, (_k, v) => (typeof v === "bigint" ? Number(v) : v))}`)
+    // Postgres EXPLAIN is one text column, "QUERY PLAN", per plan line.
+    console.log(`    ${String(row["QUERY PLAN"] ?? JSON.stringify(row))}`)
   }
   const excluded = await prisma.$queryRawUnsafe<{ id: string }[]>(
-    `SELECT i.id FROM Item i
-       WHERE i.status = 'AVAILABLE'
-         AND i.moderationHiddenAt IS NULL
-         AND NOT EXISTS (SELECT 1 FROM Block b WHERE b.blockerId = i.userId AND b.blockedId = ?)
-         AND NOT EXISTS (SELECT 1 FROM Block b WHERE b.blockedId = i.userId AND b.blockerId = ?)
-         AND i.id = ?`,
+    `SELECT i."id" FROM "Item" i
+       WHERE i."status" = 'AVAILABLE'
+         AND i."moderationHiddenAt" IS NULL
+         AND NOT EXISTS (SELECT 1 FROM "Block" b WHERE b."blockerId" = i."userId" AND b."blockedId" = $1)
+         AND NOT EXISTS (SELECT 1 FROM "Block" b WHERE b."blockedId" = i."userId" AND b."blockerId" = $2)
+         AND i."id" = $3`,
     alice.id, alice.id, malloryItem.id,
   )
   check("the SQL itself returns zero rows for the blocked listing", excluded.length === 0)
