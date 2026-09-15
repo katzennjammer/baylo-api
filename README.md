@@ -79,7 +79,7 @@ This is deliberate. A language model gives a different answer to the same questi
 └─────────────────────┘         └──────────┬───────────┘
                                            │
                                     ┌──────▼──────┐
-                                    │   MySQL     │
+                                    │  Postgres   │
                                     │   Prisma    │
                                     └─────────────┘
 ```
@@ -89,7 +89,7 @@ This is deliberate. A language model gives a different answer to the same questi
 | [`baylo-app`](https://github.com/katzennjammer/baylo-app) | The Expo mobile client — everything users see |
 | [`baylo-api`](https://github.com/katzennjammer/baylo-api) | Next.js API and the web-based admin side |
 
-**Stack** — Expo SDK 57, expo-router, NativeWind, TanStack Query · Next.js 16, Prisma 7.8, MySQL · Cloudinary, Pusher, Claude API, OpenStreetMap
+**Stack** — Expo SDK 57, expo-router, NativeWind, TanStack Query · Next.js 16, Prisma 7.8, Postgres (Supabase) · Cloudinary, Pusher, Claude API, OpenStreetMap
 
 ---
 

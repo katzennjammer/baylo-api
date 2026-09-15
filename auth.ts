@@ -76,14 +76,19 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
   callbacks: {
     async signIn({ user, account }) {
       if (account?.provider === "google") {
-        const existing = await prisma.user.findUnique({ where: { email: user.email! } })
+        // Lowercased, like every other path that touches User.email. On MySQL
+        // the case-insensitive collation hid a missing normalisation here; on
+        // Postgres the unique index is case-sensitive and a capitalised Google
+        // address would have created a second account.
+        const email = user.email!.trim().toLowerCase()
+        const existing = await prisma.user.findUnique({ where: { email } })
         if (existing) {
           user.id = existing.id
         } else {
           const created = await prisma.user.create({
             data: {
               name: user.name ?? "Baylo User",
-              email: user.email!,
+              email,
               avatar: user.image,
             },
           })

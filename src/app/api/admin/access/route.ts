@@ -20,7 +20,7 @@ export async function GET(req: NextRequest) {
   if (!parsed.ok) return parsed.response
   const users = await prisma.user.findMany({
     where: parsed.data.q
-      ? { OR: [{ name: { contains: parsed.data.q } }, { email: { contains: parsed.data.q } }] }
+      ? { OR: [{ name: { contains: parsed.data.q, mode: "insensitive" as const } }, { email: { contains: parsed.data.q, mode: "insensitive" as const } }] }
       : undefined,
     select: { id: true, name: true, email: true, role: true, deletedAt: true },
     orderBy: { createdAt: "desc" },

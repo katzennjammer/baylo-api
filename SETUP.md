@@ -10,6 +10,10 @@ and talks to this server over `/api/v1` with a Bearer token. It needs this
 server running first. If you are setting up both, do this one first and then
 follow [`../baylo-mobile/README.md`](../baylo-mobile/README.md).
 
+> **The database is Postgres on Supabase since 2026-09-15.** It was MariaDB
+> under XAMPP before that. If you have a working MySQL checkout, read
+> [Coming from MySQL](#coming-from-mysql-teammates-read-this) before you pull.
+
 ---
 
 ## Setup
@@ -23,17 +27,10 @@ minutes, most of it `npm install`.
 |---|---|---|
 | **Node.js** | 20.9+ (22 LTS recommended) | `node --version`. Next 16 and the `tsx` seed runner both need ≥20.9. |
 | **npm** | 10+ | Ships with Node. |
-| **MariaDB or MySQL** | MariaDB 10.4+ / MySQL 8+ | Any install works. On Windows, [XAMPP](https://www.apachefriends.org/) is the path of least resistance and is what this project is developed against. |
+| **A Supabase project** | Postgres 17 | Free tier is enough. See step 4. Nothing to install locally — the database is hosted. |
 | **Git** | any | |
 
-Start MariaDB before going further. With XAMPP that is the **Start** button next
-to MySQL in the XAMPP Control Panel.
-
-> **If you use XAMPP, never stop MariaDB by killing the process or closing the
-> console window.** Use the Control Panel's Stop button and let it shut down.
-> An unclean shutdown corrupts the Aria system tables and the server then
-> refuses to start — it has happened to this project more than once and costs
-> an hour each time.
+No MariaDB, no XAMPP. There is no local database server to start.
 
 ### 2. Install
 
@@ -58,7 +55,7 @@ Which values are yours and which come from the project owner:
 
 | Variable | Where it comes from |
 |---|---|
-| `DATABASE_URL` | **Yours.** Your own local database. Nobody can give you this — see step 4. |
+| `DATABASE_URL` | **Yours.** Your own Supabase project — see step 4. Do not ask for the owner's; it is their live data. |
 | `AUTH_SECRET` | **Yours.** Generate it: `openssl rand -base64 32`. Never share one. |
 | `NEXTAUTH_URL` | **Yours.** Leave the default for local work. |
 | `CLOUDINARY_*` | **Ask the project owner** — or sign up free at cloudinary.com and use your own. |
@@ -78,22 +75,31 @@ real email, use your own Gmail app password.
 
 ### 4. Create the database
 
-Prisma creates *tables*, not the schema itself, so the database has to exist
-first. XAMPP on Windows:
+Make a Supabase project at <https://supabase.com/dashboard>:
 
-```bash
-"D:\Xampp\mysql\bin\mysql.exe" -u root -e "CREATE DATABASE baylo"
-```
+- **Region: Singapore (`ap-southeast-1`).** Closest to the Philippines; every
+  query pays the round trip, and from Manila that is ~40 ms to Singapore and
+  ~200 ms to anywhere in the US.
+- **Database password:** pick a strong one and save it. It is shown once.
+- Postgres 17, the default. Leave everything else alone.
 
-Anywhere else:
+Then *Connect → ORMs → Prisma* and copy the **Session pooler** string — the one
+on port **5432** at `aws-0-ap-southeast-1.pooler.supabase.com` with user
+`postgres.<project-ref>`. Paste it as `DATABASE_URL` in `.env`.
 
-```bash
-mysql -u root -p -e "CREATE DATABASE baylo"
-```
+Why that one and not the other two on that page:
 
-Then make sure `DATABASE_URL` in `.env` matches the name, user and password you
-just used. A default XAMPP install is user `root` with **no** password, which is
-the empty gap in `mysql://root:@127.0.0.1:3306/baylo`.
+- **Direct connection** (`db.<ref>.supabase.co:5432`) is **IPv6-only** on the
+  free tier. A typical home connection in the Philippines cannot reach it, and
+  the failure is a silent hang, not an error.
+- **Transaction pooler** (port **6543**) is for serverless deployments. It does
+  not support everything Prisma migrations need. Do not use it for
+  `migrate deploy`.
+- **Session pooler** (port **5432** on the `pooler.` host) works over IPv4 and
+  supports everything. Use it for the app *and* for migrations.
+
+The `public` schema of a new project is empty. Prisma builds the tables in the
+next step; there is no `CREATE DATABASE` to run.
 
 ### 5. Generate the client and create the tables
 
@@ -102,13 +108,15 @@ npx prisma generate      # writes the typed client to src/generated/prisma
 npx prisma migrate deploy
 ```
 
-`migrate deploy` applies one migration, `20260906000000_baseline`, which builds
-all 25 tables. It should finish in a couple of seconds and print
+`migrate deploy` applies one migration, `20260915000000_postgres_baseline`,
+which builds all 25 tables, 20 enum types, 55 indexes and 48 foreign keys. It
+should finish in a few seconds and print
 `All migrations have been successfully applied.`
 
-> **Use `migrate deploy`, not `migrate dev`.** `migrate dev` is for authoring new
-> migrations and will offer to reset the database if it thinks anything drifted.
-> You never need it to set up.
+> **Use `migrate deploy`, not `migrate dev`.** `migrate dev` needs a shadow
+> database it can `CREATE`, and the Supabase role cannot, so it fails. It is
+> never needed to set up, and [authoring a migration](#adding-a-migration-from-here)
+> is done differently here.
 
 ### 6. Seed
 
@@ -126,7 +134,7 @@ This turns the empty database into something you can actually click through:
   offers    1 pending
   ledger    8 Leaf transactions
 
-  leaf invariant OK   SUM(User.leaves) = 200 = SUM(LeafTransaction.amount) = 200
+  leaf invariant OK   SUM(User.leaves) = 80 = SUM(LeafTransaction.amount) = 80
 ```
 
 **Log in as any of these. The password is the same for all four:**
@@ -157,6 +165,11 @@ Open <http://localhost:3000> and sign in as `maria@baylo.test`. You should see
 the four available listings in the feed, and one pending offer on the rattan
 armchair.
 
+Every request now crosses the internet to Singapore. Expect ~1 s per API call
+in dev on a home connection, where MySQL on localhost took ~50 ms. That is the
+network, not the queries — the acceptance harness counts them and they did not
+change.
+
 Use `npm run dev:lan` instead if a phone or emulator needs to reach this server
 — it binds `0.0.0.0` rather than loopback. See
 [`../baylo-mobile`](../baylo-mobile).
@@ -181,85 +194,278 @@ npm run seed       # (re)seed the development data — idempotent
 npx tsx --env-file=.env scripts/verify-token-auth.ts
 ```
 
+**They create and delete rows.** Run them against your own Supabase project,
+never against the owner's. Most need a dev server running on `:3100`
+(`ACCEPT_BASE` overrides it); the two that register accounts
+(`verify-email-verification`, `verify-mobile-auth`) need a *fresh* dev server
+each, because registration is limited to 3 per hour per client and the limiter
+lives in the server's memory.
+
 > Most `verify-*.ts` failures on a fresh setup are environmental rather than
-> real regressions — usually the register rate limit, a missing SMTP sink, or
-> leaked database connections from an earlier run. Check those before chasing a
-> failure.
+> real regressions — usually the register rate limit, a missing SMTP sink, or a
+> harness process from an earlier run still holding port 2525 and its log file.
+> Check those before chasing a failure. Two failures are **known and
+> deliberate** on a seeded database and documented in the scripts themselves:
+> `verify-valuation` section 4 (assumes the band path; the seed provides
+> comparables) and `verify-moderation`'s "no API route writes `User.role`"
+> (tripped by the admin role-management route; pending a decision on which rule
+> wins).
+
+`scripts/migrate-mysql-to-postgres.ts` is the one-shot data move from the old
+MariaDB database. See [Coming from MySQL](#coming-from-mysql-teammates-read-this).
+
+`scripts/backup-baylo-pg.ps1` backs up the live database and verifies the dump;
+`scripts/pg-backup.ts` is the no-install dumper it falls back to, and also
+restores and rehearses. See [Backups](#backups).
+
+`scripts/backup-baylo.ps1`, `baseline-existing-db.ps1`, `set-premium.ps1` and
+`apply-leaves-migration.ps1` shell out to XAMPP's `mysql.exe` and are **MySQL
+only**. They still work against the fallback database and nothing else.
 
 ---
 
 ## Database and migrations
 
-The schema is `prisma/schema.prisma` — 25 models, MariaDB via
-`@prisma/adapter-mariadb`. The generated client goes to `src/generated/prisma`
+The schema is `prisma/schema.prisma` — 25 models, **Postgres via
+`@prisma/adapter-pg`**. The generated client goes to `src/generated/prisma`
 (not `node_modules`), so `npx prisma generate` is required after a fresh clone
 and after any schema change.
+
+A running `next dev` holds the client it started with. After `prisma generate`,
+restart it before concluding a route is broken.
 
 ### One baseline migration
 
 `prisma/migrations/` holds exactly one migration,
-`20260906000000_baseline`, containing the whole schema.
+`20260915000000_postgres_baseline`, containing the whole schema. The header of
+that file says why it exists and what is deliberately different from the MySQL
+schema (25 extra indexes — InnoDB created one on every foreign-key column
+implicitly, Postgres does not, so they are declared in the schema).
 
-It was squashed on 2026-09-06 because the previous 19-migration chain **could
-not build a database from empty.** `init` created six tables; the next migration
-altered `User.points`, `Offer` and `WalletTransaction`, none of which any
-migration ever created — nine of the 25 tables had only ever reached a database
-through `prisma db push`. So `migrate deploy` on a fresh clone always died on
-the second migration. The chain also carried one-off data repairs pinned to row
-ids from one laptop.
+Two earlier chains are archived and read by nothing:
 
-The pre-squash chain is in git history and archived at
-`prisma/migrations-archive-pre-baseline/`. Nothing reads it; it is kept so the
-reasoning in those files is not lost.
+- `prisma/migrations-archive-mysql/` — the MySQL chain this replaced
+  (`20260906000000_baseline` + 10), preserved because their comments carry the
+  reasoning behind several schema decisions.
+- `prisma/migrations-archive-pre-baseline/` — the 19-migration chain squashed
+  on 2026-09-06, which could not build a database from empty.
 
 ### Adding a migration from here
 
-Normal Prisma workflow. Edit `prisma/schema.prisma`, then:
+**Not `prisma migrate dev`.** It needs a shadow database it can create, and the
+Supabase role cannot. Author the SQL from the diff, read it, save it, deploy it:
 
 ```bash
-npx prisma migrate dev --name what_you_did
+# 1. edit prisma/schema.prisma
+# 2. generate the SQL for the difference between the live database and the schema
+npx prisma migrate diff --from-url "$DATABASE_URL" --to-schema prisma/schema.prisma --script
+# 3. read it. Save it as prisma/migrations/<YYYYMMDDHHMMSS>_<what_you_did>/migration.sql
+# 4. apply it, regenerate, restart the dev server
+npx prisma migrate deploy
+npx prisma generate
 ```
 
-New migrations stack on top of the baseline as usual. Do not edit the baseline.
+Enum additions become `ALTER TYPE ... ADD VALUE`, which Postgres 17 runs fine
+inside Prisma's migration transaction. Do not edit the baseline.
 
-### If you already had a database before the squash
+### Coming from MySQL (teammates, read this)
 
-A database created after the squash needs nothing. A database that predates it
-is already past every migration in the old chain, and `prisma migrate status`
-will fail with a 20-line list of migrations that are applied but no longer on
-disk. Fix it with:
+If you have a working checkout against XAMPP/MariaDB, this is what happens when
+you pull, in the order it happens:
+
+1. **`npm install`.** The pull adds `@prisma/adapter-pg` and `pg`. Without
+   this, the server dies on boot with `Cannot find module '@prisma/adapter-pg'`.
+2. **`npx prisma generate`.** The client is generated per engine. Without this
+   you have a MySQL client under a Postgres schema, and every query fails in
+   ways that look like bugs in the code.
+3. **A Supabase `DATABASE_URL`** — your own project, step 4 above. If you leave
+   the `mysql://` one in place:
+   - `prisma migrate deploy` stops with
+     `Error: P1013 ... must start with the protocol postgresql:// or postgres://`.
+   - The app connects to your MariaDB with the Postgres wire protocol and every
+     query fails with `received invalid response: 59`. That message is the
+     MariaDB handshake being misread. It is not a code bug.
+4. **`npx prisma migrate deploy`**, then **`npm run seed`** (or the data move
+   below). Then restart the dev server.
+
+**Your local MySQL data is not touched by any of this.** Nothing on this branch
+knows MariaDB exists. It just stops being read. If you want it on Postgres —
+listings you made, accounts you tested with — move it once:
 
 ```bash
-powershell -ExecutionPolicy Bypass -File scripts/baseline-existing-db.ps1 -DryRun   # look first
-powershell -ExecutionPolicy Bypass -File scripts/baseline-existing-db.ps1
+# reads MySQL with SELECT only, inside a consistent snapshot; writes nothing there.
+# Target must be empty (skip the seed first, or pass --truncate to empty it).
+MYSQL_URL="mysql://root:@127.0.0.1:3306/baylo" npx tsx --env-file=.env scripts/migrate-mysql-to-postgres.ts
 ```
 
-That takes a verified backup, replaces the superseded `_prisma_migrations` rows
-with a single row naming the baseline, and confirms `migrate status` is happy.
-It touches **only** Prisma's own bookkeeping table: `migrate resolve --applied`
-records a migration as applied precisely so that its SQL does *not* run, so no
-DDL executes and no data table is read or written. It is safe to run twice.
+It copies all 25 tables in foreign-key order, then verifies: per-table row
+counts against MySQL, every foreign key for orphans, and
+`SUM(User.leaves) == SUM(LeafTransaction.amount)` on both sides. It exits
+non-zero if any disagree. `DATETIME` values travel as the literal stored text,
+so the UTC instants Prisma wrote are the instants Prisma reads back — it was
+checked value by value on the real data (509 timestamps, 0 mismatches).
 
-The same thing by hand, if you would rather see each step:
+**What is at risk in your local work:**
+
+- **Uncommitted edits to these files will conflict**, because the migration
+  touched them (one `mode: "insensitive"` per search filter, nothing else):
+  `src/app/api/admin/users/route.ts`, `src/app/api/admin/access/route.ts`,
+  `src/app/api/admin/listings/route.ts`, `src/app/admin/users/page.tsx`,
+  `src/app/admin/listings/page.tsx`. Resolve by keeping both.
+- **A migration you authored against MySQL and have not pushed** cannot be
+  applied. `prisma/migrations/` is Postgres-only now (`migration_lock.toml`
+  names one provider). Re-author it with `migrate diff` as above; the SQL will
+  differ (`"quoted"` identifiers, `ALTER TYPE` for enums).
+- **Raw SQL you wrote** (`$queryRaw`, `$executeRaw`) needs `"double-quoted"`
+  identifiers — Postgres folds unquoted `camelCase` names to lower case — and
+  positional `$1` placeholders instead of `?`. Every existing raw query was
+  ported; see `src/app/api/v1/messages/conversations/route.ts` for the shape.
+- **`contains` filters are case-sensitive on Postgres.** MySQL's collation hid
+  that. Add `mode: "insensitive" as const` to any new search filter.
+- **A caught unique-violation inside a `$transaction` aborts the whole
+  transaction on Postgres.** MySQL rolled back only the statement. Use
+  `createMany({ skipDuplicates: true })` and branch on `count`, as
+  `src/lib/tasks.ts` now does, rather than `create` + catch `P2002`.
+
+Nothing else in the application code changed for the engine. Your components,
+routes and libraries are as you left them.
+
+### Reverting to MySQL
+
+**Three commands, not one line in `.env`, and here is why it is not one line.**
+The Prisma client is generated per database engine — `datasource.provider` is
+baked into `src/generated/prisma`, which is gitignored and so belongs to
+whichever branch last ran `generate`. Changing `DATABASE_URL` alone leaves a
+Postgres client talking to MariaDB, which fails with the
+`received invalid response: 59` above.
 
 ```bash
-powershell -ExecutionPolicy Bypass -File scripts/backup-baylo.ps1
-mysql -u root -D baylo -e "DELETE FROM _prisma_migrations WHERE migration_name <> '20260906000000_baseline'"
-npx prisma migrate resolve --applied 20260906000000_baseline
-npx prisma migrate status   # → up to date
+git checkout mysql-fallback  # the last MySQL commit: adapter-mariadb, mysql provider, the MySQL migration chain
+npx prisma generate          # regenerate the client for that provider
+# .env: comment the postgresql:// line, uncomment the mysql:// line above it. Then restart the dev server.
 ```
+
+`mysql-fallback` is a branch kept at the commit `main` pointed to before the
+Postgres migration was merged, and `mysql-final-20260915` is an annotated tag on
+the same commit. **`main` is Postgres now** — checking it out will not get you
+back. Neither the branch nor the tag is deleted until the revert window closes.
+
+The XAMPP database was never written to during the migration and has not been
+dropped. Its last verified dump is `D:\BAYLO\backups\baylo-20260915-190207.sql`
+(193.7 KB, 26 tables, 23 INSERTs, all five checks passed). If the database
+itself is damaged, `scripts/backup-baylo.ps1 -VerifyOnly <file>` first, then
+`mysql -u root < <file>`.
+
+Going back onto Postgres is the same shape in reverse:
+`git checkout main && npx prisma generate`, swap the `.env` lines, restart.
+
+**Anything written to Supabase after the switch is not in MySQL.** The revert
+returns the app to the data as it was on 2026-09-15 at 19:02. That is the
+whole cost of reverting, and it grows every day.
+
+### Closing the revert window
+
+The fallback is worth keeping until the defense is over and the Postgres
+database has carried real use for a while. After that, a dead connection
+string and an unused driver stop being safety and start being the thing the
+next person trips over. When you decide the window is closed, in one commit:
+
+- delete the commented `mysql://` line from `.env` (and any `.env.bak-*`
+  copies in the repo root);
+- `npm uninstall @prisma/adapter-mariadb mariadb`;
+- delete the MySQL-only scripts (`backup-baylo.ps1`, `baseline-existing-db.ps1`,
+  `apply-leaves-migration.ps1`, `set-premium.ps1`) or rewrite `set-premium`
+  for Postgres if it is still used;
+- delete the `mysql-fallback` branch (the `mysql-final-20260915` tag is enough
+  to find the commit again, and costs nothing);
+- leave `migrate-mysql-to-postgres.ts` and `prisma/migrations-archive-mysql/`
+  — they are history, and they do nothing unless run.
+
+Until then, the `mysql://` line stays commented in `.env`, directly above the
+live one, so the revert is a matter of moving a `#`.
 
 ### Backups
 
-`scripts/backup-baylo.ps1` dumps the database and then **verifies** the dump
-before calling it a backup — exit code, size floor, the `Dump completed`
-trailer, a table count and at least one `INSERT`. It exists because a backup
-once reported success and was 991 bytes of nothing.
+`scripts/backup-baylo-pg.ps1` dumps the Supabase database and then **verifies**
+the dump before calling it a backup. It is the Postgres counterpart of
+`backup-baylo.ps1` and applies the same five checks, for the same reason: on
+26 Aug 2026 a backup reported success and was 991 bytes of nothing.
 
 ```bash
-powershell -ExecutionPolicy Bypass -File scripts/backup-baylo.ps1
-powershell -ExecutionPolicy Bypass -File scripts/backup-baylo.ps1 -VerifyOnly path\to\dump.sql
+powershell -ExecutionPolicy Bypass -File scripts/backup-baylo-pg.ps1
+powershell -ExecutionPolicy Bypass -File scripts/backup-baylo-pg.ps1 -Keep 14        # prune to the last 14
+powershell -ExecutionPolicy Bypass -File scripts/backup-baylo-pg.ps1 -VerifyOnly D:\BAYLO\backups\baylo-pg-....sql
 ```
+
+The checks: the dump tool's real exit code (never through a pipeline), a size
+floor, the completion trailer, a table count, and actual row data. Plus a sixth
+the MySQL script could not make — the dump records its own per-table row counts
+and the ledger invariant, and both are read back and compared against the live
+database, so a file that lost half a table disagrees with itself and is
+rejected. A failed dump is renamed `*.FAILED` and the script exits non-zero.
+
+**This matters more here than it would elsewhere.** The Supabase free tier takes
+**no automatic backups**. A hosted database is not a backed-up database.
+
+`scripts/backup-baylo.ps1` still exists and still works, but it dumps the
+**MySQL fallback**, not the live database.
+
+#### With or without pg_dump
+
+`pg_dump` is the standard tool and the script prefers it whenever it is on PATH
+(or at `C:\Program Files\PostgreSQL\*\bin`, or passed as `-PgDumpPath`). It is
+a separate install:
+
+```powershell
+winget install -e --id PostgreSQL.PostgreSQL.17
+```
+
+That installs a server you do not have to run; the client tools are what you
+want, and they land in `C:\Program Files\PostgreSQL\17\bin`. **Version 17 or
+newer** — an older `pg_dump` refuses to read a 17 server, and the script detects
+that and falls back rather than write a doubtful file.
+
+**You do not need it.** With no PostgreSQL install at all, the script uses
+`scripts/pg-backup.ts`, which speaks to the database through `pg` — already a
+dependency — and writes a plain-SQL **data-only** dump. The trade-off, stated
+plainly:
+
+| | `pg_dump` | `pg-backup.ts` fallback |
+|---|---|---|
+| Install needed | yes | none |
+| Captures schema | yes | no — the schema is `prisma/migrations` |
+| Restore | `psql "$DATABASE_URL" -f file.sql` | `prisma migrate deploy`, then `pg-backup.ts restore file.sql` |
+| Needs this repo to restore | no | **yes** |
+
+The fallback's dependency on the repo is the reason to install `pg_dump`
+eventually. It is not a reason to go unprotected in the meantime.
+
+#### Restoring, and rehearsing it
+
+```bash
+# into a database whose schema is built and whose tables are empty
+npx prisma migrate deploy
+npx tsx --env-file=.env scripts/pg-backup.ts restore D:\BAYLO\backups\baylo-pg-....sql
+```
+
+`restore` refuses a target that already has rows unless you pass `--force`,
+which truncates every table first. The whole restore is one transaction: it
+lands completely or not at all.
+
+**A backup nobody has restored is a hypothesis.** Rehearse one without touching
+anything:
+
+```bash
+npx tsx --env-file=.env scripts/pg-backup.ts drill D:\BAYLO\backups\baylo-pg-....sql
+```
+
+`drill` builds the entire schema from the migrations in a throwaway
+`restore_drill` schema beside `public`, loads the dump into it, compares every
+table against both the file's own trailer and the live database, checks the
+ledger invariant in the restored copy, confirms timestamps came back as the
+same instants, and drops the schema again. `public` is only ever read, no locks
+are taken on it, and it is safe to run while the app is up. Run it after any
+change to the schema or to the dumper.
 
 ---
 
@@ -282,22 +488,23 @@ receiving Leaves in a trade deliberately does not move it.
 
 ```
 prisma/
-  schema.prisma                       25 models
-  migrations/20260906000000_baseline  the whole schema, one file
-  migrations-archive-pre-baseline/    the squashed chain, for reference only
-  seed.ts                             npm run seed
+  schema.prisma                                25 models
+  migrations/20260915000000_postgres_baseline  the whole schema, one file
+  migrations-archive-mysql/                    the MySQL chain, for reference only
+  migrations-archive-pre-baseline/             the pre-squash chain, for reference only
+  seed.ts                                      npm run seed
 src/
   app/api/          the REST API. /api/v1/* is the mobile surface.
   lib/              valuation, leaves, tasks, moderation, id-verification, auth
   generated/prisma  the generated client — npx prisma generate writes this
-scripts/            seeding, backups, and the verify-* acceptance harnesses
+scripts/            seeding, the MySQL->Postgres data move, and the verify-* acceptance harnesses
 proxy.ts            route guards. NOT middleware.ts — see below.
 auth.ts             NextAuth configuration
 ```
 
-> **Route guards live in `proxy.ts`.** This is Next.js 16, where `middleware.ts`
-> is ignored without warning. If a guard seems not to run, check you are editing
-> `proxy.ts`.
+> **Route guards live in `src/proxy.ts`.** This is Next.js 16, where
+> `middleware.ts` is ignored without warning. If a guard seems not to run, check
+> you are editing `src/proxy.ts`.
 
 ---
 

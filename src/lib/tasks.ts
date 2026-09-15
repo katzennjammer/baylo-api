@@ -193,7 +193,7 @@ export async function awardTask(
       const fresh = await isNewTradePartner(db, userId, opts.partnerId, opts.tradeId ?? refId, opts.tradeAt ?? eventAt)
       if (!fresh) {
         // Record the zero so this trade is never revisited.
-        await db.taskCompletion.create({ data: { userId, task, refId, leaves: 0 } })
+        if (!(await claimCompletion(db, userId, task, refId, 0))) return nothing("already_awarded")
         return nothing("repeat_partner")
       }
     }
@@ -209,7 +209,7 @@ export async function awardTask(
       // Record the zero so the denial is permanent, exactly as for a repeat
       // partner. Without this row the award is merely deferred and the cap
       // throttles the faucet instead of closing it.
-      await db.taskCompletion.create({ data: { userId, task, refId, leaves: 0 } })
+      if (!(await claimCompletion(db, userId, task, refId, 0))) return nothing("already_awarded")
       return nothing("weekly_cap")
     }
 
@@ -218,7 +218,11 @@ export async function awardTask(
     // now (when this row was written) and eventAt carries when the action that
     // earned it happened. On the live path they coincide; on a backfill they
     // do not, and conflating them would lose half the audit trail.
-    await db.taskCompletion.create({ data: { userId, task, refId, leaves: amount } })
+    //
+    // The completion row is the CLAIM. If a concurrent request already wrote
+    // it, this one must not touch the ledger or the balance -- that would pay
+    // the same award twice and break SUM(User.leaves) == SUM(amount).
+    if (!(await claimCompletion(db, userId, task, refId, amount))) return nothing("already_awarded")
     await db.leafTransaction.create({
       data: {
         userId,
@@ -236,10 +240,39 @@ export async function awardTask(
 
     return { awarded: amount, reason: "awarded" }
   } catch {
-    // P2002 — a concurrent request already awarded it. MySQL rolls back only the
-    // failing statement, so an enclosing settlement transaction is unaffected.
+    // Anything that is NOT the concurrent-award race, which claimCompletion()
+    // absorbs without throwing. See the note there for why a thrown P2002
+    // would be fatal to an enclosing transaction on Postgres.
     return nothing("error")
   }
+}
+
+/**
+ * Write the TaskCompletion row, or discover that a concurrent request already
+ * did. Returns true when THIS call wrote it.
+ *
+ * createMany + skipDuplicates, not create + catch P2002, and the difference is
+ * an engine difference. `create` on a duplicate raises a unique violation.
+ * MySQL rolls back only that statement, so the old catch-and-continue was
+ * harmless there. Postgres aborts the ENTIRE transaction on any error, and
+ * every later statement fails with "current transaction is aborted" -- so a
+ * caught P2002 inside the settlement transaction (confirm/submit) would have
+ * rolled back the whole settlement, not just the award. skipDuplicates
+ * compiles to INSERT IGNORE on MySQL and ON CONFLICT DO NOTHING on Postgres,
+ * neither of which errors, and count tells us who won.
+ */
+async function claimCompletion(
+  db: TaskDb,
+  userId: string,
+  task: TaskKey,
+  refId: string,
+  leaves: number,
+): Promise<boolean> {
+  const { count } = await db.taskCompletion.createMany({
+    data: [{ userId, task, refId, leaves }],
+    skipDuplicates: true,
+  })
+  return count === 1
 }
 
 /**

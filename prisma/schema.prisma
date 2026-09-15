@@ -4,7 +4,7 @@ generator client {
 }
 
 datasource db {
-  provider = "mysql"
+  provider = "postgresql"
 }
 
 model User {
@@ -205,6 +205,12 @@ model Follow {
   followee   User   @relation("Followee", fields: [followeeId], references: [id], onDelete: Cascade)
 
   @@unique([followerId, followeeId])
+
+  // FK-backing indexes. MySQL/InnoDB created these implicitly for every
+  // foreign key; Postgres does not, and neither does Prisma on Postgres.
+  // Declared so the migration to Postgres keeps every index the live
+  // MySQL database had (see the 2026-09-15 baseline).
+  @@index([followeeId])
 }
 
 // Refresh tokens for the native (React Native) client. The web admin side keeps
@@ -380,6 +386,12 @@ model Item {
   @@index([status, moderationHiddenAt])
   // The comparables lookup: same source, same category.
   @@index([valuationSource, category])
+
+  // FK-backing indexes. MySQL/InnoDB created these implicitly for every
+  // foreign key; Postgres does not, and neither does Prisma on Postgres.
+  // Declared so the migration to Postgres keeps every index the live
+  // MySQL database had (see the 2026-09-15 baseline).
+  @@index([userId])
 }
 
 /// ONE PERCEPTUAL HASH PER PHOTO, WHICH IS THE POOL THE DUPLICATE CHECK SCANS.
@@ -532,6 +544,17 @@ model TradeRequest {
   reviews               Review[]
   swapConfirmationCodes SwapConfirmationCode[]
   deferredContracts     DeferredContract[]
+
+  // FK-backing indexes. MySQL/InnoDB created these implicitly for every
+  // foreign key; Postgres does not, and neither does Prisma on Postgres.
+  // Declared so the migration to Postgres keeps every index the live
+  // MySQL database had (see the 2026-09-15 baseline).
+  @@index([senderId])
+  @@index([receiverId])
+  @@index([offeredItemId])
+  @@index([requestedItemId])
+  @@index([safeZoneHubId])
+  @@index([meetupHubId])
 }
 
 model Message {
@@ -547,6 +570,14 @@ model Message {
 
   tradeId String?
   trade   TradeRequest? @relation(fields: [tradeId], references: [id])
+
+  // FK-backing indexes. MySQL/InnoDB created these implicitly for every
+  // foreign key; Postgres does not, and neither does Prisma on Postgres.
+  // Declared so the migration to Postgres keeps every index the live
+  // MySQL database had (see the 2026-09-15 baseline).
+  @@index([senderId])
+  @@index([receiverId])
+  @@index([tradeId])
 }
 
 model Notification {
@@ -603,6 +634,13 @@ model Notification {
   user    User    @relation("NotificationRecipient", fields: [userId], references: [id], onDelete: Cascade)
   actorId String?
   actor   User?   @relation("NotificationActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  // FK-backing indexes. MySQL/InnoDB created these implicitly for every
+  // foreign key; Postgres does not, and neither does Prisma on Postgres.
+  // Declared so the migration to Postgres keeps every index the live
+  // MySQL database had (see the 2026-09-15 baseline).
+  @@index([userId])
+  @@index([actorId])
 }
 
 model Review {
@@ -620,6 +658,13 @@ model Review {
   trade   TradeRequest @relation(fields: [tradeId], references: [id])
 
   @@unique([tradeId, reviewerId])
+
+  // FK-backing indexes. MySQL/InnoDB created these implicitly for every
+  // foreign key; Postgres does not, and neither does Prisma on Postgres.
+  // Declared so the migration to Postgres keeps every index the live
+  // MySQL database had (see the 2026-09-15 baseline).
+  @@index([reviewerId])
+  @@index([revieweeId])
 }
 
 // Task reward system: one row per completed task.
@@ -691,6 +736,12 @@ model SwapConfirmationCode {
   createdAt DateTime @default(now())
 
   @@unique([tradeId, userId])
+
+  // FK-backing indexes. MySQL/InnoDB created these implicitly for every
+  // foreign key; Postgres does not, and neither does Prisma on Postgres.
+  // Declared so the migration to Postgres keeps every index the live
+  // MySQL database had (see the 2026-09-15 baseline).
+  @@index([userId])
 }
 
 enum Category {
@@ -798,6 +849,12 @@ model PostLike {
   createdAt DateTime @default(now())
 
   @@unique([postId, userId])
+
+  // FK-backing indexes. MySQL/InnoDB created these implicitly for every
+  // foreign key; Postgres does not, and neither does Prisma on Postgres.
+  // Declared so the migration to Postgres keeps every index the live
+  // MySQL database had (see the 2026-09-15 baseline).
+  @@index([userId])
 }
 
 model PostComment {
@@ -812,6 +869,14 @@ model PostComment {
   replies   PostComment[] @relation("CommentReplies")
   likes     CommentLike[]
   createdAt DateTime      @default(now())
+
+  // FK-backing indexes. MySQL/InnoDB created these implicitly for every
+  // foreign key; Postgres does not, and neither does Prisma on Postgres.
+  // Declared so the migration to Postgres keeps every index the live
+  // MySQL database had (see the 2026-09-15 baseline).
+  @@index([postId])
+  @@index([userId])
+  @@index([parentId])
 }
 
 model CommentLike {
@@ -823,6 +888,12 @@ model CommentLike {
   createdAt DateTime    @default(now())
 
   @@unique([commentId, userId])
+
+  // FK-backing indexes. MySQL/InnoDB created these implicitly for every
+  // foreign key; Postgres does not, and neither does Prisma on Postgres.
+  // Declared so the migration to Postgres keeps every index the live
+  // MySQL database had (see the 2026-09-15 baseline).
+  @@index([userId])
 }
 
 model Offer {
@@ -850,6 +921,14 @@ model Offer {
    * @/lib/reputation-gate, not by a unique index.
    */
   contracts DeferredContract[]
+
+  // FK-backing indexes. MySQL/InnoDB created these implicitly for every
+  // foreign key; Postgres does not, and neither does Prisma on Postgres.
+  // Declared so the migration to Postgres keeps every index the live
+  // MySQL database had (see the 2026-09-15 baseline).
+  @@index([postId])
+  @@index([senderId])
+  @@index([receiverId])
 }
 
 enum OfferStatus {
@@ -1366,6 +1445,12 @@ model IdVerification {
   @@index([status, submittedAt])
   // The retry sweep: decided rows whose image is still up there.
   @@index([status, imagePublicId])
+
+  // FK-backing indexes. MySQL/InnoDB created these implicitly for every
+  // foreign key; Postgres does not, and neither does Prisma on Postgres.
+  // Declared so the migration to Postgres keeps every index the live
+  // MySQL database had (see the 2026-09-15 baseline).
+  @@index([reviewedById])
 }
 
 enum AdminActionKind {

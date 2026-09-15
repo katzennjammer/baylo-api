@@ -57,7 +57,7 @@ async function buildHistory(owner: { id: string }, tag: string, agesInDays: numb
       },
     })
     // createdAt/updatedAt are managed by Prisma, so backdate them directly.
-    await prisma.$executeRaw`UPDATE TradeRequest SET createdAt = ${at}, updatedAt = ${at} WHERE id = ${t.id}`
+    await prisma.$executeRaw`UPDATE "TradeRequest" SET "createdAt" = ${at}, "updatedAt" = ${at} WHERE "id" = ${t.id}`
   }
 }
 
@@ -107,7 +107,7 @@ async function main() {
   console.log("\n── does waiting out the window release the denied awards? ──")
   const before = (await prisma.user.findUnique({ where: { id: burst.id } }))!.lifetimeLeaves
   await prisma.$executeRaw`
-    UPDATE LeafTransaction SET eventAt = DATE_SUB(NOW(), INTERVAL 8 DAY) WHERE userId = ${burst.id}`
+    UPDATE "LeafTransaction" SET "eventAt" = NOW() - INTERVAL '8 days' WHERE "userId" = ${burst.id}`
   await reconcileTasks(burst.id)
   const after = (await prisma.user.findUnique({ where: { id: burst.id } }))!.lifetimeLeaves
   console.log(`  BURST lifetimeLeaves ${before} -> ${after} after simulating 8 days passing`)

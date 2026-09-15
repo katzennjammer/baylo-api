@@ -4,8 +4,8 @@
 // that were actually asked for:
 //
 //   - every endpoint returns its whole screen payload in ONE call
-//   - the REAL SQL query count per endpoint, measured against MariaDB's own
-//     Com_select counter rather than counted by eye from the source
+//   - the REAL SQL query count per endpoint, measured against Postgres's own
+//     pg_stat_statements call counter rather than counted by eye from the source
 //   - 401 without auth, 200 with a Bearer token and no cookie
 //   - a non-participant gets coarsened coordinates and a null address
 //   - cursor pagination: page 1, page 2, no duplicates, no gaps
@@ -26,22 +26,61 @@ function check(name: string, cond: boolean, detail = "") {
 }
 
 // ── Query counting ───────────────────────────────────────────────────────────
-// Com_select counts SELECTs server-wide. The harness is the only client, so the
-// delta across one request is that request's SELECT count, minus the cost of
-// the two counter reads themselves — measured rather than assumed.
+// pg_stat_statements counts every statement server-wide, the way MariaDB's
+// Com_select did before the move to Postgres. Supabase ships the extension
+// enabled. The harness is the only client, so the delta across one request is
+// that request's SELECT count, minus the cost of the two counter reads
+// themselves — measured rather than assumed.
+//
+// SUM(calls) over SELECTs only, so the probe's own writes do not count. COUNT
+// comes back as bigint on Postgres; Number() it.
+//
+// THE COUNTER MUST PROVE ITSELF BEFORE ANYTHING IS MEASURED. A counter that
+// reads zero forever -- extension missing, view not readable by this role,
+// stats reset mid-run -- would turn every query-count assertion below into
+// one that cannot fail, which is worse than no assertion. calibrate() runs a
+// known SELECT between two reads and refuses to continue unless the counter
+// moved by at least that one statement. It throws rather than returning a
+// zero, and the top-level catch exits non-zero.
 
 async function comSelect(): Promise<number> {
-  const rows = await prisma.$queryRaw<{ Variable_name: string; Value: string }[]>`
-    SHOW GLOBAL STATUS LIKE 'Com_select'
+  const rows = await prisma.$queryRaw<{ n: bigint | number | null }[]>`
+    SELECT COALESCE(SUM(calls), 0) AS n
+    FROM pg_stat_statements
+    WHERE query ILIKE 'SELECT%'
   `
-  return Number(rows[0]?.Value ?? 0)
+  if (rows.length !== 1 || rows[0].n === null || rows[0].n === undefined) {
+    throw new Error("pg_stat_statements returned no row -- the counter is unreadable")
+  }
+  return Number(rows[0].n)
 }
 
 let probeOverhead = 0
 async function calibrate() {
-  const a = await comSelect()
+  let a: number
+  try {
+    a = await comSelect()
+  } catch (e) {
+    throw new Error(
+      "QUERY COUNTER UNAVAILABLE: " + (e as Error).message +
+      "\n  pg_stat_statements must be installed and readable by DATABASE_URL's role.\n" +
+      "  Refusing to run: every query-count assertion below would pass with nothing measured.",
+    )
+  }
+  // One statement the counter cannot miss. If the delta is not at least 1 the
+  // counter is not counting, whatever it returned.
+  await prisma.$queryRaw`SELECT 1 AS "probe"`
   const b = await comSelect()
-  probeOverhead = b - a
+  if (b - a < 1) {
+    throw new Error(
+      `QUERY COUNTER NOT COUNTING: read ${a} then ${b} across a known SELECT.\n` +
+      "  Refusing to run: every query-count assertion below would pass with nothing measured.",
+    )
+  }
+  // Now the overhead of the reads themselves, measured rather than assumed.
+  const c = await comSelect()
+  const d = await comSelect()
+  probeOverhead = d - c
 }
 
 interface Measured { status: number; body: unknown; queries: number }
@@ -153,7 +192,7 @@ async function main() {
 
   // 2. Envelope shape and real query counts.
   console.log("\n2. envelope + REAL query count per endpoint")
-  console.log(`   (Com_select delta, probe overhead ${probeOverhead} calibrated out)`)
+  console.log(`   (pg_stat_statements SELECT-call delta, probe overhead ${probeOverhead} calibrated out)`)
   const counts: Record<string, number> = {}
   for (const r of routes) {
     const m = await measure(r, token)

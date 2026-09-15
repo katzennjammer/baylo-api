@@ -87,24 +87,25 @@ export async function GET(req: NextRequest) {
   // GROUP BY over a derived pair key with a HAVING on the aggregate, and Prisma
   // has no expression for it. Fully parameterised — minRepeats and limit are
   // integers validated by the schema above and passed as bindings, not
-  // interpolated.
+  // interpolated. Identifiers and aliases are quoted because Postgres folds
+  // unquoted names to lower case.
   //
   // TaskCompletion.refId is the tradeId for a VERIFIED_SWAP, which is what lets
   // the join recover who the partner was: the completion row records that USER
   // got zero, and the trade records who they got zero with.
   const pairs = await prisma.$queryRaw<PairRow[]>`
     SELECT
-      tc.userId AS userId,
-      CASE WHEN tr.senderId = tc.userId THEN tr.receiverId ELSE tr.senderId END AS partnerId,
-      COUNT(*)          AS zeroSwaps,
-      MAX(tc.createdAt) AS lastAt
-    FROM TaskCompletion tc
-    JOIN TradeRequest tr ON tr.id = tc.refId
-    WHERE tc.task = 'VERIFIED_SWAP'
-      AND tc.leaves = 0
-    GROUP BY userId, partnerId
+      tc."userId" AS "userId",
+      CASE WHEN tr."senderId" = tc."userId" THEN tr."receiverId" ELSE tr."senderId" END AS "partnerId",
+      COUNT(*)            AS "zeroSwaps",
+      MAX(tc."createdAt") AS "lastAt"
+    FROM "TaskCompletion" tc
+    JOIN "TradeRequest" tr ON tr."id" = tc."refId"
+    WHERE tc."task" = 'VERIFIED_SWAP'
+      AND tc."leaves" = 0
+    GROUP BY tc."userId", "partnerId"
     HAVING COUNT(*) >= ${minRepeats}
-    ORDER BY zeroSwaps DESC, lastAt DESC
+    ORDER BY "zeroSwaps" DESC, "lastAt" DESC
     LIMIT ${limit}
   `
 

@@ -14,7 +14,7 @@ export default async function ListingsPage({
     where: {
       status: "AVAILABLE",
       ...(category && category !== "ALL" ? { category: category as never } : {}),
-      ...(q ? { OR: [{ title: { contains: q } }, { description: { contains: q } }] } : {}),
+      ...(q ? { OR: [{ title: { contains: q, mode: "insensitive" as const } }, { description: { contains: q, mode: "insensitive" as const } }] } : {}),
     },
     include: { user: { select: { id: true, name: true, avatar: true, rating: true, totalTrades: true } } },
     orderBy: { createdAt: "desc" },
