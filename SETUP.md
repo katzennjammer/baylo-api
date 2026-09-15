@@ -340,10 +340,15 @@ Postgres client talking to MariaDB, which fails with the
 `received invalid response: 59` above.
 
 ```bash
-git checkout main            # main is still MySQL: adapter-mariadb, mysql provider, the MySQL migration chain
+git checkout mysql-fallback  # the last MySQL commit: adapter-mariadb, mysql provider, the MySQL migration chain
 npx prisma generate          # regenerate the client for that provider
 # .env: comment the postgresql:// line, uncomment the mysql:// line above it. Then restart the dev server.
 ```
+
+`mysql-fallback` is a branch kept at the commit `main` pointed to before the
+Postgres migration was merged, and `mysql-final-20260915` is an annotated tag on
+the same commit. **`main` is Postgres now** — checking it out will not get you
+back. Neither the branch nor the tag is deleted until the revert window closes.
 
 The XAMPP database was never written to during the migration and has not been
 dropped. Its last verified dump is `D:\BAYLO\backups\baylo-20260915-190207.sql`
@@ -352,8 +357,7 @@ itself is damaged, `scripts/backup-baylo.ps1 -VerifyOnly <file>` first, then
 `mysql -u root < <file>`.
 
 Going back onto Postgres is the same shape in reverse:
-`git checkout <postgres branch> && npx prisma generate`, swap the `.env`
-lines, restart.
+`git checkout main && npx prisma generate`, swap the `.env` lines, restart.
 
 **Anything written to Supabase after the switch is not in MySQL.** The revert
 returns the app to the data as it was on 2026-09-15 at 19:02. That is the
@@ -372,6 +376,8 @@ next person trips over. When you decide the window is closed, in one commit:
 - delete the MySQL-only scripts (`backup-baylo.ps1`, `baseline-existing-db.ps1`,
   `apply-leaves-migration.ps1`, `set-premium.ps1`) or rewrite `set-premium`
   for Postgres if it is still used;
+- delete the `mysql-fallback` branch (the `mysql-final-20260915` tag is enough
+  to find the commit again, and costs nothing);
 - leave `migrate-mysql-to-postgres.ts` and `prisma/migrations-archive-mysql/`
   — they are history, and they do nothing unless run.
 
