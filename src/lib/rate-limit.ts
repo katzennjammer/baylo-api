@@ -49,13 +49,18 @@ export function rateLimit(key: string, limit: number, windowMs: number): RateLim
 }
 
 /**
- * Best-effort client address. Behind a proxy the socket address is the proxy,
- * so the forwarded headers are what carry the real client — they are also
- * client-controlled, which is why this limiter is a speed bump on credential
- * stuffing and not an access control.
+ * Returns the client address used for abuse throttling.
+ *
+ * Forwarding headers are only trusted when the deployment explicitly enables
+ * Cloudflare proxy mode. Otherwise a caller can forge them and evade a limit.
+ * This limiter remains a speed bump, never an authorization boundary.
  */
 export function clientIp(req: Request): string {
-  const forwarded = req.headers.get("x-forwarded-for")
-  if (forwarded) return forwarded.split(",")[0].trim()
-  return req.headers.get("x-real-ip")?.trim() || "unknown"
+  if (process.env.TRUST_PROXY === "cloudflare") {
+    return req.headers.get("cf-connecting-ip")?.trim()
+      || req.headers.get("x-forwarded-for")?.split(",")[0].trim()
+      || "unknown"
+  }
+
+  return "direct-client"
 }

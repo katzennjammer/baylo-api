@@ -923,9 +923,9 @@ export default function TradesClient({
   // Without this, useState(initialTrades) only uses the initial value; new trades from accepted
   // offers never appear unless the component fully remounts.
   React.useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setTrades(initialTrades)
   // initialTrades is a new reference on every server render — that's the signal we want.
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialTrades])
   const [dialogLoading,  setDialogLoading]  = React.useState(false)
   const [ratingTrade,    setRatingTrade]    = React.useState<SerializedTrade | null>(null)

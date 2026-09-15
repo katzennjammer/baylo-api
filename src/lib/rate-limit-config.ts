@@ -29,6 +29,8 @@ export const RATE_LIMITS = {
   login: { limit: 10, windowMs: FIFTEEN_MIN },
   /** The same credentials against the NextAuth provider. Same budget. */
   loginWeb: { limit: 10, windowMs: FIFTEEN_MIN },
+  /** Refresh-token endpoint; normal clients refresh only occasionally. */
+  refresh: { limit: 60, windowMs: FIFTEEN_MIN },
   /** Free unlimited account creation is the precondition for every other abuse. */
   register: { limit: 3, windowMs: HOUR },
   /** Sends mail to an address the caller names. */
@@ -45,6 +47,8 @@ export const RATE_LIMITS = {
   aiPhash: { limit: 20, windowMs: HOUR },
   /** Cloudinary bandwidth and storage, billed to us. */
   upload: { limit: 30, windowMs: HOUR },
+  /** Nominatim search requests from the admin hub picker. */
+  hubGeocode: { limit: 30, windowMs: HOUR },
   /** Guessing a partner's 6-digit swap code. Also capped per code in the DB. */
   confirmSubmit: { limit: 20, windowMs: HOUR },
   /**

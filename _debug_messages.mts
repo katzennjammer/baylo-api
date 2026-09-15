@@ -1,9 +1,9 @@
-import mod from "./src/lib/auth-tokens"
+import { signAccessToken } from "./src/lib/auth-tokens"
 import prisma from "./src/lib/prisma"
 
 const viewerId = "cmq7ss3kf00001473is5i7a1l"
 
-const token = await mod.signAccessToken(viewerId)
+const token = await signAccessToken(viewerId)
 
 const recentMessages = await prisma.$queryRaw<Array<{
   id: string

@@ -84,10 +84,10 @@ export default function SwapConfirmModal({
   }, [tradeId])
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     startConfirmation()
   // Only run once on mount
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tradeId])
+  }, [tradeId, startConfirmation])
 
   // ── Poll /status while waiting for partner ────────────────────────────────
   const checkStatus = useCallback(async () => {

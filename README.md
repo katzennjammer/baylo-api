@@ -93,6 +93,18 @@ This is deliberate. A language model gives a different answer to the same questi
 
 ---
 
+## Cloudflare deployment
+
+Put the production API behind Cloudflare's proxy before enabling trusted client
+IP handling. Set `TRUST_PROXY="cloudflare"` only when direct public access to the
+origin is blocked; the API then uses Cloudflare's `CF-Connecting-IP` header for
+rate limiting. Keep `TRUST_PROXY="0"` during local development and direct
+deployments, because forwarding headers can otherwise be forged by callers.
+
+Cloudflare should provide DNS, HTTPS, WAF, DDoS protection, and edge rate limits.
+Baylo must still enforce authentication, authorization, validation, and
+application-level limits at the origin.
+
 ## Getting started
 
 Both repos are needed — the app is not usable without the API.

@@ -6,6 +6,8 @@ import {
   revokeTokenFamily,
   toTokenUser,
 } from "@/lib/auth-tokens"
+import { clientIp, enforceRateLimit } from "@/lib/rate-limit-config"
+import { suspensionState } from "@/lib/moderation"
 
 /**
  * POST /api/auth/refresh — trades a refresh token for a fresh pair.
@@ -22,6 +24,9 @@ import {
  * would let the thief keep rotating indefinitely.
  */
 export async function POST(req: NextRequest) {
+  const limited = enforceRateLimit("refresh", clientIp(req))
+  if (limited) return limited
+
   let body: { refreshToken?: unknown }
   try {
     body = await req.json()
@@ -31,6 +36,7 @@ export async function POST(req: NextRequest) {
 
   const raw = typeof body.refreshToken === "string" ? body.refreshToken.trim() : ""
   if (!raw) return NextResponse.json({ error: "refreshToken is required" }, { status: 400 })
+  if (raw.length > 512) return NextResponse.json({ error: "Invalid refresh token" }, { status: 400 })
 
   const stored = await prisma.refreshToken.findUnique({
     where: { tokenHash: hashRefreshToken(raw) },
@@ -69,7 +75,10 @@ export async function POST(req: NextRequest) {
   }
 
   const user = await prisma.user.findUnique({ where: { id: stored.userId } })
-  if (!user) return NextResponse.json({ error: "Invalid refresh token" }, { status: 401 })
+  if (!user || user.deletedAt || suspensionState(user).suspended) {
+    await revokeTokenFamily(stored.familyId)
+    return NextResponse.json({ error: "Invalid refresh token" }, { status: 401 })
+  }
 
   // Same family — the new token inherits the lineage, so a replay of any
   // ancestor still revokes everything descended from that one login.

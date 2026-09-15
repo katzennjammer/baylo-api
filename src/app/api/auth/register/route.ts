@@ -73,7 +73,11 @@ export async function POST(req: NextRequest) {
       },
       { status: 201 },
     )
-  } catch {
+  } catch (error) {
+    console.error(
+      "POST /api/auth/register failed:",
+      error instanceof Error ? error.stack ?? error.message : error,
+    )
     return NextResponse.json({ error: "Internal server error" }, { status: 500 })
   }
 }

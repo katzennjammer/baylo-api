@@ -1,3 +1,4 @@
+import Link from "next/link"
 import prisma from "@/lib/prisma"
 
 export const dynamic = "force-dynamic"
@@ -11,11 +12,7 @@ export const revalidate = 0
  * this account, and what reason did they give" and get an answer without a
  * database prompt.
  *
- * There is no filter UI here yet and that is a deliberate stopping point rather
- * than an oversight: /api/admin/audit takes actorId, targetType and targetId,
- * the report detail page already shows the per-target slice inline, and a
- * hundred rows newest-first is the whole log on a platform this size. The
- * filters get a UI when there is enough here to need one.
+ * Filters are URL-backed so an investigation can be bookmarked and shared.
  */
 
 const th: React.CSSProperties = { padding: "10px 12px", textAlign: "left", color: "#888", fontSize: 12 }
@@ -31,16 +28,60 @@ const ACTION_COLOR: Record<string, string> = {
   USER_UNSUSPENDED: "#15803d",
 }
 
-export default async function AuditPage() {
-  const actions = await prisma.adminAction.findMany({
-    select: {
-      id: true, action: true, targetType: true, targetId: true,
-      reportId: true, reason: true, detail: true, createdAt: true,
-      actor: { select: { name: true, email: true, role: true } },
-    },
-    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-    take: 100,
-  })
+const TARGET_TYPES = ["REPORT", "LISTING", "USER", "HUB", "ID_VERIFICATION"] as const
+
+interface Props {
+  searchParams: Promise<{
+    actorId?: string
+    targetType?: string
+    targetId?: string
+    from?: string
+    to?: string
+  }>
+}
+
+export default async function AuditPage({ searchParams }: Props) {
+  const sp = await searchParams
+  const actorId = sp.actorId?.trim() || undefined
+  const targetType = (TARGET_TYPES as readonly string[]).includes(sp.targetType ?? "")
+    ? (sp.targetType as (typeof TARGET_TYPES)[number])
+    : undefined
+  const targetId = sp.targetId?.trim() || undefined
+  const from = /^\d{4}-\d{2}-\d{2}$/.test(sp.from ?? "") ? sp.from : undefined
+  const to = /^\d{4}-\d{2}-\d{2}$/.test(sp.to ?? "") ? sp.to : undefined
+  const fromDate = from ? new Date(`${from}T00:00:00.000Z`) : undefined
+  const toDate = to ? new Date(`${to}T00:00:00.000Z`) : undefined
+  const dateRange =
+    fromDate && toDate
+      ? { gte: fromDate, lt: new Date(toDate.getTime() + 86_400_000) }
+      : fromDate
+        ? { gte: fromDate }
+        : toDate
+          ? { lt: new Date(toDate.getTime() + 86_400_000) }
+          : undefined
+
+  const [actions, actors] = await Promise.all([
+    prisma.adminAction.findMany({
+      where: {
+        ...(actorId ? { actorId } : {}),
+        ...(targetType ? { targetType } : {}),
+        ...(targetId ? { targetId } : {}),
+        ...(dateRange ? { createdAt: dateRange } : {}),
+      },
+      select: {
+        id: true, action: true, targetType: true, targetId: true,
+        reportId: true, reason: true, detail: true, createdAt: true,
+        actor: { select: { name: true, email: true, role: true } },
+      },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: 100,
+    }),
+    prisma.user.findMany({
+      where: { role: { in: ["ADMIN", "MODERATOR"] }, deletedAt: null },
+      select: { id: true, name: true, email: true },
+      orderBy: [{ name: "asc" }, { email: "asc" }],
+    }),
+  ])
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
@@ -52,6 +93,39 @@ export default async function AuditPage() {
           one — a log with an edit button records what somebody was willing to admit to.
         </p>
       </div>
+
+      <form action="/admin/audit" style={{ ...cardStyle, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "end" }}>
+        <label style={labelStyle}>
+          Actor
+          <select name="actorId" defaultValue={actorId ?? ""} style={fieldStyle}>
+            <option value="">All staff</option>
+            {actors.map((actor) => (
+              <option key={actor.id} value={actor.id}>{actor.name} — {actor.email}</option>
+            ))}
+          </select>
+        </label>
+        <label style={labelStyle}>
+          Target type
+          <select name="targetType" defaultValue={targetType ?? ""} style={fieldStyle}>
+            <option value="">All targets</option>
+            {TARGET_TYPES.map((type) => <option key={type} value={type}>{type}</option>)}
+          </select>
+        </label>
+        <label style={labelStyle}>
+          Target ID
+          <input name="targetId" defaultValue={targetId ?? ""} placeholder="Exact ID" style={fieldStyle} />
+        </label>
+        <label style={labelStyle}>
+          From
+          <input type="date" name="from" defaultValue={from ?? ""} style={fieldStyle} />
+        </label>
+        <label style={labelStyle}>
+          To
+          <input type="date" name="to" defaultValue={to ?? ""} style={fieldStyle} />
+        </label>
+        <button type="submit" style={buttonStyle}>Filter</button>
+        <Link href="/admin/audit" style={{ ...buttonStyle, background: "#fff", color: "#555", textDecoration: "none" }}>Clear</Link>
+      </form>
 
       {actions.length === 0 ? (
         <p style={{ fontSize: 14, color: "#888", padding: 32, textAlign: "center", background: "#fff", borderRadius: 14 }}>
@@ -121,4 +195,17 @@ export default async function AuditPage() {
       )}
     </div>
   )
+}
+
+const cardStyle: React.CSSProperties = {
+  background: "#fff", border: "1px solid rgba(0,0,0,.08)", borderRadius: 14, padding: 14,
+}
+const labelStyle: React.CSSProperties = {
+  display: "flex", flexDirection: "column", gap: 5, fontSize: 11, color: "#777", fontWeight: 700,
+}
+const fieldStyle: React.CSSProperties = {
+  minHeight: 36, padding: "7px 9px", borderRadius: 7, border: "1px solid rgba(0,0,0,.16)", background: "#fff", color: "#111", fontSize: 12,
+}
+const buttonStyle: React.CSSProperties = {
+  minHeight: 36, padding: "8px 12px", border: 0, borderRadius: 7, background: "#17201b", color: "#fff", fontWeight: 700, fontSize: 12,
 }

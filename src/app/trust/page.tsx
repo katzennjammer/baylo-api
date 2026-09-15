@@ -139,8 +139,8 @@ export default function TrustPage() {
             maxWidth: "52ch", lineHeight: 1.6, marginBottom: "clamp(28px,3vw,44px)",
           }}>
             Baylo is built on the belief that people are fundamentally fair. Our safety
-            systems don't assume the worst — they make honesty the easiest path, and
-            protect everyone when it isn't.
+            systems don&apos;t assume the worst — they make honesty the easiest path, and
+            protect everyone when it isn&apos;t.
           </p>
           <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
             <Link href="#principles" className="btn solid">

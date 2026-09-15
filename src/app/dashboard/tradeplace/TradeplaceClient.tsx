@@ -477,6 +477,7 @@ function BuildOfferModal({
   const [alertNeededLeaves, setAlertNeededLeaves] = useState(0);
 
   useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setLoadingShelf(true);
     fetch("/api/items?mine=true")
       .then((r) => r.json())
@@ -850,7 +851,10 @@ export default function TradeplaceClient({ items: initialItems, me, followReqCou
   const [galleryIdx, setGalleryIdx] = useState(0);
   const touchStartX = useRef<number | null>(null);
 
-  useEffect(() => { setGalleryIdx(0); }, [selectedId]);
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setGalleryIdx(0);
+  }, [selectedId]);
 
   // ── Open edit wizard from ?edit=<id> query param ───────────────────────
   useEffect(() => {

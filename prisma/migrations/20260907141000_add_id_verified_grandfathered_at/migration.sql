@@ -1,0 +1,2 @@
+-- The baseline migration already contains User.idVerifiedGrandfatheredAt.
+-- Keep this migration as a no-op so fresh databases do not add the column twice.

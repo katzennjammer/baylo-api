@@ -1,5 +1,6 @@
 "use client"
 
+import Link from "next/link"
 import { useState } from "react"
 import { useSession } from "next-auth/react"
 import { useRouter } from "next/navigation"
@@ -89,7 +90,7 @@ export default function TradeRequestModal({
             {ownedItems.length === 0 ? (
               <p className="text-sm text-gray-400">
                 You have no available items to offer.{" "}
-                <a href="/listings/new" className="text-emerald-600 hover:underline">Post an item first.</a>
+                <Link href="/listings/new" className="text-emerald-600 hover:underline">Post an item first.</Link>
               </p>
             ) : (
               <select

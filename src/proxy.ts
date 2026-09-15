@@ -38,7 +38,7 @@ export default auth(function proxy(req) {
   // before the claim existed, which reads as "not staff" until the session
   // refresh backfills it; the safe direction to be wrong in.
   const role = (req.auth?.user as { role?: string } | undefined)?.role
-  const isStaff = role === "ADMIN" || role === "MODERATOR"
+  const isStaff = role === "ADMIN" || role === "MODERATOR" || role === "SUPER_ADMIN"
   const home = isStaff ? "/dashboard" : "/android"
 
   if (isLoggedIn && (pathname === "/" || pathname.startsWith("/auth/"))) {

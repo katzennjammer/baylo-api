@@ -213,6 +213,7 @@ export type AdminActionKind =
   // answerable here or nowhere.
   | "ID_VERIFICATION_APPROVED"
   | "ID_VERIFICATION_REJECTED"
+  | "ROLE_CHANGED"
 
 export type AdminTargetType = "REPORT" | "LISTING" | "USER" | "HUB" | "ID_VERIFICATION"
 

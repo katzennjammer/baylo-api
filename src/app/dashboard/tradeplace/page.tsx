@@ -50,7 +50,8 @@ export default async function TradeplacePage({
   const session = await auth()
   if (!session?.user?.id) redirect("/auth/login")
 
-  const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
+  const now = new Date()
+  const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000)
 
   const [rawItems, me, recentMsgs, notifs, followReqCount, weeklyTrades,
          recentTradePairs, trendingCatRaw, tickerTradesRaw] = await Promise.all([
@@ -178,12 +179,13 @@ export default async function TradeplacePage({
       partnerId: m.senderId,
     }))
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  type NotificationIcon = keyof typeof NOTIF_ICON | "bell"
+
   const notifications = notifs.map((n) => ({
     id: n.id,
     who: n.actor?.name ?? "Baylo",
     avatar: n.actor?.avatar ?? null,
-    icon: (NOTIF_ICON[n.type] ?? "bell") as any,
+    icon: (NOTIF_ICON[n.type] ?? "bell") as NotificationIcon,
     text: n.message,
     link: n.link ?? null,
     time: timeAgo(n.createdAt),

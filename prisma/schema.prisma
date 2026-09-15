@@ -1056,6 +1056,7 @@ enum Role {
   USER
   MODERATOR
   ADMIN
+  SUPER_ADMIN
 }
 
 enum ReportTargetType {
@@ -1381,6 +1382,7 @@ enum AdminActionKind {
   HUB_REACTIVATED
   ID_VERIFICATION_APPROVED
   ID_VERIFICATION_REJECTED
+  ROLE_CHANGED
   /**
    * An offer of the recipient's own aged out unanswered. Sent to the SENDER
    * only — the receiver is the one who did not reply, and telling them so is a

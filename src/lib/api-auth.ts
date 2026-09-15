@@ -42,6 +42,7 @@ export interface AuthUser {
   email: string | null
   /** The user's avatar. Named `image` to match NextAuth's session shape. */
   image: string | null
+  role: Role
 }
 
 export interface AuthSession {
@@ -78,7 +79,7 @@ export async function resolveSession(): Promise<AuthSession | null> {
       where: { id: userId },
       select: {
         id: true, name: true, email: true, avatar: true,
-        deletedAt: true, suspendedAt: true, suspendedUntil: true,
+        role: true, deletedAt: true, suspendedAt: true, suspendedUntil: true,
       },
     })
     // A deleted account is not merely absent from listings — it must stop
@@ -91,7 +92,7 @@ export async function resolveSession(): Promise<AuthSession | null> {
     // test, so a suspension that has lapsed lets the user straight back in.
     if (suspensionState(user).suspended) return null
 
-    return { user: { id: user.id, name: user.name, email: user.email, image: user.avatar } }
+    return { user: { id: user.id, name: user.name, email: user.email, image: user.avatar, role: user.role as Role } }
   }
 
   // Cookie path — the web admin side.
@@ -102,7 +103,7 @@ export async function resolveSession(): Promise<AuthSession | null> {
   // long way, and the token itself carries no deletion state.
   const cookieUser = await prisma.user.findUnique({
     where: { id: session.user.id },
-    select: { deletedAt: true, suspendedAt: true, suspendedUntil: true },
+    select: { role: true, deletedAt: true, suspendedAt: true, suspendedUntil: true },
   })
   if (!cookieUser || cookieUser.deletedAt) return null
   // A 30-day NextAuth cookie outlives a suspension decision by a very long way,
@@ -116,13 +117,14 @@ export async function resolveSession(): Promise<AuthSession | null> {
       name: session.user.name ?? null,
       email: session.user.email ?? null,
       image: session.user.image ?? null,
+      role: cookieUser.role as Role,
     },
   }
 }
 
 // ── Privilege ────────────────────────────────────────────────────────────────
 
-export type Role = "USER" | "MODERATOR" | "ADMIN"
+export type Role = "USER" | "MODERATOR" | "ADMIN" | "SUPER_ADMIN"
 
 /**
  * Rank, for comparison. Higher wins; a route asks for a MINIMUM.
@@ -132,7 +134,7 @@ export type Role = "USER" | "MODERATOR" | "ADMIN"
  * failure mode of the set version is an admin locked out of a moderator route,
  * discovered by an admin at 2am.
  */
-const ROLE_RANK: Record<Role, number> = { USER: 0, MODERATOR: 1, ADMIN: 2 }
+const ROLE_RANK: Record<Role, number> = { USER: 0, MODERATOR: 1, ADMIN: 2, SUPER_ADMIN: 3 }
 
 export interface AdminActor {
   id: string
@@ -183,15 +185,10 @@ export async function requireRole(
     }
   }
 
-  const user = await prisma.user.findUnique({
-    where: { id: session.user.id },
-    select: { id: true, name: true, email: true, role: true, deletedAt: true },
-  })
-
-  // resolveSession() already refuses deleted and suspended accounts; the
-  // deletedAt re-check costs nothing on a path that runs a few times a day and
-  // closes the gap if that rule ever moves.
-  if (!user || user.deletedAt || ROLE_RANK[user.role as Role] < ROLE_RANK[minimum]) {
+  // resolveSession() already verified that this live database record exists,
+  // is not deleted or suspended, and supplied the current role.
+  const user = session.user
+  if (ROLE_RANK[user.role] < ROLE_RANK[minimum]) {
     return {
       response: NextResponse.json(
         { error: "Staff access required", code: "FORBIDDEN" },
@@ -202,6 +199,6 @@ export async function requireRole(
 
   return {
     response: null,
-    actor: { id: user.id, name: user.name, email: user.email, role: user.role as Role },
+    actor: { id: user.id, name: user.name, email: user.email, role: user.role },
   }
 }

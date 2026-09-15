@@ -9,6 +9,7 @@ import {
   toWireTarget,
 } from "@/lib/moderation"
 import ModerationActions from "./ModerationActions"
+import ReportImageViewer from "./ReportImageViewer"
 
 export const dynamic = "force-dynamic"
 export const revalidate = 0
@@ -29,6 +30,16 @@ const card: React.CSSProperties = {
   padding: 20, display: "flex", flexDirection: "column", gap: 10,
 }
 const label: React.CSSProperties = { fontSize: 12, color: "#999", fontWeight: 600 }
+
+function parseImages(raw: string | null | undefined): string[] {
+  if (!raw) return []
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === "string") : []
+  } catch {
+    return []
+  }
+}
 
 export default async function ReportDetailPage({
   params,
@@ -72,7 +83,7 @@ export default async function ReportDetailPage({
       ? prisma.item.findUnique({
           where: { id: report.targetId },
           select: {
-            id: true, title: true, description: true, category: true,
+            id: true, title: true, description: true, images: true, category: true,
             condition: true, valueLeaves: true, status: true,
             moderationHiddenAt: true, createdAt: true,
             user: { select: { id: true, name: true, email: true, suspendedAt: true, suspendedUntil: true } },
@@ -87,6 +98,11 @@ export default async function ReportDetailPage({
             createdAt: true, rating: true, totalTrades: true, role: true,
             suspendedAt: true, suspendedUntil: true, deletedAt: true,
             _count: { select: { items: true } },
+            items: {
+              select: { id: true, title: true, images: true, status: true, moderationHiddenAt: true },
+              orderBy: { createdAt: "desc" },
+              take: 6,
+            },
           },
         })
       : null,
@@ -205,6 +221,9 @@ export default async function ReportDetailPage({
                   {listing.moderationHiddenAt && " · HIDDEN BY A MODERATOR"}
                 </div>
                 <p style={{ fontSize: 15, fontWeight: 700 }}>{listing.title}</p>
+                {parseImages(listing.images).length > 0 && (
+                  <ReportImageViewer images={parseImages(listing.images)} title={listing.title} />
+                )}
                 <p style={{ fontSize: 14, color: "#555", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>
                   {listing.description}
                 </p>
@@ -235,6 +254,32 @@ export default async function ReportDetailPage({
                 {subjectUser.bio && (
                   <p style={{ fontSize: 14, color: "#555", lineHeight: 1.6 }}>{subjectUser.bio}</p>
                 )}
+                <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 4 }}>
+                  <p style={{ ...label, color: "#555" }}>Recent listings</p>
+                  {subjectUser.items.length === 0 ? (
+                    <p style={{ fontSize: 13, color: "#999" }}>This user has no listings.</p>
+                  ) : (
+                    subjectUser.items.map((item) => {
+                      const images = parseImages(item.images)
+                      return (
+                        <div key={item.id} style={{ display: "flex", gap: 10, alignItems: "center", padding: 8, borderRadius: 9, background: "#f7f7f8" }}>
+                          {images[0] ? (
+                            // eslint-disable-next-line @next/next/no-img-element
+                            <img src={images[0]} alt="" style={{ width: 54, height: 54, objectFit: "cover", borderRadius: 7 }} />
+                          ) : (
+                            <div style={{ width: 54, height: 54, borderRadius: 7, background: "#e5e7eb" }} />
+                          )}
+                          <div>
+                            <strong style={{ fontSize: 13 }}>{item.title}</strong>
+                            <div style={{ color: "#888", fontSize: 11, marginTop: 3 }}>
+                              {item.status}{item.moderationHiddenAt ? " · Hidden" : ""}
+                            </div>
+                          </div>
+                        </div>
+                      )
+                    })
+                  )}
+                </div>
               </>
             ) : (
               <p style={{ fontSize: 13, color: "#999" }}>That account no longer exists.</p>

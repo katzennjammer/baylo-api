@@ -119,25 +119,67 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "You already have a pending request for this item" }, { status: 409 })
     }
 
-    const trade = await prisma.tradeRequest.create({
-      data: {
-        senderId: session.user.id,
-        receiverId: requestedItem.userId,
-        offeredItemId,
-        requestedItemId,
-        message: message || null,
-      },
+    const sender = await prisma.user.findUnique({
+      where: { id: session.user.id },
+      select: { name: true, avatar: true },
     })
 
-    await prisma.notification.create({
-      data: {
-        userId: requestedItem.userId,
-        type: "TRADE_REQUEST",
-        message: `wants to trade for your item "${requestedItem.title}"`,
-        link: `/dashboard/trades`,
-        actorId: session.user.id,
-      },
+    const { trade, chatMessage } = await prisma.$transaction(async (tx) => {
+      const createdTrade = await tx.tradeRequest.create({
+        data: {
+          senderId: session.user.id,
+          receiverId: requestedItem.userId,
+          offeredItemId,
+          requestedItemId,
+          message: message || null,
+        },
+      })
+
+      // A direct trade request is also the first message in the conversation.
+      // Keep the trade and its readable proposal card atomic: the inbox must
+      // never receive a trade whose conversation row was not saved.
+      const createdMessage = await tx.message.create({
+        data: {
+          senderId: session.user.id,
+          receiverId: requestedItem.userId,
+          tradeId: createdTrade.id,
+          content: JSON.stringify({
+            type: "offer",
+            tradeId: createdTrade.id,
+            postItem: { title: requestedItem.title },
+            offeredItems: [{ id: offeredItem.id, title: offeredItem.title }],
+            offeredLeaves: null,
+            userMessage: message?.trim() || null,
+            senderName: sender?.name ?? "Someone",
+            senderId: session.user.id,
+            status: "PENDING",
+          }),
+        },
+      })
+
+      await tx.notification.create({
+        data: {
+          userId: requestedItem.userId,
+          type: "TRADE_REQUEST",
+          message: `wants to trade for your item "${requestedItem.title}"`,
+          link: `/dashboard/trades`,
+          actorId: session.user.id,
+        },
+      })
+
+      return { trade: createdTrade, chatMessage: createdMessage }
     })
+
+    const pusherPayload = {
+      id: chatMessage.id,
+      content: chatMessage.content,
+      senderId: chatMessage.senderId,
+      receiverId: chatMessage.receiverId,
+      createdAt: chatMessage.createdAt.toISOString(),
+      senderName: sender?.name ?? "",
+      senderAvatar: sender?.avatar ?? null,
+    }
+    pusher.trigger(`private-user-${requestedItem.userId}`, "new-message", pusherPayload).catch(() => {})
 
     return NextResponse.json(trade, { status: 201 })
   } catch {

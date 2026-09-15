@@ -1,0 +1,1 @@
+-- The baseline migration already contains the IdVerification table.

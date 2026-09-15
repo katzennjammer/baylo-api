@@ -6,7 +6,7 @@ import SiteFooter from "./SiteFooter"
 
 export default function ConditionalShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
-  const hideChromeOn = ["/dashboard", "/auth"]
+  const hideChromeOn = ["/dashboard", "/auth", "/admin"]
   const hideChrome = hideChromeOn.some((prefix) => pathname?.startsWith(prefix))
 
   if (hideChrome) return <>{children}</>

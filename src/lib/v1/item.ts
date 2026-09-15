@@ -312,3 +312,35 @@ export function v1Item(
     createdAt: row.createdAt,
   }
 }
+
+export interface OfferedItemBrief {
+  id: string
+  title: string
+  image: string | null
+}
+
+/**
+ * Offer.offeredItems is stored as a JSON string of `{ id, title, image }`.
+ *
+ * One parser for every route that renders offers: a malformed or unexpected
+ * value yields an empty array rather than throwing — one bad row must not take
+ * down a whole page — and every field is coerced to the wire type explicitly
+ * instead of trusted. Kept beside v1Item() so the item-image coercion rules
+ * live in one place.
+ */
+export function parseOfferedItems(raw: string | null | undefined): OfferedItemBrief[] {
+  if (!raw) return []
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed
+      .filter((x): x is Record<string, unknown> => !!x && typeof x === "object")
+      .map((x) => ({
+        id: String(x.id ?? ""),
+        title: typeof x.title === "string" ? x.title : "Item",
+        image: typeof x.image === "string" ? x.image : null,
+      }))
+  } catch {
+    return []
+  }
+}

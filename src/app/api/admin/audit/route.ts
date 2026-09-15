@@ -33,8 +33,10 @@ export const dynamic = "force-dynamic"
 const querySchema = z.strictObject({
   ...paginationShape,
   actorId: z.string().min(1).max(64).optional(),
-  targetType: z.enum(["REPORT", "LISTING", "USER"]).optional(),
+  targetType: z.enum(["REPORT", "LISTING", "USER", "HUB", "ID_VERIFICATION"]).optional(),
   targetId: z.string().min(1).max(64).optional(),
+  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
+  to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
 })
 
 export async function GET(req: NextRequest) {
@@ -43,15 +45,25 @@ export async function GET(req: NextRequest) {
 
   const parsed = parseQuery(req, querySchema)
   if (!parsed.ok) return parsed.response
-  const { limit, actorId, targetType, targetId } = parsed.data
+  const { limit, actorId, targetType, targetId, from, to } = parsed.data
   const cursor = decodeCursor(parsed.data.cursor)
   if (parsed.data.cursor && !cursor) return invalid("Malformed cursor")
+  const fromDate = from ? new Date(`${from}T00:00:00.000Z`) : undefined
+  const toDate = to ? new Date(`${to}T00:00:00.000Z`) : undefined
+  if (fromDate && Number.isNaN(fromDate.getTime())) return invalid("Invalid `from` date")
+  if (toDate && Number.isNaN(toDate.getTime())) return invalid("Invalid `to` date")
+  if (fromDate && toDate && fromDate > toDate) return invalid("`from` must be before `to`")
+  const createdAt = {
+    ...(fromDate ? { gte: fromDate } : {}),
+    ...(toDate ? { lt: new Date(toDate.getTime() + 86_400_000) } : {}),
+  }
 
   const rows = await prisma.adminAction.findMany({
     where: {
       ...(actorId ? { actorId } : {}),
       ...(targetType ? { targetType } : {}),
       ...(targetId ? { targetId } : {}),
+      ...(fromDate || toDate ? { createdAt } : {}),
       ...(olderThan(cursor) ?? {}),
     },
     select: {
