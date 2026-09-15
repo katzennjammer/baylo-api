@@ -146,6 +146,29 @@ function printLedger(label: string, txs: Awaited<ReturnType<typeof snapshot>>["t
   }
 }
 
+/**
+ * This run's accounts only: their balances against their own ledger rows.
+ * A freshly verified account has been touched by nothing but credits -- the
+ * signup grant and the VERIFY_ACCOUNT reward -- so for THESE users the sum of
+ * positive rows, the sum of all rows and the balance must be one number. That
+ * is a claim about the verification path, and it is scoped to the accounts the
+ * verification path created. It is NOT true of the whole database, which
+ * carries TRADE_SPEND and CONTRACT_PAY debits by design.
+ */
+async function runTotals() {
+  const users = await prisma.user.findMany({ where: { email: { startsWith: P } }, select: { id: true, leaves: true } })
+  const ids = users.map((u) => u.id)
+  const [positive, all] = await Promise.all([
+    prisma.leafTransaction.aggregate({ _sum: { amount: true }, where: { userId: { in: ids }, amount: { gt: 0 } } }),
+    prisma.leafTransaction.aggregate({ _sum: { amount: true }, where: { userId: { in: ids } } }),
+  ])
+  return {
+    userLeaves: users.reduce((n, u) => n + u.leaves, 0),
+    positiveRows: positive._sum.amount ?? 0,
+    allRows: all._sum.amount ?? 0,
+  }
+}
+
 /** The whole-database ledger invariant, measured rather than assumed. */
 async function ledgerTotals() {
   const [users, positive, all] = await Promise.all([
@@ -375,9 +398,11 @@ async function main() {
   const after = await ledgerTotals()
   console.log(`Ledger after:  SUM(User.leaves)=${after.userLeaves}  ` +
               `SUM(positive rows)=${after.positiveRows}  SUM(all rows)=${after.allRows}`)
-  check("SUM(User.leaves) equals the sum of positive LeafTransaction rows",
-    after.userLeaves === after.positiveRows,
-    `${after.userLeaves} vs ${after.positiveRows}`)
+  const mine = await runTotals()
+  console.log(`This run's accounts: leaves=${mine.userLeaves}  positive rows=${mine.positiveRows}  all rows=${mine.allRows}`)
+  check("this run's accounts were touched by credits only (positive rows == all rows == leaves)",
+    mine.userLeaves === mine.positiveRows && mine.positiveRows === mine.allRows,
+    `${mine.userLeaves} / ${mine.positiveRows} / ${mine.allRows}`)
   check("SUM(User.leaves) equals the sum of ALL LeafTransaction rows",
     after.userLeaves === after.allRows, `${after.userLeaves} vs ${after.allRows}`)
   check(`this run moved both sides by the same ${2 * expected}`,
