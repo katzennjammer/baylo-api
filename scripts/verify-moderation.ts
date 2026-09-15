@@ -14,7 +14,7 @@
 //   7  an admin action writes an audit row; a hidden listing leaves the feed
 //      and its owner cannot relist it
 //   8  resolving a report notifies the reporter and frees the openKey slot
-//   9  no route accepts `role` in a request body (no promotion endpoint)
+//   9  only /api/admin may change a role, and every change writes an audit row
 //  10  SUM(User.leaves) == SUM(LeafTransaction.amount) is untouched throughout
 //
 // Run (from baylo/, with a dev server on BASE):
@@ -53,6 +53,7 @@ async function call<T = unknown>(
 const GET = <T = unknown>(p: string, t: string | null) => call<T>("GET", p, t)
 const POST = <T = unknown>(p: string, t: string | null, b?: unknown) => call<T>("POST", p, t, b ?? {})
 const DEL = <T = unknown>(p: string, t: string | null) => call<T>("DELETE", p, t)
+const PATCH = <T = unknown>(p: string, t: string | null, b?: unknown) => call<T>("PATCH", p, t, b ?? {})
 
 /** SUM(User.leaves) == SUM(LeafTransaction.amount). Global, every row. */
 async function invariant(label: string) {
@@ -98,7 +99,7 @@ async function cleanup() {
   await prisma.user.deleteMany({ where: { id: { in: ids } } })
 }
 
-async function makeUser(tag: string, role: "USER" | "MODERATOR" | "ADMIN" = "USER") {
+async function makeUser(tag: string, role: "USER" | "MODERATOR" | "ADMIN" | "SUPER_ADMIN" = "USER") {
   return prisma.user.create({
     data: {
       name: `${P}${tag}`,
@@ -552,26 +553,123 @@ async function main() {
     refile.status === 200, `got ${refile.status} ${JSON.stringify(refile.body)}`)
 
   // ═══════════════════════════════════════════════════════════════════════════
-  head("9  No route can grant a role (no promotion endpoint exists)")
+  head("9  Only /api/admin may change a role, and every change is audited")
 
-  // Static check: nothing under src/app/api writes User.role.
-  const offenders: string[] = []
+  // -- WHAT THIS RULE IS, AND WHY IT CHANGED (2026-09-16) --------------------
+  //
+  // The original rule was "no API route writes User.role", and it was right
+  // when it was written: there was no admin surface, so any route touching
+  // role was a privilege-escalation hole. An admin panel that cannot manage
+  // roles is not much of a panel, so /api/admin/access now does exactly that,
+  // behind requireRole("SUPER_ADMIN").
+  //
+  // The rule is NARROWED, not dropped, and the half that mattered is stricter:
+  //
+  //   a. No route OUTSIDE /api/admin/* may write User.role. This is the
+  //      original protection -- a random endpoint cannot grant admin -- and it
+  //      is unchanged.
+  //   b. An admin route that DOES write it must also write an AdminAction, in
+  //      the SAME transaction, so a role change cannot happen without a record
+  //      of who changed whose role, from what to what, and when.
+  //
+  // Deleting the assertion would have left (a) untested. Narrowing it keeps
+  // (a) and adds (b).
+
+  const ADMIN_DIR = join("src", "app", "api", "admin")
+  const roleWriters: string[] = []
+  const outsideOffenders: string[] = []
+  const unaudited: string[] = []
+
+  /** A file that both takes `role` from input and writes it to a User. */
+  function writesRole(src: string): boolean {
+    return /\Brole\s*:\s*(body|parsed|input|data)\./.test(src)
+        || /user\.update[\s\S]{0,200}\brole\s*:/.test(src)
+  }
+
+  /**
+   * The role write and the audit write both go through the SAME transaction
+   * client. Statically that is what `tx.` on both proves: a `tx.user.update`
+   * carrying role, and a `tx.adminAction.create`, can only both be reached
+   * inside one $transaction callback. It is a proxy, not a theorem -- the
+   * dynamic check below is what actually observes the row being written.
+   */
+  function auditsInSameTransaction(src: string): boolean {
+    return /tx\.user\.update[\s\S]{0,400}\brole\s*:/.test(src)
+        && /tx\.adminAction\.create/.test(src)
+  }
+
   function walk(dir: string) {
     for (const entry of readdirSync(dir)) {
       const full = join(dir, entry)
-      if (statSync(full).isDirectory()) walk(full)
-      else if (entry.endsWith(".ts")) {
-        const src = readFileSync(full, "utf8")
-        // A route that both parses `role` from input and writes it back.
-        if (/\brole\s*:\s*(body|parsed|input|data)\./.test(src)) offenders.push(full)
-        if (/user\.update[\s\S]{0,200}\brole\s*:/.test(src)) offenders.push(full)
-      }
+      if (statSync(full).isDirectory()) { walk(full); continue }
+      if (!entry.endsWith(".ts")) continue
+      const src = readFileSync(full, "utf8")
+      if (!writesRole(src)) continue
+      const rel = full.slice(process.cwd().length + 1)
+      if (!rel.startsWith(ADMIN_DIR)) { outsideOffenders.push(rel); continue }
+      roleWriters.push(rel)
+      if (!auditsInSameTransaction(src)) unaudited.push(rel)
     }
   }
   walk(join(process.cwd(), "src", "app", "api"))
-  check("no API route writes User.role", offenders.length === 0, offenders.join(", "))
 
-  // Dynamic check: the closest route to a promotion endpoint rejects the field.
+  // THE SCAN MUST PROVE IT IS SCANNING. If the patterns above ever stop
+  // matching -- a refactor, a renamed variable -- every list goes empty and
+  // both checks below would pass having examined nothing. At least one admin
+  // route is known to change roles, so finding none means the scanner broke,
+  // not that the codebase got safer.
+  check("the role-write scan still finds the admin route(s) that change roles",
+    roleWriters.length >= 1,
+    "found none - the detection patterns no longer match any file, so the two checks below prove nothing")
+  console.log(`      admin routes that may change a role: ${roleWriters.join(", ") || "(none found)"}`)
+
+  check("no route OUTSIDE /api/admin/* writes User.role",
+    outsideOffenders.length === 0, outsideOffenders.join(", "))
+  check("every /api/admin route that writes User.role also writes an AdminAction in the same transaction",
+    unaudited.length === 0, unaudited.join(", "))
+
+  // -- Dynamically: the audit row is really written --------------------------
+  const superAdmin = await makeUser("super", "SUPER_ADMIN")
+  const tSuper = await signAccessToken(superAdmin.id)
+
+  const roleAuditBefore = await prisma.adminAction.count({ where: { action: "ROLE_CHANGED", targetId: carol.id } })
+  const promote = await PATCH("/api/admin/access", tSuper,
+    { userId: carol.id, role: "MODERATOR", reason: "promoted by the acceptance harness" })
+  check("SUPER_ADMIN can change a role -> 200", promote.status === 200,
+    `got ${promote.status} ${JSON.stringify(promote.body)}`)
+
+  const carolPromoted = await prisma.user.findUnique({ where: { id: carol.id }, select: { role: true } })
+  check("the role actually changed", carolPromoted?.role === "MODERATOR", String(carolPromoted?.role))
+
+  const roleAudit = await prisma.adminAction.findFirst({
+    where: { action: "ROLE_CHANGED", targetId: carol.id },
+    orderBy: { createdAt: "desc" },
+    select: { actorId: true, targetType: true, targetId: true, reason: true, detail: true, createdAt: true },
+  })
+  const roleAuditAfter = await prisma.adminAction.count({ where: { action: "ROLE_CHANGED", targetId: carol.id } })
+  check("exactly one new ROLE_CHANGED audit row", roleAuditAfter === roleAuditBefore + 1, `${roleAuditBefore} -> ${roleAuditAfter}`)
+  check("the audit row records WHO made the change", roleAudit?.actorId === superAdmin.id, String(roleAudit?.actorId))
+  check("the audit row records WHOSE role changed",
+    roleAudit?.targetId === carol.id && roleAudit?.targetType === "USER", `${roleAudit?.targetType} ${roleAudit?.targetId}`)
+  check("the audit row records the reason", (roleAudit?.reason ?? "").includes("acceptance harness"), String(roleAudit?.reason))
+  const roleDetail = (() => { try { return JSON.parse(roleAudit?.detail ?? "{}") as Record<string, unknown> } catch { return {} } })()
+  check("the audit row records FROM what and TO what",
+    roleDetail.from === "USER" && roleDetail.to === "MODERATOR", JSON.stringify(roleDetail))
+  check("the audit row records WHEN",
+    !!roleAudit?.createdAt && Date.now() - roleAudit.createdAt.getTime() < 120_000, String(roleAudit?.createdAt))
+
+  // The gate is SUPER_ADMIN, not merely admin: a plain ADMIN cannot promote.
+  const byAdmin = await PATCH("/api/admin/access", tAdmin,
+    { userId: alice.id, role: "ADMIN", reason: "should not be allowed" })
+  check("a plain ADMIN cannot change a role -> 403", byAdmin.status === 403,
+    `got ${byAdmin.status} ${JSON.stringify(byAdmin.body)}`)
+  const aliceRow = await prisma.user.findUnique({ where: { id: alice.id }, select: { role: true } })
+  check("and that user's role is untouched", aliceRow?.role === "USER", String(aliceRow?.role))
+
+  // Put carol back, so the rest of the run sees the fixture it expects.
+  await prisma.user.update({ where: { id: carol.id }, data: { role: "USER" } })
+
+  // The closest route to a promotion endpoint still rejects the field outright.
   const escalate = await POST(`/api/admin/users/${carol.id}`, tAdmin,
     { action: "suspend", reason: "x", role: "ADMIN" })
   check("sending `role` to the user admin route -> 400 (strict schema rejects it)",
@@ -579,7 +677,7 @@ async function main() {
   const carolRow = await prisma.user.findUnique({ where: { id: carol.id }, select: { role: true } })
   check("and the role did not change", carolRow?.role === "USER", String(carolRow?.role))
 
-  // ═══════════════════════════════════════════════════════════════════════════
+  // ===========================================================================
   head("10  Unblocking restores what the block hid")
 
   const unblock = await DEL(`/api/v1/blocks/${mallory.id}`, tAlice)
