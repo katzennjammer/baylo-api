@@ -219,7 +219,7 @@ Going the other way (back onto the branch) is the same shape:
 `DATABASE_URL` in `.env`.
 
 If the MySQL database itself is damaged, the most recent verified dump is in
-`D:\BAYLOackups\` (named `baylo-YYYYMMDD-HHMMSS.sql`); restore it with
+`D:\BAYLO\backups\` (named `baylo-YYYYMMDD-HHMMSS.sql`); restore it with
 `mysql -u root < that-file.sql`. Confirm `scripts/backup-baylo.ps1 -VerifyOnly`
 passes on the file before you restore from it.
 
