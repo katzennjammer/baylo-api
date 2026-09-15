@@ -34,6 +34,14 @@ function check(name: string, cond: boolean, detail = "") {
 //
 // SUM(calls) over SELECTs only, so the probe's own writes do not count. COUNT
 // comes back as bigint on Postgres; Number() it.
+//
+// THE COUNTER MUST PROVE ITSELF BEFORE ANYTHING IS MEASURED. A counter that
+// reads zero forever -- extension missing, view not readable by this role,
+// stats reset mid-run -- would turn every query-count assertion below into
+// one that cannot fail, which is worse than no assertion. calibrate() runs a
+// known SELECT between two reads and refuses to continue unless the counter
+// moved by at least that one statement. It throws rather than returning a
+// zero, and the top-level catch exits non-zero.
 
 async function comSelect(): Promise<number> {
   const rows = await prisma.$queryRaw<{ n: bigint | number | null }[]>`
@@ -41,14 +49,38 @@ async function comSelect(): Promise<number> {
     FROM pg_stat_statements
     WHERE query ILIKE 'SELECT%'
   `
-  return Number(rows[0]?.n ?? 0)
+  if (rows.length !== 1 || rows[0].n === null || rows[0].n === undefined) {
+    throw new Error("pg_stat_statements returned no row -- the counter is unreadable")
+  }
+  return Number(rows[0].n)
 }
 
 let probeOverhead = 0
 async function calibrate() {
-  const a = await comSelect()
+  let a: number
+  try {
+    a = await comSelect()
+  } catch (e) {
+    throw new Error(
+      "QUERY COUNTER UNAVAILABLE: " + (e as Error).message +
+      "\n  pg_stat_statements must be installed and readable by DATABASE_URL's role.\n" +
+      "  Refusing to run: every query-count assertion below would pass with nothing measured.",
+    )
+  }
+  // One statement the counter cannot miss. If the delta is not at least 1 the
+  // counter is not counting, whatever it returned.
+  await prisma.$queryRaw`SELECT 1 AS "probe"`
   const b = await comSelect()
-  probeOverhead = b - a
+  if (b - a < 1) {
+    throw new Error(
+      `QUERY COUNTER NOT COUNTING: read ${a} then ${b} across a known SELECT.\n` +
+      "  Refusing to run: every query-count assertion below would pass with nothing measured.",
+    )
+  }
+  // Now the overhead of the reads themselves, measured rather than assumed.
+  const c = await comSelect()
+  const d = await comSelect()
+  probeOverhead = d - c
 }
 
 interface Measured { status: number; body: unknown; queries: number }
