@@ -8,22 +8,32 @@
 //                         Ranks, badges and profile display key off this, so a
 //                         user never loses rank by spending what they earned.
 //
-// VERIFIED_SWAP and SAFEZONE_MEETUP are repeatable (once per trade); the rest
-// are one-time. Faucet limits live here too — see WEEKLY_TASK_LEAF_CAP and
+// SAFEZONE_MEETUP is repeatable (once per trade); the rest are one-time.
+// Faucet limits live here too — see WEEKLY_TASK_LEAF_CAP and
 // NEW_PARTNER_WINDOW_DAYS.
+//
+// ── VERIFIED_SWAP IS GONE (16 Sep 2026) ─────────────────────────────────────
+// It paid a flat 20 Leaves per completed trade. The per-trade payout is now
+// TRADE_REWARD — 2 x the bracket of the item you gave, see @/lib/trade-rules —
+// and the two could not coexist: a bracket-1 bridge costs 10 Leaves, so a flat
+// 20 on top of the reward would have paid 22 for the trade the fee was meant
+// to price. The rows it wrote stay in TaskCompletion (the enum value survives
+// in the schema for them); nothing awards it, and the backfill no longer lists
+// it as eligible. What it became is FIRST_TRADE: the same 20, ONCE, for the
+// first trade this account ever completes — a milestone rather than a faucet.
 
 export type TaskKey =
   | "VERIFY_ACCOUNT"
   | "COMPLETE_PROFILE"
   | "FIRST_LISTING"
-  | "VERIFIED_SWAP"
+  | "FIRST_TRADE"
   | "SAFEZONE_MEETUP"
 
 export const TASK_REWARDS: Record<TaskKey, number> = {
   VERIFY_ACCOUNT:   10,
   COMPLETE_PROFILE: 10,
   FIRST_LISTING:    15,
-  VERIFIED_SWAP:    20,
+  FIRST_TRADE:      20,
   SAFEZONE_MEETUP:  10,
 }
 
@@ -31,7 +41,7 @@ export const TASK_ORDER: TaskKey[] = [
   "VERIFY_ACCOUNT",
   "COMPLETE_PROFILE",
   "FIRST_LISTING",
-  "VERIFIED_SWAP",
+  "FIRST_TRADE",
   "SAFEZONE_MEETUP",
 ]
 
@@ -46,11 +56,13 @@ export const TASK_ORDER: TaskKey[] = [
 // separately gated.
 export const WEEKLY_TASK_LEAF_CAP = 100
 
-// BOTH REPEATABLE TASKS — VERIFIED_SWAP and SAFEZONE_MEETUP — award only when
-// the counterparty is someone the user has not completed a trade with inside
-// this window. Repeat trades with the same partner still complete normally,
-// they just award nothing; otherwise two users could swap the same two items
-// back and forth and mint Leaves forever.
+// THE REPEATABLE TASK — SAFEZONE_MEETUP — awards only when the counterparty is
+// someone the user has not completed a trade with inside this window. Repeat
+// trades with the same partner still complete normally, they just award
+// nothing; otherwise two users could swap the same two items back and forth
+// and mint Leaves forever. (VERIFIED_SWAP carried the same guard until it was
+// folded into TRADE_REWARD, which has its own, tighter set — see
+// @/lib/trade-rules.)
 //
 // SAFEZONE_MEETUP was outside this rule until 28 Aug 2026, which left exactly
 // the faucet the rule exists to prevent: a colluding pair collected 10 Leaves

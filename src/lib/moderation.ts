@@ -214,8 +214,18 @@ export type AdminActionKind =
   | "ID_VERIFICATION_APPROVED"
   | "ID_VERIFICATION_REJECTED"
   | "ROLE_CHANGED"
+  // Bracket trading (16 Sep 2026). A value review is a decision about what a
+  // listing may CLAIM to be worth -- the bracket it trades in -- and both
+  // outcomes are recorded with both numbers in `detail`. A reward reversal
+  // moves Leaves, which is the one thing nothing else in this log does; the
+  // ledger rows it writes point at the trade, this row says who and why. A
+  // cancellation is an act on the parties' behalf and names the reason.
+  | "LISTING_VALUE_APPROVED"
+  | "LISTING_VALUE_REJECTED"
+  | "TRADE_REWARD_REVERSED"
+  | "TRADE_CANCELLED"
 
-export type AdminTargetType = "REPORT" | "LISTING" | "USER" | "HUB" | "ID_VERIFICATION"
+export type AdminTargetType = "REPORT" | "LISTING" | "USER" | "HUB" | "ID_VERIFICATION" | "TRADE"
 
 /** A Prisma client or a transaction client. */
 type Db = PrismaClient | Prisma.TransactionClient

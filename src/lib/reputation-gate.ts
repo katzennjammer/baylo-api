@@ -238,14 +238,20 @@ export async function enforceItemValueCeiling(
   })
   if (!over) return null
 
+  // BRACKETS, NOT VALUES, in the sentence and on the wire. This is the other
+  // person's item, and "valued at 480 Leaves" was the one place in the offer
+  // flow that still said the number. The cap itself is a Leaves figure in the
+  // tier table; it is reported as the bracket it falls in.
+  const itemBracket = bracketOf(over.valueLeaves as number)
+  const capBracket = bracketOf(cap)
   return forbidden(
-    `"${over.title}" is valued at ${over.valueLeaves} Leaves. As a ${standing.tier} you can trade for ` +
-      `items up to ${cap} Leaves — complete more trades to raise the limit.`,
+    `"${over.title}" is in Bracket ${itemBracket}. As a ${standing.tier} you can trade for ` +
+      `items up to Bracket ${capBracket} — complete more trades to raise the limit.`,
     {
       code: "TIER_ITEM_VALUE_CAP",
       tier: standing.tier,
-      cap,
-      itemValueLeaves: over.valueLeaves,
+      capBracket,
+      itemBracket,
     },
   )
 }
@@ -281,11 +287,12 @@ export async function enforceReachForListing(
   const listingBracket = bracketOf(listing.valueLeaves)
   if (listingBracket <= reach) return null
 
-  const bracketsAbove = listingBracket - reach
+  // The sentence the popup shows. It used to count "brackets above your
+  // reach", which read as "1 level or higher is not allowed" to the people it
+  // was shown to. What the rule actually is: one bracket up, and no more.
   return forbidden(
-    `You cannot send an offer for "${listing.title}" yet. This item is ${bracketsAbove} ` +
-      `${bracketsAbove === 1 ? "bracket" : "brackets"} above your current reach. ` +
-      "Trade for items closer to what you own to move your reach higher.",
+    `Trading 2 or more brackets above your item isn't allowed. You can go up by one bracket at most. ` +
+      `"${listing.title}" is Bracket ${listingBracket}; your best item reaches Bracket ${reach}.`,
     { code: "ITEM_OUT_OF_REACH", reach, listingBracket },
   )
 }

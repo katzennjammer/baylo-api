@@ -347,8 +347,10 @@ export async function POST(
           [trade.senderId,   trade.receiverId],
           [trade.receiverId, trade.senderId],
         ] as const) {
-          await awardTask(tx, uid, "VERIFIED_SWAP", tradeId, {
-            partnerId, tradeId, description: "Task reward: completed a verified swap",
+          // FIRST_TRADE, once per account, refId "". The per-trade payout is
+          // TRADE_REWARD (below) since 16 Sep 2026; see @/lib/trade-rules.
+          await awardTask(tx, uid, "FIRST_TRADE", "", {
+            tradeId, description: "Task reward: completed your first trade",
           })
           // NULL hub means no claim. The award condition is the foreign key
           // itself -- there is no separate flag that could disagree with it.

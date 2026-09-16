@@ -131,7 +131,10 @@ async function main() {
     const s = suppressed[task] ?? { rows: 0, leaves: 0 }
     const k = kept[task] ?? { rows: 0, leaves: 0 }
     const total = s.rows + k.rows
-    console.log(`  ${task}   (${TASK_REWARDS[task as "VERIFIED_SWAP"]} Leaves each)`)
+    // VERIFIED_SWAP left TASK_REWARDS on 16 Sep 2026; its historical rate is
+    // what the rows examined here were paid at.
+    const rate = task === "VERIFIED_SWAP" ? 20 : TASK_REWARDS[task as "SAFEZONE_MEETUP"]
+    console.log(`  ${task}   (${rate} Leaves each)`)
     console.log(`    rows examined      ${String(total).padStart(5)}`)
     console.log(`    would be SUPPRESSED${String(s.rows).padStart(5)}   (${s.leaves} Leaves already paid)`)
     console.log(`    would still award  ${String(k.rows).padStart(5)}   (${k.leaves} Leaves)`)

@@ -3,7 +3,7 @@ import { resolveSession } from "@/lib/api-auth"
 import prisma from "@/lib/prisma"
 import { parseBody, updateItemSchema } from "@/lib/validation"
 import { imageHashRows, leadImageHash } from "@/lib/image-hashes"
-import { decideItemValue } from "@/lib/valuation-server"
+import { decideItemValue, reviewNotice } from "@/lib/valuation-server"
 import { isBlockedEitherWay } from "@/lib/blocking"
 import {
   ITEM_PUBLIC_SELECT,
@@ -111,7 +111,7 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
     const item = await prisma.item.findUnique({
       where: { id },
       select: {
-        userId: true, category: true, condition: true, valueLeaves: true,
+        userId: true, category: true, condition: true, valueLeaves: true, status: true,
         // Compared against the incoming array to tell a real photo change from
         // the web wizard restating the images it already had. See the hash
         // block below.
@@ -143,29 +143,64 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
       body.category !== undefined || body.condition !== undefined || body.valueLeaves !== undefined
 
     let valuationData: Record<string, unknown> = {}
+    let valueReview: { decision: string; pending: boolean; notice: string | null } | null = null
     if (valuationTouched) {
+      // ── LOCKED WHILE AN OFFER STANDS ──────────────────────────────────────
+      // The value sets the bracket, and the bracket is what a pending offer
+      // was judged on. Moving it under a live offer would let the owner turn
+      // a same-bracket offer into a bridge (and bill the proposer a fee they
+      // never consented to) or a legal offer into an illegal one. So while
+      // any PENDING offer names this listing, or the listing is locked in a
+      // trade, the three valuation inputs are read-only. Title, photos and
+      // the rest still edit.
+      if (item.status === "IN_TRADE") {
+        return NextResponse.json(
+          { error: "This listing is in an active trade. Its value can be changed once the trade ends.", code: "VALUE_LOCKED_IN_TRADE" },
+          { status: 409 },
+        )
+      }
+      const standing = await prisma.offer.count({ where: { postId: id, status: "PENDING" } })
+      if (standing > 0) {
+        return NextResponse.json(
+          {
+            error: "An offer on this listing is waiting for your answer. Accept or decline it first — the value can be changed after that.",
+            code: "VALUE_LOCKED_BY_OFFER",
+            pendingOffers: standing,
+          },
+          { status: 409 },
+        )
+      }
+
       const category = body.category ?? item.category
       const condition = body.condition ?? item.condition
       // `valueLeaves` omitted while the category or condition moved means the
-      // owner did not restate a price, so the stored one is what is being
-      // re-checked against the new suggestion. If it no longer fits the new
-      // band the request is rejected rather than silently re-priced: the owner
-      // asked for a condition change, and being told the price no longer fits
-      // is more useful than having the price changed without being told.
+      // owner did not restate a value, so the stored one is what is being
+      // re-judged against the new suggestion. It follows the same rules as a
+      // typed value: if the new suggestion puts it more than one bracket
+      // above, the listing goes to review rather than being silently
+      // re-priced — the owner asked for a condition change, and being told
+      // the value now needs a look is more useful than having it changed
+      // without being told.
       const requested = body.valueLeaves !== undefined ? body.valueLeaves : item.valueLeaves
 
       const valued = await decideItemValue(category, condition, requested)
-      if (!valued.ok) {
-        return NextResponse.json(
-          {
-            error: valued.message,
-            suggestedLeaves: valued.suggestedLeaves,
-            allowed: valued.allowed,
-          },
-          { status: 400 },
-        )
+      valuationData = {
+        ...valued.data,
+        // Three states move here: an AVAILABLE listing whose new value needs
+        // review is hidden; a PENDING_REVIEW listing (rejected, or waiting)
+        // whose owner has brought the value back within the cap goes live;
+        // anything else keeps its status.
+        ...(valued.needsReview
+          ? { status: "PENDING_REVIEW" as const }
+          : item.status === "PENDING_REVIEW"
+            ? { status: "AVAILABLE" as const }
+            : {}),
       }
-      valuationData = valued.data
+      valueReview = {
+        decision: valued.decision,
+        pending: valued.needsReview,
+        notice: valued.needsReview ? reviewNotice(valued.data.valueLeaves, valued.data.suggestedLeaves) : null,
+      }
     }
 
     // ── Safe-Zone hubs ──────────────────────────────────────────────────────
@@ -284,7 +319,7 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
       ? await prisma.item.findUniqueOrThrow({ where: { id }, select: ITEM_WITH_HUBS_SELECT })
       : updated
 
-    return NextResponse.json(shapeItemWithHubs(finalRow, session.user.id))
+    return NextResponse.json({ ...shapeItemWithHubs(finalRow, session.user.id), valueReview })
   } catch {
     return NextResponse.json({ error: "Internal server error" }, { status: 500 })
   }

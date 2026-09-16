@@ -4,11 +4,10 @@ import {
   comparablesWhere,
   COMPARABLE_SELECT,
   MAX_COMPARABLES,
-  isWithinOverrideBand,
-  overrideBounds,
-  OVERRIDE_BAND_PCT,
   type Valuation,
 } from "@/lib/valuation"
+import { bracketOf } from "@/lib/brackets"
+import { classifyValue, valueCap, type ValueDecision } from "@/lib/trade-rules"
 
 /**
  * The database half of the valuation model.
@@ -21,10 +20,10 @@ import {
  *
  * Everything that needs a valuation goes through here — the /api/v1/valuation
  * endpoint, its deprecated /api/ai/value shim, and the item create and update
- * handlers that enforce the override band. That matters more than it sounds: if
- * the endpoint that shows the user a suggestion and the handler that validates
- * their override were to compute the suggestion differently, the server would
- * reject values its own slider allowed the user to pick.
+ * handlers that enforce the value cap. That matters more than it sounds: if
+ * the endpoint that shows the user a suggestion and the handler that judges
+ * their own value were to compute the suggestion differently, the server would
+ * route to review values its own wizard said were fine.
  */
 
 /** Comparables for a category, in a stable order. See the orderBy note. */
@@ -51,37 +50,61 @@ export async function valuate(category: string, condition: string): Promise<Valu
 
 export interface ValuationDecision {
   /** Columns to merge into the Prisma create/update `data`. */
-  data: { valueLeaves: number; suggestedLeaves: number; valuationSource: string }
+  data: {
+    valueLeaves: number
+    suggestedLeaves: number
+    valuationSource: string
+    valueSetByUser: boolean
+  }
   /** The valuation that produced them, for the caller's response or logging. */
   valuation: Valuation
+  /** Which of the four cases the request fell in. */
+  decision: ValueDecision
+  /**
+   * TRUE when the listing must not go live until an admin approves it. The
+   * caller writes `status: PENDING_REVIEW` (on create) or moves an AVAILABLE
+   * listing there (on edit); this function only decides, it never writes.
+   */
+  needsReview: boolean
+  /** The cap the request was judged against, for the caller's response. */
+  cap: ReturnType<typeof valueCap>
 }
 
-export interface ValuationRejection {
-  ok: false
-  message: string
-  suggestedLeaves: number
-  allowed: { min: number; max: number }
-}
-
-export type ValuationOutcome = ({ ok: true } & ValuationDecision) | ValuationRejection
+export type ValuationOutcome = { ok: true } & ValuationDecision
 
 /**
- * Decide what value a listing gets, and whether the user's number is allowed.
+ * Decide what value a listing gets, and whether it can go live with it.
  *
  * THE SERVER RECOMPUTES THE SUGGESTION. It does not accept one from the client
- * and check the override against that — a client that supplies both the
- * suggestion and the "override" of it has not been bounded by anything. Because
- * the model is deterministic, the server can derive the same suggestion the
- * client was shown from the same two labels, so there is nothing the client
- * needs to be trusted about. This is a property the previous design could not
- * have had at any price: a stochastic model cannot re-derive its own earlier
- * answer, so an LLM-priced listing could only ever be validated against a
- * number the client asserted.
+ * and judge the request against that — a client that supplies both the
+ * suggestion and the "override" of it has not been bounded by anything.
+ * Because the model is deterministic, the server can derive the same
+ * suggestion the client was shown from the same two labels, so there is
+ * nothing the client needs to be trusted about.
  *
- * `requestedValue` null or 0 means "no value given" — that is what every
- * shipped client sends for an unset price. Those listings take the suggestion
- * as their value rather than storing NULL, so that a listing always carries a
- * value and the override band always has something to be measured against.
+ * ── THE RULES (16 Sep 2026) ─────────────────────────────────────────────────
+ *
+ * The value sets the bracket, and the bracket is what trading is judged on,
+ * so raising it is raising your reach. Hence:
+ *
+ *   no number, or the suggestion itself   the suggestion stands; not user-set
+ *   LOWER than the suggestion              allowed, always. Nobody games a
+ *                                          bracket downwards.
+ *   HIGHER, up to ONE bracket above the    allowed, user-set, live at once.
+ *   suggestion's bracket
+ *   HIGHER than that                       stored as REQUESTED, user-set, and
+ *                                          `needsReview` — the listing waits
+ *                                          in PENDING_REVIEW for an admin.
+ *
+ * This replaced a ±25% band that REFUSED anything outside it with a 400. The
+ * band did two things badly: it blocked honest lowering (a 25% floor on a
+ * suggestion that was simply wrong), and 25% up was sometimes no bracket at
+ * all and sometimes two. A bracket cap is the rule the trading side actually
+ * cares about, and review instead of refusal means a genuinely undervalued
+ * item still has a path.
+ *
+ * There is no `ok: false` any more. Every request has an answer; the caller
+ * decides what a `needsReview` answer means for the row's status.
  */
 export async function decideItemValue(
   category: string,
@@ -90,37 +113,32 @@ export async function decideItemValue(
 ): Promise<ValuationOutcome> {
   const valuation = await valuate(category, condition)
   const { suggestedLeaves, valuationSource } = valuation
+  const cap = valueCap(suggestedLeaves)
+  const decision = classifyValue(requestedValue, suggestedLeaves)
 
-  // No number from the user: the suggestion stands as the value. Not an
-  // override, so nothing to bound.
-  if (requestedValue == null || requestedValue <= 0) {
-    return {
-      ok: true,
-      valuation,
-      data: { valueLeaves: suggestedLeaves, suggestedLeaves, valuationSource },
-    }
-  }
-
-  if (!isWithinOverrideBand(requestedValue, suggestedLeaves)) {
-    const allowed = overrideBounds(suggestedLeaves)
-    return {
-      ok: false,
-      suggestedLeaves,
-      allowed,
-      // Names the suggestion and the bounds. An error that says only "out of
-      // range" leaves the caller to guess at the range, and the guess is a
-      // retry loop.
-      message:
-        `Value must be within ${Math.round(OVERRIDE_BAND_PCT * 100)}% of the suggested ` +
-        `${suggestedLeaves.toLocaleString("en-US")} Leaves for a ${condition.replace("_", " ").toLowerCase()} ` +
-        `${category.toLowerCase()} item — that is ${allowed.min.toLocaleString("en-US")} to ` +
-        `${allowed.max.toLocaleString("en-US")} Leaves. You sent ${requestedValue.toLocaleString("en-US")}.`,
-    }
-  }
+  const userSet = decision !== "suggested"
+  const valueLeaves = userSet ? Math.trunc(requestedValue as number) : suggestedLeaves
 
   return {
     ok: true,
     valuation,
-    data: { valueLeaves: requestedValue, suggestedLeaves, valuationSource },
+    decision,
+    needsReview: decision === "needsReview",
+    cap,
+    data: { valueLeaves, suggestedLeaves, valuationSource, valueSetByUser: userSet },
   }
+}
+
+/**
+ * The sentence the owner is told when their value goes to review, and the
+ * one an edit sheet shows in advance. One place, so the wizard, the edit
+ * path and the notification agree on the words.
+ */
+export function reviewNotice(requested: number, suggestedLeaves: number): string {
+  const cap = valueCap(suggestedLeaves)
+  return (
+    `Values above Bracket ${cap.maxBracketWithoutReview} are checked first. ` +
+    `${requested.toLocaleString("en-US")} Leaves is Bracket ${bracketOf(requested)}, so this listing ` +
+    `will show only to you until an admin approves it.`
+  )
 }

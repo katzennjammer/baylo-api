@@ -58,6 +58,7 @@
 //   npx tsx --env-file=.env scripts/pg-backup.ts drill <in-file>   (rehearse a restore safely)
 //   npx tsx --env-file=.env scripts/pg-backup.ts counts            (live counts, for verification)
 import { Client, types } from "pg"
+import { LEDGER_INVARIANT_SQL, figuresFromRow, judge } from "./lib/ledger-invariant"
 import { createWriteStream, existsSync } from "node:fs"
 import { readFile } from "node:fs/promises"
 
@@ -156,11 +157,15 @@ function parentFirst(rows: Record<string, unknown>[], parentCol: string): Record
   return out
 }
 
-async function invariant(pg: Client) {
-  const r = (await pg.query(`
-    SELECT (SELECT COALESCE(SUM(leaves), 0) FROM "User")::text AS user_leaves,
-           (SELECT COALESCE(SUM(amount), 0) FROM "LeafTransaction")::text AS ledger`)).rows[0]
-  return { userLeaves: Number(r.user_leaves), ledger: Number(r.ledger) }
+/**
+ * The full reconciliation (three checks since bracket trading, 16 Sep 2026),
+ * from the shared definition in scripts/lib/ledger-invariant.ts. `ok` is all
+ * three; `userLeaves`/`ledger` are still printed on their own line because
+ * backup-baylo-pg.ps1 parses that line by regex.
+ */
+async function invariant(pg: Client, schema = "public") {
+  const r = (await pg.query(LEDGER_INVARIANT_SQL(schema))).rows[0]
+  return judge(figuresFromRow(r))
 }
 
 // ── dump ─────────────────────────────────────────────────────────────────────
@@ -214,10 +219,11 @@ async function dump(outPath: string) {
   }
 
   await write(`COMMIT;\n\n`)
-  // The trailer. backup-baylo-pg.ps1 parses these two lines and checks them
+  // The trailer. backup-baylo-pg.ps1 parses these three lines and checks them
   // against the live database, so a half-written file cannot pass as whole.
   await write(`-- rowcounts: ${Object.entries(counts).map(([t, n]) => `${t}=${n}`).join(" ")}\n`)
   await write(`-- invariant: userLeaves=${inv.userLeaves} ledger=${inv.ledger}\n`)
+  await write(`-- escrow: escrow=${inv.escrow} held=${inv.held} issuance=${inv.issuance}\n`)
   await write(`${TRAILER}\n`)
   await new Promise<void>((res, rej) => out.end((e: Error | null) => (e ? rej(e) : res())))
   await pg.end()
@@ -271,10 +277,9 @@ async function restore(inPath: string, force: boolean) {
     if (live !== Number(n)) { bad++; console.log(`  MISMATCH ${t}: file says ${n}, database has ${live}`) }
   }
   const inv = await invariant(pg)
-  console.log(`  restored; invariant SUM(User.leaves)=${inv.userLeaves} SUM(amount)=${inv.ledger} ` +
-    `${inv.userLeaves === inv.ledger ? "holds" : "BROKEN"}`)
+  console.log(`  restored; ${inv.lines.join("; ")}`)
   await pg.end()
-  if (bad || inv.userLeaves !== inv.ledger) process.exit(1)
+  if (bad || !inv.ok) process.exit(1)
   console.log("\n  RESTORED AND VERIFIED\n")
 }
 
@@ -357,12 +362,9 @@ async function drill(inPath: string) {
       else if (restored !== live) { console.log(`  note     ${t}: restored ${restored}, live is now ${live} (written since the dump)`) }
     }
 
-    const inv = (await pg.query(`
-      SELECT (SELECT COALESCE(SUM(leaves), 0) FROM "${DRILL_SCHEMA}"."User")::text AS u,
-             (SELECT COALESCE(SUM(amount), 0) FROM "${DRILL_SCHEMA}"."LeafTransaction")::text AS l`)).rows[0]
-    const u = Number(inv.u), l = Number(inv.l)
+    const inv = await invariant(pg, DRILL_SCHEMA)
     console.log(`  restored ${rows} rows across ${checkedTables} tables`)
-    console.log(`  invariant in the restored copy: SUM(User.leaves)=${u}  SUM(amount)=${l}  ${u === l ? "holds" : "BROKEN"}`)
+    for (const line of inv.lines) console.log(`  restored copy: ${line}`)
 
     // Spot-check that a timestamp survived the round trip as the same instant.
     const ts = (await pg.query(`
@@ -378,7 +380,7 @@ async function drill(inPath: string) {
       console.log(`  every User.createdAt in the restored copy is the same instant as live`)
     }
 
-    if (bad || u !== l) { console.error("\n  DRILL FAILED\n"); process.exitCode = 1 }
+    if (bad || !inv.ok) { console.error("\n  DRILL FAILED\n"); process.exitCode = 1 }
     else console.log("\n  RESTORE DRILL PASSED -- this file rebuilds the database\n")
   } finally {
     if (built) {
@@ -402,6 +404,7 @@ async function counts() {
   const inv = await invariant(pg)
   console.log(out.join(" "))
   console.log(`invariant: userLeaves=${inv.userLeaves} ledger=${inv.ledger}`)
+  console.log(`escrow: escrow=${inv.escrow} held=${inv.held} issuance=${inv.issuance}`)
   await pg.end()
 }
 
