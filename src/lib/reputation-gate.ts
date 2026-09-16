@@ -13,7 +13,7 @@ import {
   sweepLapsedContracts,
   type DebtorStanding,
 } from "@/lib/contracts"
-import { bracketOf, PREMIUM_MIN_BRACKET, valueNeedsPremium } from "@/lib/brackets"
+import { BRACKET_COUNT, bracketOf, PREMIUM_MIN_BRACKET, valueNeedsPremium } from "@/lib/brackets"
 import { isPremium } from "@/lib/premium"
 
 /**
@@ -251,6 +251,46 @@ export async function enforceItemValueCeiling(
 }
 
 /**
+ * A user may only initiate an offer for a listing within one bracket of their
+ * highest AVAILABLE item. This mirrors the marketplace reach treatment; the
+ * server must enforce it because offers can also come from deep links or
+ * another device.
+ */
+export async function enforceReachForListing(
+  userId: string,
+  itemIds: string[],
+): Promise<NextResponse | null> {
+  const ids = itemIds.filter(Boolean)
+  if (ids.length === 0) return null
+
+  const [highest, listing] = await Promise.all([
+    prisma.item.findFirst({
+      where: { userId, status: "AVAILABLE", valueLeaves: { not: null } },
+      select: { valueLeaves: true },
+      orderBy: { valueLeaves: "desc" },
+    }),
+    prisma.item.findFirst({
+      where: { id: { in: ids } },
+      select: { title: true, valueLeaves: true },
+    }),
+  ])
+
+  if (!listing || listing.valueLeaves === null) return null
+
+  const reach = Math.min(BRACKET_COUNT, bracketOf(highest?.valueLeaves ?? 0) + 1)
+  const listingBracket = bracketOf(listing.valueLeaves)
+  if (listingBracket <= reach) return null
+
+  const bracketsAbove = listingBracket - reach
+  return forbidden(
+    `You cannot send an offer for "${listing.title}" yet. This item is ${bracketsAbove} ` +
+      `${bracketsAbove === 1 ? "bracket" : "brackets"} above your current reach. ` +
+      "Trade for items closer to what you own to move your reach higher.",
+    { code: "ITEM_OUT_OF_REACH", reach, listingBracket },
+  )
+}
+
+/**
  * The three gates that every trade-initiating route applies together.
  *
  * One call so a new initiating path cannot pick up a third of the protection,
@@ -269,6 +309,8 @@ export async function enforceInitiateTrade(
   if (locked) return { response: locked }
   const capped = await enforceItemValueCeiling(standing, acquiringItemIds)
   if (capped) return { response: capped }
+  const outOfReach = await enforceReachForListing(userId, acquiringItemIds)
+  if (outOfReach) return { response: outOfReach }
   return { response: null, standing }
 }
 

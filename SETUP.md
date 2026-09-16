@@ -176,6 +176,24 @@ Use `npm run dev:lan` instead if a phone or emulator needs to reach this server
 
 ---
 
+## Before UAT
+
+The checklist for turning a development server into one a tester can trust.
+Each item is a development convenience that must be off when a real person is
+judging the app, because each one makes the app lie about something.
+
+- [ ] **`ID_VERIFICATION_DEV_AUTO_APPROVE="0"` in `.env`.** While it is `1`,
+      every submitted ID is approved on the spot and the "under review" state
+      never happens, so a tester cannot see the gate they are meant to test.
+      Check the line appears **exactly once** -- dotenv keeps the last
+      occurrence, and a duplicate lower in the file silently wins (16 Sep 2026:
+      a stray `=1` above and a `"0"` below made every dev submit land as
+      pending). `next dev` reloads `.env` on save; no restart is needed, but
+      confirm it: submit an ID from a throwaway account and the response's
+      `meta.autoApproved` must be `false`.
+
+---
+
 ## Scripts
 
 ```bash
