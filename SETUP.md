@@ -212,8 +212,9 @@ npm run seed       # (re)seed the development data — idempotent
 npx tsx --env-file=.env scripts/verify-token-auth.ts
 ```
 
-**They create and delete rows.** Run them against your own Supabase project,
-never against the owner's. Most need a dev server running on `:3100`
+**They create and delete rows.** Run them on a **scratch schema**, never on
+the live tables — see [Scratch schemas](#scratch-schemas-for-harnesses-and-a-second-dev-server)
+below. Most need a dev server running on `:3100`
 (`ACCEPT_BASE` overrides it); the two that register accounts
 (`verify-email-verification`, `verify-mobile-auth`) need a *fresh* dev server
 each, because registration is limited to 3 per hour per client and the limiter
@@ -231,6 +232,51 @@ lives in the server's memory.
 
 `scripts/migrate-mysql-to-postgres.ts` is the one-shot data move from the old
 MariaDB database. See [Coming from MySQL](#coming-from-mysql-teammates-read-this).
+
+### Scratch schemas, for harnesses and a second dev server
+
+Supabase's free tier is one database, so the scratch unit is a **schema** in
+it: the live `DATABASE_URL` with `?schema=scratch_<name>` appended. The Prisma
+CLI builds the tables there, and since 16 Sep 2026 `src/lib/prisma.ts` hands
+the same parameter to the driver adapter, so the running code reads and writes
+there too. (Before that the runtime silently ignored it and a harness that
+believed it was on scratch was on live.) `scripts/scratch.ps1` does the whole
+dance:
+
+```powershell
+.\scripts\scratch.ps1 -Run scripts\verify-bracket-libs.ts          # push, run, drop
+.\scripts\scratch.ps1 -Push -Name scratch_http                      # a schema to keep
+.\scripts\scratch.ps1 -Seed -Name scratch_http                      # seed it
+.\scripts\scratch.ps1 -Dev  -Name scratch_http -Port 3001           # a dev server on it
+.\scripts\scratch.ps1 -Drop -Name scratch_http
+```
+
+The HTTP harnesses (`verify-*-http`, `verify-v1-endpoints`,
+`verify-bracket-trading`) drive a dev server, so the server has to be the one
+bound to scratch: start it with `-Dev` on `:3001` and point the harness at it
+(`ACCEPT_BASE=http://localhost:3001`). `verify-bracket-libs.ts` and
+`verify-safezone-faucet.ts` refuse to run on `public` at all.
+
+In PowerShell the URL is `"${base}?schema=x"`, **with braces**: `"$base?schema"`
+reads a variable named `base?schema` and hands Prisma an empty string.
+
+`scripts/check-new-enum-rows.ts` counts live rows that use an enum value an
+older client does not know. Run it before pointing a `main` checkout at a
+database a feature branch has migrated — Prisma refuses to read a row whose
+enum column holds a value outside the generated type, so one such row is a
+500 on every query that touches the table.
+
+### TODO: brackets on the wire
+
+Since 16 Sep 2026 every surface in the offer and trade flow shows other
+people's items as **brackets**, never as a Leaves figure — but that is a
+client-side rendering rule. `/api/v1/trades`, `/api/v1/items/[id]`, browse and
+home still send `valueLeaves` for non-owner items, so the number is one proxy
+away. **Next task after bracket trading merges:** send `bracket` instead of
+`valueLeaves` for every item the viewer does not own, on every v1 route, and
+move the client's `bracketOf()` calls to read the field. The grid tiles, the
+feed cards, the offer picker, the trade rows and the notifications all
+consume it, which is why it is its own task.
 
 `scripts/backup-baylo-pg.ps1` backs up the live database and verifies the dump;
 `scripts/pg-backup.ts` is the no-install dumper it falls back to, and also

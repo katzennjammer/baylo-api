@@ -2,12 +2,17 @@
 // rules, the fee ledger, the reward ledger, the offer assessment and the value
 // cap. The routes that call them are covered by verify-bracket-trading.ts.
 //
-// Runs against whatever DATABASE_URL names, with every row it writes under a
-// ZZBRKLIB_ prefix and deleted at the end. It keeps the ledger reconciliation
-// true at every step and CHECKS that it does -- the point of a fee that is a
-// real debit is that the invariant never has to be suspended for it.
+// SCRATCH SCHEMA ONLY. It refuses to run against `public`. Every row it writes
+// is under a ZZBRKLIB_ prefix and deleted at the end, and it keeps the ledger
+// reconciliation true at every step and CHECKS that it does -- but a harness
+// that creates users, trades and ledger rows does not belong on the live
+// tables, prefix or no prefix. The one run on 16 Sep 2026 that did (before
+// this guard existed) left nothing behind; that is not a licence.
 //
-//   npx tsx --env-file=.env scripts/verify-bracket-libs.ts
+//   .\scripts\scratch.ps1 -Run scripts\verify-bracket-libs.ts
+//
+// which pushes the schema to a fresh scratch_* schema, runs this with
+// DATABASE_URL pointed there, and drops it. See scripts/scratch.ps1.
 //
 // What it pins down, in order:
 //   1  offerLegality / feeForOffer over every bracket pair; bridgingFee is
@@ -26,7 +31,7 @@
 //      writes the negative rows once and moves lifetimeLeaves back
 //   6  decideItemValue(): the four decisions, valueSetByUser, needsReview
 
-import prisma from "../src/lib/prisma"
+import prisma, { databaseSchema } from "../src/lib/prisma"
 import type { Prisma } from "../src/generated/prisma/client"
 import { BRACKET_COUNT, bracketOf, bracketRange } from "../src/lib/brackets"
 import {
@@ -114,8 +119,16 @@ async function cleanup() {
 }
 
 async function main() {
+  const schema = databaseSchema()
+  if (schema === "public") {
+    console.error(
+      "\n  REFUSING TO RUN on the live schema. Use: .\\scripts\\scratch.ps1 -Run scripts\\verify-bracket-libs.ts\n",
+    )
+    process.exit(1)
+  }
+  console.log(`schema: ${schema}`)
   await cleanup()
-  const start = await invariant("at start (live data)")
+  const start = await invariant("at start")
   if (!start.ok) { console.log("\nthe live ledger does not reconcile; fix that first"); process.exit(1) }
 
   // ═══ 1  the rules ═══
@@ -430,8 +443,8 @@ async function main() {
   }
 
   await cleanup()
-  const end = await invariant("after cleanup (live data restored)")
-  check("live figures are back where they started", end.userLeaves === start.userLeaves && end.escrow === start.escrow && end.issuance === start.issuance)
+  const end = await invariant("after cleanup")
+  check("figures are back where they started", end.userLeaves === start.userLeaves && end.escrow === start.escrow && end.issuance === start.issuance)
 
   console.log(`\n${pass} passed, ${fail} failed`)
   await prisma.$disconnect()

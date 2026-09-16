@@ -142,6 +142,9 @@ async function invariant(where: string) {
 const DAY = 24 * 60 * 60 * 1000
 
 async function main() {
+  // `?schema=scratch_x` on a Postgres URL is honoured by src/lib/prisma.ts
+  // since 16 Sep 2026; before that the pattern matched and the writes went to
+  // public anyway. scripts/scratch.ps1 -Run is the way to get here.
   if (!/faucetcheck|scratch|test/i.test(process.env.DATABASE_URL ?? "")) {
     console.error(
       "\n  REFUSING TO RUN: DATABASE_URL does not look like a scratch database.\n" +
