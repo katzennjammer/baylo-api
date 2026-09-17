@@ -6,7 +6,7 @@ import { preciseAccessItemIds } from "@/lib/item-visibility"
 import { visibleItemWhere, userNotBlocked } from "@/lib/blocking"
 import { notSuspendedWhere } from "@/lib/moderation"
 import { getLeafRank } from "@/lib/task-constants"
-import { loadEffectiveTiers } from "@/lib/contracts"
+import { loadTrustTiers } from "@/lib/trust-tiers"
 import { ok, unauthenticated, invalid } from "@/lib/v1/envelope"
 import { parseQuery, paginationShape } from "@/lib/v1/query"
 import { decodeCursor, encodeCursor, olderThan, paginate } from "@/lib/v1/cursor"
@@ -27,7 +27,7 @@ export const dynamic = "force-dynamic"
  *   1  viewer row, with their own AVAILABLE item categories nested
  *   2  feed page
  *   3  pickup access for that page
- *   4  trust tiers for that page's owners (three aggregates, run in parallel)
+ *   4  trust tiers for that page's owners (two aggregates, run in parallel)
  *   5  trending categories (7-day groupBy)
  *   6  match candidates
  *   7  unread messages
@@ -104,16 +104,13 @@ export async function GET(req: NextRequest) {
   //
   // The badge on every card reads from this and NOT from `owner.totalTrades`,
   // which is a denormalised counter that has drifted above the real completed
-  // count. Deriving it here also charges DPA defaults against the tier, which
-  // is the difference between a badge that describes someone and a badge that
-  // contradicts the gate they are about to hit: without it a defaulter reads
-  // "Top Trader" right up until the server refuses to let them initiate a
-  // trade. See loadEffectiveTiers() for why it is three aggregates and not
-  // three queries per owner.
+  // count -- the difference between a badge that describes someone and a badge
+  // that contradicts the gate they are about to hit. See loadTrustTiers() for
+  // why it is two aggregates and not two queries per owner.
   //
   // Deduplicated by that function, so a page where one person posted eight of
   // the twenty listings costs exactly what a page of twenty strangers does.
-  const tiers = await loadEffectiveTiers(
+  const tiers = await loadTrustTiers(
     prisma,
     page.map((r) => ({ id: r.user.id, rating: r.user.rating })),
   )

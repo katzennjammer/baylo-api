@@ -7,7 +7,8 @@ import { awardTask } from "@/lib/tasks"
 import { MAX_CODE_ATTEMPTS } from "@/lib/swap-code"
 import { confirmSubmitSchema, parseBody } from "@/lib/validation"
 import { enforceRateLimit } from "@/lib/rate-limit-config"
-import { applyEarningsToContracts } from "@/lib/contracts"
+import { payBridgeFee } from "@/lib/bridge-fee"
+import { awardTradeRewards, rewardDenialCopy, type RewardOutcome } from "@/lib/trade-reward"
 import { resolveMeetupHub } from "@/lib/safe-zones"
 
 export async function POST(
@@ -232,30 +233,23 @@ export async function POST(
 
     // Both verified — run the atomic completion transaction
     const itemIds = [trade.offeredItemId, trade.requestedItemId]
+    // Assigned FROM the transaction rather than inside it: a variable written
+    // in a callback is, as far as the type checker is concerned, still null
+    // afterwards -- and `rewards?.sender` then narrows to `never`.
+    let rewards: { sender: RewardOutcome; receiver: RewardOutcome } | null = null
 
     try {
-      await prisma.$transaction(async (tx) => {
+      rewards = await prisma.$transaction(async (tx) => {
         const freshTrade = await tx.tradeRequest.findUnique({
           where:  { id: tradeId },
-          select: { status: true, offeredLeaves: true },
+          select: {
+            status: true,
+            offeredLeaves: true,
+            bridgeFeeLeaves: true,
+            bridgeFeePaidBySender: true,
+          },
         })
         if (freshTrade?.status === "COMPLETED") throw new Error("already_completed")
-
-        // RULE 3 -- CREDITOR CONSENT. A trade carrying a deferred agreement
-        // that the creditor has not accepted does not finalize. This check,
-        // not the accept endpoint, is what makes that true: the accept
-        // endpoint only flips a status, whereas this is the statement that
-        // refuses to hand the items over while consent is outstanding.
-        //
-        // Only PENDING_ACCEPT blocks. An ACTIVE contract is exactly the case
-        // the feature exists for -- the item changes hands now, the Leaves are
-        // owed later -- and DECLINED means the parties settled it some other
-        // way.
-        const pendingContract = await tx.deferredContract.findFirst({
-          where:  { tradeId, status: "PENDING_ACCEPT" },
-          select: { id: true },
-        })
-        if (pendingContract) throw new Error("contract_pending")
 
         const freshItems = await tx.item.findMany({
           where:  { id: { in: itemIds } },
@@ -304,9 +298,11 @@ export async function POST(
           data:  { totalTrades: { increment: 1 } },
         })
 
-        // The only legitimate movement of Leaves between users: a settled trade.
-        // Debit and credit are written in the same transaction so the ledger
-        // always balances to zero across all users.
+        // LEGACY. Leaves attached to the offer, from before 16 Sep 2026. New
+        // offers carry none -- the bridging fee below is what moves instead --
+        // but trades agreed under the old rules settle the way they were
+        // agreed. Debit and credit are written in the same transaction so the
+        // ledger always balances to zero across all users.
         if (leaves > 0) {
           await tx.user.update({ where: { id: trade.senderId },   data: { leaves: { decrement: leaves } } })
           await tx.user.update({ where: { id: trade.receiverId }, data: { leaves: { increment: leaves } } })
@@ -329,6 +325,47 @@ export async function POST(
               offerId: offer?.id, tradeId, eventAt: settledAt,
             },
           })
+        }
+
+        /*
+         * ── THE BRIDGING FEE REACHES ITS DESTINATION ────────────────────────
+         *
+         * The payer's Leaves left their balance when they committed -- the
+         * proposer at propose, the receiver at accept -- and have been in
+         * escrow since. Completion is where they land, and they land with the
+         * OTHER party: whoever handed over the higher-bracket item is the one
+         * being compensated for it.
+         *
+         * `bridgeFeePaidBySender` is read, never re-derived. The brackets can
+         * have moved since the trade was agreed (a revaluation, an approved
+         * review), and re-deriving would pay the wrong person because somebody
+         * edited a listing. See the column's note.
+         *
+         * payBridgeFee() refuses a second payment against the same offer, so a
+         * replayed settlement cannot pay twice.
+         */
+        const fee = freshTrade?.bridgeFeeLeaves ?? 0
+        if (fee > 0 && freshTrade?.bridgeFeePaidBySender !== null) {
+          const paidBySender = freshTrade!.bridgeFeePaidBySender as boolean
+          const feeTo = paidBySender ? trade.receiverId : trade.senderId
+          const feeFrom = paidBySender ? trade.sender.name : trade.receiver.name
+          // The offer this trade came from, for the ledger's offerId and for
+          // the once-only guard, which is keyed on it.
+          const feeOffer = await tx.offer.findFirst({
+            where:   { senderId: trade.senderId, postId: trade.requestedItemId, status: "ACCEPTED" },
+            select:  { id: true },
+            orderBy: { updatedAt: "desc" },
+          })
+          if (feeOffer) {
+            await payBridgeFee(tx, {
+              receiverId: feeTo,
+              proposerName: feeFrom ?? "your trading partner",
+              offerId: feeOffer.id,
+              tradeId,
+              amount: fee,
+              at: new Date(),
+            })
+          }
         }
 
         // Task rewards are awarded here, at the moment settlement completes —
@@ -368,33 +405,33 @@ export async function POST(
           }
         }
 
-        // RULE 4 -- FULFILMENT. Leaves that just landed in a debtor's balance
-        // go to their oldest open deferred agreement before they go anywhere
-        // else. Both parties are swept: the receiver was credited above, and
-        // BOTH may have collected task rewards.
-        //
-        // Inside the settlement transaction on purpose. Every payment writes a
-        // CONTRACT_PAY/CONTRACT_COLLECT ledger pair and moves both balances in
-        // the same commit as the credit that funded it, so
-        // SUM(User.leaves) == SUM(LeafTransaction.amount) is never observably
-        // broken -- not even for the instant between earning and paying.
-        //
-        // Runs AFTER awardTask so the sweep sees the task Leaves too; awardTask
-        // deliberately does not sweep on its own here, which would have swept
-        // twice for no benefit.
-        for (const uid of [trade.senderId, trade.receiverId]) {
-          await applyEarningsToContracts(tx, uid)
-        }
+        /*
+         * ── THE COMPLETION REWARD: NEW LEAVES, ONE PER SIDE ─────────────────
+         *
+         * 2 x the bracket of the item THEY gave. Issuance -- the only thing in
+         * this transaction that adds Leaves to the system rather than moving
+         * them -- so it lands inside the same commit as everything else and
+         * the reconciliation never observes a gap. The anti-farming gates
+         * (repeat pair, repeat item, daily cap) live in @/lib/trade-reward and
+         * may pay one side and refuse the other.
+         *
+         * It replaced the flat 20-Leaf VERIFIED_SWAP task on 16 Sep 2026. The
+         * two could not coexist: a bracket-1 bridge costs 10 Leaves, and a flat
+         * 20 on top of the reward would have paid 22 for the trade the fee was
+         * meant to price.
+         */
+        return awardTradeRewards(tx, {
+          id: tradeId,
+          senderId: trade.senderId,
+          receiverId: trade.receiverId,
+          offeredItemId: trade.offeredItemId,
+          requestedItemId: trade.requestedItemId,
+          completedAt: new Date(),
+        })
       })
     } catch (txErr) {
       if (txErr instanceof Error && txErr.message === "already_completed") {
         return NextResponse.json({ correct: true, completed: true })
-      }
-      if (txErr instanceof Error && txErr.message === "contract_pending") {
-        return NextResponse.json(
-          { error: "This trade has a deferred points agreement your partner has not accepted yet. It cannot be completed until they accept or decline it." },
-          { status: 409 },
-        )
       }
       if (txErr instanceof Error && txErr.message === "item_traded") {
         return NextResponse.json({ error: "An item in this trade is no longer available" }, { status: 409 })
@@ -405,18 +442,24 @@ export async function POST(
       throw txErr
     }
 
+    // "+4 Leaves" belongs in the notification, not only on the screen of
+    // whoever happened to submit the second code: the other party may not have
+    // the app open, and the reward is the part they would want to know about.
+    const earned = (o: RewardOutcome | undefined) =>
+      o && o.amount > 0 ? ` +${o.amount} Leaves earned.` : ""
+
     void Promise.allSettled([
       prisma.notification.create({
         data: {
           userId: trade.senderId, type: "TRADE_COMPLETED",
-          message: `Swap with ${trade.receiver.name} completed! ${trade.offeredItem.title} ↔ ${trade.requestedItem.title}`,
+          message: `Swap with ${trade.receiver.name} completed! ${trade.offeredItem.title} ↔ ${trade.requestedItem.title}.${earned(rewards?.sender)}`,
           link: "/dashboard/trades", actorId: trade.receiverId,
         },
       }),
       prisma.notification.create({
         data: {
           userId: trade.receiverId, type: "TRADE_COMPLETED",
-          message: `Swap with ${trade.sender.name} completed! ${trade.offeredItem.title} ↔ ${trade.requestedItem.title}`,
+          message: `Swap with ${trade.sender.name} completed! ${trade.offeredItem.title} ↔ ${trade.requestedItem.title}.${earned(rewards?.receiver)}`,
           link: "/dashboard/trades", actorId: trade.senderId,
         },
       }),
@@ -428,7 +471,20 @@ export async function POST(
       }),
     ])
 
-    return NextResponse.json({ correct: true, completed: true })
+    /*
+     * What the completed screen shows. `reward` is THIS caller's own -- the
+     * other party's lands in their notification -- and `rewardNote` is the one
+     * line explaining a zero, so somebody who expected Leaves and got none is
+     * told which rule that was rather than left to guess.
+     */
+    const mine = rewards ? (isSender ? rewards.sender : rewards.receiver) : null
+    const partnerName = (isSender ? trade.receiver.name : trade.sender.name) ?? "your partner"
+    return NextResponse.json({
+      correct: true,
+      completed: true,
+      reward: mine?.amount ?? 0,
+      rewardNote: mine ? rewardDenialCopy(mine, partnerName) : null,
+    })
   } catch (err) {
     console.error("[confirm/submit]", err)
     return NextResponse.json({ error: "Internal server error" }, { status: 500 })

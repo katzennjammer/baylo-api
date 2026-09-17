@@ -15,16 +15,16 @@ import type { Prisma, PrismaClient } from "@/generated/prisma/client"
  * ID, looked at by a human — and it gates exactly two acts:
  *
  *   REQUIRES IT      POST /api/items          (listing an item)
- *                    POST /api/v1/contracts   (PROPOSING a deferred agreement)
+ *                    (deferred agreements are gone; that gate went with them)
  *
  *   DOES NOT         browsing, searching, messaging, liking, commenting,
- *                    ACCEPTING a trade, ACCEPTING a DPA
+ *                    ACCEPTING a trade
  *
  * THE ACCEPT PATHS ARE OPEN ON PURPOSE and it is the most important line here.
- * A trade or a DPA reaches an unverified user because SOMEBODY ELSE proposed
+ * A trade reaches an unverified user because SOMEBODY ELSE proposed
  * it. Refusing their accept does not protect anyone — it strands a counterparty
  * mid-trade in a situation they did not cause and cannot resolve, with an item
- * already promised. The same asymmetry enforceCanInitiateTrade() draws for DPA
+ * already promised. The same asymmetry the trade gates draw
  * defaulters, for the same reason: block the act that creates exposure, never
  * the act that discharges it.
  *
@@ -423,7 +423,7 @@ export async function loadIdVerificationState(
  * The gate's own question, as cheaply as it can be asked.
  *
  * Two indexed reads and no assembly, because this runs on the hot path of every
- * listing creation and every DPA proposal. loadIdVerificationState() above is
+ * listing creation. loadIdVerificationState() above is
  * for screens; this is for gates.
  */
 export async function isIdVerified(userId: string, db: Db = prisma): Promise<boolean> {
@@ -452,7 +452,7 @@ export const ID_VERIFICATION_REQUIRED = "ID_VERIFICATION_REQUIRED"
 /** What the user is told, once, in one place. */
 function gateMessage(what: "post" | "propose", state: IdVerificationState): string {
   const act =
-    what === "post" ? "post an item" : "propose a deferred agreement"
+    what === "post" ? "post an item" : "do that"
 
   switch (state.status) {
     case "pending":

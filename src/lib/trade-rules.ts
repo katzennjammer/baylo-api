@@ -11,11 +11,28 @@ import { BRACKET_COUNT, bracketOf, bracketRange, type Bracket } from "@/lib/brac
  * now ONE item for ONE item, judged only by bracket:
  *
  *   same bracket           allowed, free
- *   exactly one lower      allowed -- a "bridge" -- for a fee the proposer
- *                          pays, held at proposal and paid to the receiver on
- *                          completion
- *   two or more lower      refused
- *   any bracket higher     refused
+ *   one bracket apart      allowed -- a "bridge" -- for a fee
+ *   two or more apart      refused, in either direction
+ *
+ * ── WHO PAYS, AND WHY IT IS NOT ALWAYS THE PROPOSER ─────────────────────────
+ *
+ * THE SIDE THAT ENDS UP WITH THE HIGHER-BRACKET ITEM PAYS, whoever did the
+ * asking. That is the whole of the rule, and every other statement about the
+ * fee falls out of it:
+ *
+ *   fee     = 10 x the bracket of the LOWER item, which is the payer's own
+ *   payer   = whoever is handing over that lower item
+ *   when    = when that side COMMITS. The proposer commits by proposing, so a
+ *             down-bridge is held at propose. The receiver commits by
+ *             accepting, so an up-bridge is held at accept.
+ *   to whom = the counterparty, at completion.
+ *
+ * The first version of this charged the proposer always and refused an offer
+ * of anything higher than the listing outright. Refusing was wrong: somebody
+ * offering more than you asked for is not an attack, and the fee is not a
+ * penalty for asking -- it prices the bracket someone moves UP into. Charging
+ * the proposer for moving somebody else up would have been a toll on
+ * generosity.
  *
  * The fee and the completion reward are both functions of a BRACKET, never of
  * a value. That is deliberate and load-bearing: other people's listings are
@@ -48,58 +65,109 @@ export const TRADING_POLICY_PATH = "/trust#trading"
 export type OfferLegality =
   /** Same bracket. No fee. */
   | "same"
-  /** Exactly one bracket below. Allowed, for the fee. */
-  | "bridge"
+  /** Offered item one bracket BELOW the listing. The proposer moves up, and pays. */
+  | "bridgeUp"
+  /** Offered item one bracket ABOVE the listing. The receiver moves up, and pays. */
+  | "bridgeDown"
   /** Two or more below. Refused. */
   | "tooLow"
-  /** Above the listing. Refused. */
-  | "higher"
+  /** Two or more above. Refused. */
+  | "tooHigh"
 
-/** How many brackets below the target an offered item may sit. */
-export const MAX_BRACKETS_BELOW = 1
+/** How far apart the two brackets may be, in either direction. */
+export const MAX_BRACKET_GAP = 1
 
 /**
- * `offerLegality(2, 3)` → "bridge"; `(3, 3)` → "same"; `(1, 3)` → "tooLow";
- * `(4, 3)` → "higher". Pure over two brackets, so the picker, the composer and
- * both server checks are the same comparison.
+ * `offerLegality(2, 3)` → "bridgeUp" (you offer less, you move up);
+ * `(4, 3)` → "bridgeDown"; `(3, 3)` → "same"; `(1, 3)` → "tooLow";
+ * `(5, 3)` → "tooHigh".
+ *
+ * NAMED FROM THE PROPOSER'S POINT OF VIEW, because every caller is looking at
+ * a screen belonging to one of the two people and the proposer is the one
+ * choosing. "Up" is the direction the proposer's own holdings move.
+ *
+ * Pure over two brackets, so the picker, the composer and both server checks
+ * are the same comparison.
  */
 export function offerLegality(offered: Bracket, target: Bracket): OfferLegality {
-  if (offered === target) return "same"
-  if (offered > target) return "higher"
-  return target - offered <= MAX_BRACKETS_BELOW ? "bridge" : "tooLow"
+  const gap = target - offered
+  if (gap === 0) return "same"
+  if (gap > MAX_BRACKET_GAP) return "tooLow"
+  if (gap < -MAX_BRACKET_GAP) return "tooHigh"
+  return gap > 0 ? "bridgeUp" : "bridgeDown"
 }
 
-/** True for the two legalities that may actually be sent. */
+/** True for the three legalities that may actually be sent. */
 export function offerAllowed(legality: OfferLegality): boolean {
-  return legality === "same" || legality === "bridge"
+  return legality === "same" || legality === "bridgeUp" || legality === "bridgeDown"
 }
 
 // ── The bridging fee ─────────────────────────────────────────────────────────
 
-/** Leaves per bracket of the item being OFFERED. 1→2 costs 10, 6→7 costs 60. */
+/** Leaves per bracket of the LOWER item. A 1↔2 bridge costs 10, a 6↔7 costs 60. */
 export const BRIDGE_FEE_PER_BRACKET = 10
 
 /**
- * The fee for offering an item of `offeredBracket` one bracket up. `null` for
- * the top bracket: there is nothing above it to bridge to, and a caller that
- * gets null has asked a question with no answer rather than a free bridge.
+ * The fee for a bridge whose lower item sits in `lowerBracket` -- which is
+ * always the PAYER's own item, in both directions.
+ *
+ * `null` for the top bracket: a bracket-10 item cannot be the lower half of a
+ * bridge, because there is no bracket 11 for the other half to be in. A caller
+ * that gets null has asked a question with no answer rather than a free
+ * bridge. (Two bracket-10 items are "same", not a bridge, and cost nothing.)
  */
-export function bridgingFee(offeredBracket: Bracket): number | null {
-  if (offeredBracket < 1 || offeredBracket >= BRACKET_COUNT) return null
-  return BRIDGE_FEE_PER_BRACKET * offeredBracket
+export function bridgingFee(lowerBracket: Bracket): number | null {
+  if (lowerBracket < 1 || lowerBracket >= BRACKET_COUNT) return null
+  return BRIDGE_FEE_PER_BRACKET * lowerBracket
+}
+
+/** Which side of an offer pays the bridging fee. */
+export type FeePayer = "proposer" | "receiver"
+
+export interface OfferTerms {
+  legality: OfferLegality
+  allowed: boolean
+  /** 0 when there is nothing to pay, or when the pair is not allowed. */
+  fee: number
+  /** null when `fee` is 0. */
+  payer: FeePayer | null
+  /** The bracket the fee was derived from: the lower of the two. */
+  feeBracket: Bracket | null
 }
 
 /**
- * The fee an offer of `offered` for `target` carries: 0 when same-bracket, the
- * formula when it is a bridge, and `null` when the pair is not allowed at all.
- * One call for the propose route, so "is it legal" and "what does it cost"
- * cannot disagree.
+ * Everything about the money on one offer, in one call, so that "is it legal",
+ * "what does it cost" and "who pays" can never disagree.
+ *
+ * THE PAYER IS THE SIDE HANDING OVER THE LOWER ITEM -- equivalently, the side
+ * receiving the higher one. `bridgeUp` is the proposer (they offered the
+ * smaller item); `bridgeDown` is the receiver (their listing is the smaller
+ * item, and they are being offered something bigger).
+ */
+export function offerTerms(offered: Bracket, target: Bracket): OfferTerms {
+  const legality = offerLegality(offered, target)
+  const allowed = offerAllowed(legality)
+  if (!allowed || legality === "same") {
+    return { legality, allowed, fee: 0, payer: null, feeBracket: null }
+  }
+  const feeBracket = Math.min(offered, target)
+  const fee = bridgingFee(feeBracket) ?? 0
+  return {
+    legality,
+    allowed,
+    fee,
+    payer: legality === "bridgeUp" ? "proposer" : "receiver",
+    feeBracket,
+  }
+}
+
+/**
+ * Just the amount. `null` when the pair is not allowed at all, 0 when it is
+ * free -- a caller that needs to tell those apart wants `offerTerms()`.
  */
 export function feeForOffer(offered: Bracket, target: Bracket): number | null {
-  const legality = offerLegality(offered, target)
-  if (legality === "same") return 0
-  if (legality === "bridge") return bridgingFee(offered)
-  return null
+  const terms = offerTerms(offered, target)
+  return terms.allowed ? terms.fee : null
 }
 
 // ── The completion reward ────────────────────────────────────────────────────

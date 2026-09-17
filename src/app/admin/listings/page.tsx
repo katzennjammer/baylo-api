@@ -10,7 +10,7 @@ interface Props {
   searchParams: Promise<{ q?: string; status?: string }>
 }
 
-const STATUSES = ["available", "in_trade", "traded", "owned", "removed", "hidden"] as const
+const STATUSES = ["available", "pending_review", "in_trade", "traded", "owned", "removed", "hidden"] as const
 
 function chip(active: boolean): React.CSSProperties {
   return {
@@ -39,13 +39,13 @@ export default async function ListingsPage({ searchParams }: Props) {
         ...(status === "hidden"
           ? [{ moderationHiddenAt: { not: null } }]
           : status
-            ? [{ status: status.toUpperCase() as "AVAILABLE" | "IN_TRADE" | "TRADED" | "OWNED" | "REMOVED" }]
+            ? [{ status: status.toUpperCase() as "AVAILABLE" | "IN_TRADE" | "TRADED" | "OWNED" | "REMOVED" | "PENDING_REVIEW" }]
             : []),
       ],
     },
     select: {
       id: true, title: true, status: true, moderationHiddenAt: true,
-      createdAt: true, valueLeaves: true,
+      createdAt: true, valueLeaves: true, suggestedLeaves: true, valueSetByUser: true,
       user: { select: { id: true, name: true, email: true } },
     },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
@@ -98,7 +98,25 @@ export default async function ListingsPage({ searchParams }: Props) {
                   <tr key={listing.id} style={{ borderTop: "1px solid rgba(0,0,0,.06)", verticalAlign: "top" }}>
                     <td style={{ padding: "14px" }}>
                       <Link href={`/listings/${listing.id}`} style={{ color: "#21643d", fontWeight: 700 }}>{listing.title}</Link>
-                      <div style={{ color: "#777", marginTop: 4 }}>{listing.valueLeaves ?? "—"} Leaves</div>
+                      {/*
+                        BOTH numbers, always. The one the model suggested and the
+                        one the owner listed at are different facts, and the gap
+                        between them is the only thing that tells a moderator
+                        whether a listing is priced honestly. A listing that went
+                        to review shows it here as well as in the queue.
+                      */}
+                      <div style={{ color: "#777", marginTop: 4 }}>
+                        {listing.valueLeaves ?? "—"} Leaves
+                        {listing.valueSetByUser ? (
+                          <span style={{ color: "#b45309", fontWeight: 700 }}> · owner-set</span>
+                        ) : null}
+                      </div>
+                      {listing.suggestedLeaves !== null &&
+                      listing.suggestedLeaves !== listing.valueLeaves ? (
+                        <div style={{ color: "#aaa", fontSize: 12, marginTop: 2 }}>
+                          suggested {listing.suggestedLeaves.toLocaleString()}
+                        </div>
+                      ) : null}
                     </td>
                     <td style={{ padding: "14px" }}>
                       <strong>{listing.user.name}</strong>

@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { resolveSession } from "@/lib/api-auth";
 import prisma from "@/lib/prisma";
 import { availableLeaves } from "@/lib/leaves";
+import { heldBridgeFees } from "@/lib/bridge-fee";
 import { expireStaleOffers } from "@/lib/offers";
 
 export async function GET() {
@@ -18,7 +19,7 @@ export async function GET() {
   // reproduce. See the note on expireStaleOffers().
   await expireStaleOffers(prisma, { senderId: userId });
 
-  const [user, transactions, available] = await Promise.all([
+  const [user, transactions, available, held] = await Promise.all([
     prisma.user.findUnique({
       where: { id: userId },
       select: { leaves: true },
@@ -33,9 +34,14 @@ export async function GET() {
       take: 50,
     }),
     availableLeaves(prisma, userId),
+    // What is in ESCROW right now: bridging fees on this user's live offers
+    // and trades. The wallet shows a number that is theirs to spend and a
+    // number that is committed, because "why is my balance 40 lower than it
+    // was" has an answer and the ledger rows alone do not put it on screen.
+    heldBridgeFees(prisma, userId),
   ]);
 
   if (!user) return NextResponse.json({ error: "User not found" }, { status: 404 });
 
-  return NextResponse.json({ total: user.leaves, available, transactions });
+  return NextResponse.json({ total: user.leaves, available, held, transactions });
 }

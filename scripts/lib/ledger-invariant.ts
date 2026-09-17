@@ -46,6 +46,17 @@ export const ESCROW_TYPES = ["BRIDGE_FEE_HOLD", "BRIDGE_FEE_RELEASE", "BRIDGE_FE
 /** Trade statuses whose fee is still in escrow. Mirrors LIVE_TRADE_STATUSES in @/lib/bridge-fee. */
 const LIVE_TRADE_STATUSES = ["PENDING", "ACCEPTED", "CONFIRMING"] as const
 
+/**
+ * A PENDING offer holds Leaves only when the PROPOSER is the payer -- that is,
+ * when the item they offered is the lower of the two. An up-bridge quotes its
+ * fee on the offer row but holds nothing until the receiver accepts, so
+ * counting every pending fee would claim Leaves nobody has spent. See
+ * HELD_ON_OFFER_WHERE in @/lib/bridge-fee, which this mirrors in SQL.
+ */
+const OFFER_HELD_SQL = `status = 'PENDING' AND "bridgeFeeLeaves" IS NOT NULL
+        AND "offeredBracket" IS NOT NULL AND "targetBracket" IS NOT NULL
+        AND "offeredBracket" < "targetBracket"`
+
 export interface LedgerFigures {
   userLeaves: number
   ledger: number
@@ -92,7 +103,10 @@ export async function ledgerFigures(db: Db): Promise<LedgerFigures> {
     db.leafTransaction.aggregate({ _sum: { amount: true } }),
     db.leafTransaction.aggregate({ _sum: { amount: true }, where: { type: { in: [...ESCROW_TYPES] } } }),
     db.leafTransaction.aggregate({ _sum: { amount: true }, where: { type: { in: [...ISSUANCE_TYPES] } } }),
-    db.offer.aggregate({ _sum: { bridgeFeeLeaves: true }, where: { status: "PENDING" } }),
+    db.offer.findMany({
+      where: { status: "PENDING", bridgeFeeLeaves: { not: null } },
+      select: { bridgeFeeLeaves: true, offeredBracket: true, targetBracket: true },
+    }),
     db.tradeRequest.aggregate({
       _sum: { bridgeFeeLeaves: true },
       where: { status: { in: [...LIVE_TRADE_STATUSES] } },
@@ -103,7 +117,11 @@ export async function ledgerFigures(db: Db): Promise<LedgerFigures> {
     ledger: all._sum.amount ?? 0,
     escrow: -(esc._sum.amount ?? 0),
     issuance: iss._sum.amount ?? 0,
-    held: (offers._sum.bridgeFeeLeaves ?? 0) + (trades._sum.bridgeFeeLeaves ?? 0),
+    held:
+      offers
+        .filter((o) => (o.offeredBracket ?? 0) < (o.targetBracket ?? 0))
+        .reduce((n, o) => n + (o.bridgeFeeLeaves ?? 0), 0) +
+      (trades._sum.bridgeFeeLeaves ?? 0),
   }
 }
 
@@ -129,7 +147,7 @@ export function LEDGER_INVARIANT_SQL(schema = "public"): string {
          WHERE type IN (${list(ESCROW_TYPES)}))::text AS "escrow",
       (SELECT COALESCE(SUM(amount), 0) FROM ${q("LeafTransaction")}
          WHERE type IN (${list(ISSUANCE_TYPES)}))::text AS "issuance",
-      ((SELECT COALESCE(SUM("bridgeFeeLeaves"), 0) FROM ${q("Offer")} WHERE status = 'PENDING')
+      ((SELECT COALESCE(SUM("bridgeFeeLeaves"), 0) FROM ${q("Offer")} WHERE ${OFFER_HELD_SQL})
        + (SELECT COALESCE(SUM("bridgeFeeLeaves"), 0) FROM ${q("TradeRequest")}
             WHERE status IN (${list(LIVE_TRADE_STATUSES)})))::text AS "held"`
 }

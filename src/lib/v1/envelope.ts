@@ -40,6 +40,12 @@ export type ApiErrorCode =
   // may succeed later, retrying a 400 never will.
   | "CONFLICT"
   | "RATE_LIMITED"
+  // The endpoint existed and has been withdrawn. NOT "not found": a 404 tells
+  // a shipped client to retry or reinstall, and a 410 tells it -- and the
+  // person reading the error -- that the feature is gone and no version of the
+  // request will work. Deferred Points Agreements ended on 16 Sep 2026 and
+  // older APKs still call their seven routes.
+  | "GONE"
   | "INTERNAL_ERROR"
 
 const STATUS: Record<ApiErrorCode, number> = {
@@ -48,6 +54,7 @@ const STATUS: Record<ApiErrorCode, number> = {
   FORBIDDEN:        403,
   NOT_FOUND:        404,
   CONFLICT:         409,
+  GONE:             410,
   RATE_LIMITED:     429,
   INTERNAL_ERROR:   500,
 }
@@ -102,3 +109,13 @@ export const forbidden = (message: string, meta: Record<string, unknown> = {}) =
 /** 409. Right caller, right request, wrong state. */
 export const conflict = (message: string, meta: Record<string, unknown> = {}) =>
   fail("CONFLICT", message, meta)
+
+/**
+ * 410, for an endpoint that has been withdrawn.
+ *
+ * The message is shown to a person on an old build, so it says what happened
+ * and what replaced it rather than "gone". `meta.replacedBy` gives a client
+ * something to branch on if it ever wants to.
+ */
+export const gone = (message: string, meta: Record<string, unknown> = {}) =>
+  fail("GONE", message, meta)

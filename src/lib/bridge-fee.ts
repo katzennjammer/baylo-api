@@ -36,6 +36,15 @@ import type { PrismaClient } from "@/generated/prisma/client"
  * a PAID row is closed, and a second row would double-pay. That guard is what
  * makes it safe for the offer-accept path and the trade-cancel path to both
  * know how to release the same hold.
+ *
+ * ── EITHER SIDE CAN BE THE PAYER ────────────────────────────────────────────
+ *
+ * The side handing over the LOWER-bracket item pays, so a proposer who offers
+ * something smaller pays at propose, and a receiver who is offered something
+ * bigger pays at accept. Nothing in this file cares which: every function
+ * takes the payer's `userId` and the caller -- which has read `payer` from
+ * assessOffer(), or `bridgeFeePaidBySender` from the trade -- decides who that
+ * is. What this file guarantees is that one hold has exactly one close.
  */
 
 type FeeDb = Pick<PrismaClient, "user" | "leafTransaction">
@@ -163,11 +172,39 @@ async function isClosed(db: FeeDb, offerId: string): Promise<boolean> {
   return closing !== null
 }
 
+/** Trade statuses whose fee is still in escrow. */
+export const LIVE_TRADE_STATUSES = ["PENDING", "ACCEPTED", "CONFIRMING"] as const
+
 /**
- * Leaves this user has in escrow right now: the fees on their PENDING offers
- * plus the fees on their live trades (an ACCEPTED offer's fee has moved to the
- * trade row, see TradeRequest.bridgeFeeLeaves, so each hold is counted once).
- * What the wallet shows as "held on pending offers".
+ * WHAT IS ACTUALLY IN ESCROW, as a pair of `where` clauses. The one definition
+ * of it, so the wallet figure and the reconciliation cannot disagree.
+ *
+ * ── A QUOTED FEE IS NOT A HELD FEE ──────────────────────────────────────────
+ *
+ * `Offer.bridgeFeeLeaves` is set at proposal in BOTH directions -- it is what
+ * the bridge will cost, quoted, and the receiver-pays sheet needs it to show
+ * the amount before they agree. But an up-bridge holds nothing until the
+ * receiver accepts. So "held" is:
+ *
+ *   PENDING offers where the PROPOSER pays -- `offeredBracket < targetBracket`
+ *   every live trade                       -- by then the payer has committed
+ *
+ * Counting every PENDING offer's fee would claim Leaves were held that nobody
+ * has spent, and the escrow check would fail the moment somebody was offered
+ * something bigger than their listing.
+ */
+export const HELD_ON_OFFER_WHERE = {
+  status: "PENDING",
+  bridgeFeeLeaves: { not: null },
+  // The proposer-pays direction, spelled as a column comparison rather than a
+  // stored flag: both brackets are on the row, and a derived condition cannot
+  // fall out of step with them.
+  offeredBracket: { not: null },
+  targetBracket: { not: null },
+} as const
+
+/**
+ * Leaves this user has in escrow right now. What the wallet shows as "held".
  *
  * Read from the ROWS, not the ledger. The ledger-side figure is the escrow
  * total the reconciliation computes, and the two agreeing is one of its three
@@ -177,22 +214,37 @@ export async function heldBridgeFees(
   db: Pick<PrismaClient, "offer" | "tradeRequest">,
   userId: string,
 ): Promise<number> {
-  const [offers, trades] = await Promise.all([
-    db.offer.aggregate({
-      where: { senderId: userId, status: "PENDING", bridgeFeeLeaves: { not: null } },
-      _sum: { bridgeFeeLeaves: true },
+  const [offers, tradesAsSender, tradesAsReceiver] = await Promise.all([
+    // Offers this user SENT that are still pending and that they pay for.
+    db.offer.findMany({
+      where: { senderId: userId, ...HELD_ON_OFFER_WHERE },
+      select: { bridgeFeeLeaves: true, offeredBracket: true, targetBracket: true },
     }),
     db.tradeRequest.aggregate({
       where: {
         senderId: userId,
         status: { in: [...LIVE_TRADE_STATUSES] },
-        bridgeFeeLeaves: { not: null },
+        bridgeFeePaidBySender: true,
+      },
+      _sum: { bridgeFeeLeaves: true },
+    }),
+    db.tradeRequest.aggregate({
+      where: {
+        receiverId: userId,
+        status: { in: [...LIVE_TRADE_STATUSES] },
+        bridgeFeePaidBySender: false,
       },
       _sum: { bridgeFeeLeaves: true },
     }),
   ])
-  return (offers._sum.bridgeFeeLeaves ?? 0) + (trades._sum.bridgeFeeLeaves ?? 0)
-}
 
-/** Trade statuses whose fee is still in escrow. */
-export const LIVE_TRADE_STATUSES = ["PENDING", "ACCEPTED", "CONFIRMING"] as const
+  const onOffers = offers
+    .filter((o) => (o.offeredBracket as number) < (o.targetBracket as number))
+    .reduce((n, o) => n + (o.bridgeFeeLeaves ?? 0), 0)
+
+  return (
+    onOffers +
+    (tradesAsSender._sum.bridgeFeeLeaves ?? 0) +
+    (tradesAsReceiver._sum.bridgeFeeLeaves ?? 0)
+  )
+}

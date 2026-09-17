@@ -2,6 +2,8 @@ import { NextRequest } from "next/server"
 import { z } from "zod"
 import { requireRole } from "@/lib/api-auth"
 import prisma from "@/lib/prisma"
+import { bracketOf } from "@/lib/brackets"
+import { valueCap } from "@/lib/trade-rules"
 import { ok } from "@/lib/v1/envelope"
 import { parseQuery } from "@/lib/v1/query"
 import { NEW_PARTNER_WINDOW_DAYS } from "@/lib/task-constants"
@@ -9,25 +11,28 @@ import { NEW_PARTNER_WINDOW_DAYS } from "@/lib/task-constants"
 export const dynamic = "force-dynamic"
 
 /**
- * GET /api/admin/anomalies — the two signals this system already produces and
- * has never shown anyone.
+ * GET /api/admin/anomalies — the signals this system produces that need a
+ * human eye.
  *
- * Both of these have been getting written to the database for weeks. Neither
- * has had a surface, which means neither has ever been READ, which means the
- * work of detecting them has so far bought nothing.
+ *   1  VALUE REVIEWS. Listings whose owner asked for a value more than one
+ *      bracket above the server's own suggestion. The value sets the bracket
+ *      and the bracket is what trading is judged on, so this is the one place
+ *      a person can move their own reach by typing — which is why it waits for
+ *      an admin instead of going live. The row carries BOTH numbers and both
+ *      brackets, because the question a reviewer is answering is "is this a
+ *      fair correction or a reach grab", and one number cannot answer it.
+ *      THIS IS A QUEUE, not a report: each row has an approve and a reject.
  *
- *   1  DPA DEFAULTS. DeferredContract.defaultedAt, stamped by the lazy deadline
- *      sweep and never cleared — not even when a defaulted contract is later
- *      paid off in full. Deliberately so: paying late settles the debt, not the
- *      record. So this list is "everyone who has ever missed a deadline", which
- *      is the list a moderator wants, and `stillOwing` separates the ones who
- *      made good afterwards from the ones who did not.
- *
- *   2  REPEAT-TRADE-PAIR FLAGS. TaskCompletion rows with task = VERIFIED_SWAP
+ *   2  REPEAT-TRADE-PAIR FLAGS. TaskCompletion rows with task = SAFEZONE_MEETUP
  *      and leaves = 0. awardTask() writes one of those every time two users who
  *      have already traded inside NEW_PARTNER_WINDOW_DAYS trade again: the swap
  *      completes normally and pays nothing, because otherwise two accounts
  *      could pass the same two items back and forth and mint Leaves forever.
+ *      (The same pair-and-item guards now cover the trade reward as well, in
+ *      @/lib/trade-reward, and they deny silently — a denied reward writes no
+ *      row, so this list remains the way a colluding pair becomes visible.)
+ *
+ * The DPA-defaults section is gone with deferred agreements (16 Sep 2026).
  *
  *      A zero row is not itself misconduct — friends trade repeatedly, and the
  *      faucet guard already did its job. It is a SIGNAL, and it is worth a
@@ -35,9 +40,10 @@ export const dynamic = "force-dynamic"
  *      fortnight is the shape of two accounts run by one person, and nothing
  *      else in this system would ever mention it.
  *
- * Read-only. Nothing here writes, nothing here acts, and there is no
- * "investigate" button — a moderator who wants to act does it through the
- * report queue or the user route, where the audit row gets written.
+ * The repeat-pair half is READ-ONLY: a zero-award swap is a signal, not
+ * misconduct, and a moderator who wants to act does it through the report
+ * queue or the user route, where the audit row gets written. The value-review
+ * half is a queue and is acted on through POST /api/admin/listings/[id].
  */
 
 const querySchema = z.strictObject({
@@ -62,22 +68,26 @@ export async function GET(req: NextRequest) {
   if (!parsed.ok) return parsed.response
   const { minRepeats, limit } = parsed.data
 
-  // ── 1 ── every contract that has ever defaulted.
-  const defaults = await prisma.deferredContract.findMany({
-    where: { defaultedAt: { not: null } },
+  // ── 1 ── listings waiting on a value decision.
+  //
+  // Oldest first, deliberately, unlike every other admin list here: this is a
+  // queue somebody is WAITING IN. Their listing is invisible to everyone else
+  // until it is answered, so the fair order is the order they arrived.
+  const reviews = await prisma.item.findMany({
+    where: { status: "PENDING_REVIEW" },
     select: {
       id: true,
-      status: true,
-      amountLeaves: true,
-      amountPaidLeaves: true,
-      deadline: true,
-      defaultedAt: true,
-      fulfilledAt: true,
-      debtor: { select: { id: true, name: true, email: true, suspendedAt: true } },
-      creditor: { select: { id: true, name: true } },
-      tradeId: true,
+      title: true,
+      category: true,
+      condition: true,
+      valueLeaves: true,
+      suggestedLeaves: true,
+      valuationSource: true,
+      createdAt: true,
+      updatedAt: true,
+      user: { select: { id: true, name: true, email: true, suspendedAt: true } },
     },
-    orderBy: { defaultedAt: "desc" },
+    orderBy: [{ updatedAt: "asc" }, { id: "asc" }],
     take: limit,
   })
 
@@ -90,9 +100,11 @@ export async function GET(req: NextRequest) {
   // interpolated. Identifiers and aliases are quoted because Postgres folds
   // unquoted names to lower case.
   //
-  // TaskCompletion.refId is the tradeId for a VERIFIED_SWAP, which is what lets
-  // the join recover who the partner was: the completion row records that USER
-  // got zero, and the trade records who they got zero with.
+  // TaskCompletion.refId is the tradeId for a SAFEZONE_MEETUP, which is what
+  // lets the join recover who the partner was: the completion row records that
+  // USER got zero, and the trade records who they got zero with. (Rows written
+  // before 16 Sep 2026 carry task = VERIFIED_SWAP, which was the repeatable
+  // task then; both are counted so the history stays visible.)
   const pairs = await prisma.$queryRaw<PairRow[]>`
     SELECT
       tc."userId" AS "userId",
@@ -101,7 +113,7 @@ export async function GET(req: NextRequest) {
       MAX(tc."createdAt") AS "lastAt"
     FROM "TaskCompletion" tc
     JOIN "TradeRequest" tr ON tr."id" = tc."refId"
-    WHERE tc."task" = 'VERIFIED_SWAP'
+    WHERE tc."task" IN ('SAFEZONE_MEETUP', 'VERIFIED_SWAP')
       AND tc."leaves" = 0
     GROUP BY tc."userId", "partnerId"
     HAVING COUNT(*) >= ${minRepeats}
@@ -121,20 +133,26 @@ export async function GET(req: NextRequest) {
 
   return ok(
     {
-      dpaDefaults: defaults.map((c) => ({
-        contractId: c.id,
-        tradeId: c.tradeId,
-        status: c.status,
-        principal: c.amountLeaves,
-        paid: c.amountPaidLeaves,
-        // The number that separates "missed a deadline then paid" from
-        // "missed a deadline and still has not".
-        stillOwing: c.amountLeaves - c.amountPaidLeaves,
-        deadline: c.deadline,
-        defaultedAt: c.defaultedAt,
-        fulfilledAt: c.fulfilledAt,
-        debtor: c.debtor,
-        creditor: c.creditor,
+      valueReviews: reviews.map((i) => ({
+        itemId: i.id,
+        title: i.title,
+        category: i.category,
+        condition: i.condition,
+        // Both numbers and both brackets. The decision is about the DISTANCE
+        // between them, and a reviewer should not have to do the lookup.
+        requestedLeaves: i.valueLeaves,
+        suggestedLeaves: i.suggestedLeaves,
+        requestedBracket: i.valueLeaves === null ? null : bracketOf(i.valueLeaves),
+        suggestedBracket: i.suggestedLeaves === null ? null : bracketOf(i.suggestedLeaves),
+        /** How far above the cap they asked to go. 1 would not be here. */
+        bracketsAboveCap:
+          i.valueLeaves === null || i.suggestedLeaves === null
+            ? null
+            : bracketOf(i.valueLeaves) - valueCap(i.suggestedLeaves).maxBracketWithoutReview,
+        valuationSource: i.valuationSource,
+        owner: i.user,
+        submittedAt: i.updatedAt,
+        createdAt: i.createdAt,
       })),
       repeatPairs: pairs.map((p) => ({
         user: byId.get(p.userId) ?? { id: p.userId },

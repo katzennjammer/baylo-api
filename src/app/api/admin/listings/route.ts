@@ -28,13 +28,18 @@ export async function GET(req: NextRequest) {
         ...(status === "hidden"
           ? [{ moderationHiddenAt: { not: null } }]
           : status
-            ? [{ status: status.toUpperCase() as "AVAILABLE" | "IN_TRADE" | "TRADED" | "OWNED" | "REMOVED" }]
+            ? [{ status: status.toUpperCase() as "AVAILABLE" | "IN_TRADE" | "TRADED" | "OWNED" | "REMOVED" | "PENDING_REVIEW" }]
             : []),
       ],
     },
     select: {
       id: true, title: true, status: true, moderationHiddenAt: true,
-      createdAt: true, updatedAt: true, valueLeaves: true,
+      createdAt: true, updatedAt: true,
+      // BOTH values and the flag. The admin Listings page is the one surface
+      // that shows what the model said next to what the owner asked for, which
+      // is the only way to see the divergence on a listing that never went to
+      // review because it stayed inside the one-bracket cap.
+      valueLeaves: true, suggestedLeaves: true, valueSetByUser: true,
       user: { select: { id: true, name: true, email: true, suspendedAt: true, suspendedUntil: true } },
     },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],

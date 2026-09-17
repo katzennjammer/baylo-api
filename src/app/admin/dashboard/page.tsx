@@ -25,7 +25,7 @@ export default async function AdminDashboardPage() {
       }),
       prisma.item.count({ where: { moderationHiddenAt: { not: null } } }),
       prisma.safeZoneHub.count({ where: { isActive: false } }),
-      prisma.deferredContract.count({ where: { defaultedAt: { not: null } } }),
+      prisma.item.count({ where: { status: "PENDING_REVIEW" } }),
       prisma.adminAction.findMany({
         take: 8,
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
@@ -43,7 +43,7 @@ export default async function AdminDashboardPage() {
     { label: "Suspended users", value: suspendedUsers, href: "/admin/users?status=suspended" },
     { label: "Hidden listings", value: hiddenListings, href: "/admin/listings?status=hidden" },
     { label: "Inactive hubs", value: inactiveHubs, href: "/admin/hubs?status=inactive" },
-    { label: "Deferred defaults", value: defaults, href: "/admin/anomalies" },
+    { label: "Values in review", value: defaults, href: "/admin/anomalies" },
   ]
 
   return (

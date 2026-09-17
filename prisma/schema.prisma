@@ -554,11 +554,30 @@ model TradeRequest {
    * The bridging fee this trade carries, copied from the Offer at accept for
    * exactly the reason `offeredLeaves` is: settlement and cancellation read
    * the trade and never re-find the offer. NULL means same-bracket, no fee.
-   * The Leaves themselves are already out of the proposer's balance (held at
-   * proposal); completion pays them to the receiver, REJECTED/CANCELLED
-   * returns them. See Offer.bridgeFeeLeaves.
+   * The Leaves are already out of the payer's balance by the time a trade
+   * exists; completion pays them to the OTHER party, REJECTED/CANCELLED
+   * returns them to the payer. See Offer.bridgeFeeLeaves.
    */
   bridgeFeeLeaves Int?
+
+  /**
+   * WHICH SIDE PAID IT. True when the sender (the proposer) did, false when
+   * the receiver did, NULL when there is no fee.
+   *
+   * NOT DERIVED, and that is the point. The payer is the side handing over the
+   * lower-bracket item, which is a fact about the two items AT THE MOMENT THE
+   * OFFER WAS AGREED -- and a value can be edited afterwards, an item can be
+   * re-valued, an admin can approve a review. Re-deriving it at completion
+   * would mean the Leaves could be paid to the wrong person because somebody
+   * edited a listing in between. Settlement and cancellation read this column
+   * and nothing else.
+   *
+   * A boolean against `senderId` rather than a `bridgeFeePayerId` FK, the same
+   * argument `meetupProposedBySender` makes: an id column can point at
+   * somebody who is not in this trade, and then every reader has to guard
+   * against a state the column let us write.
+   */
+  bridgeFeePaidBySender Boolean?
 
   messages              Message[]
   reviews               Review[]
@@ -982,9 +1001,18 @@ model Offer {
    * what moved. They are not read as the rule -- the rule is re-derived from
    * `Item.valueLeaves` on every check.
    *
-   * `consentAt` / `policyVersion` record the proposer ticking "I agree to the
+   * `consentAt` / `policyVersion` record the PAYER ticking "I agree to the
    * bridging fee and the trading policy". Required on a bridge, absent on a
    * same-bracket offer, and the version is TRADING_POLICY_VERSION at the time.
+   *
+   * WHICH SIDE consented, and therefore WHEN these are written, depends on the
+   * direction: the proposer pays when they offer the lower item, so their
+   * consent is recorded with the offer; the receiver pays when they are
+   * offered the higher item, so theirs is recorded at accept, onto this same
+   * row. `bridgeFeeLeaves` is the QUOTE from the moment the offer was made and
+   * is set either way -- it is not evidence that anything has been held. What
+   * is held is exactly: a proposer-pays offer that is still PENDING, and any
+   * live trade. See @/lib/bridge-fee.
    */
   bridgeFeeLeaves Int?
   offeredBracket  Int?

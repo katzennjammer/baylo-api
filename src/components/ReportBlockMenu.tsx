@@ -241,7 +241,7 @@ export default function ReportBlockMenu({
               Said before the click, not after. Someone blocking a creditor
               needs to know the debt survives BEFORE they assume otherwise, and
               someone mid-trade needs to know the trade is still on. The server
-              returns the specific trades and contracts; this is the rule.
+              returns the specific trades; this is the rule.
             */}
             <p style={{
               fontSize: 13, color: "#8a6d3b", background: "rgba(240,173,78,.12)",
@@ -249,7 +249,7 @@ export default function ReportBlockMenu({
               padding: "10px 12px", lineHeight: 1.55,
             }}>
               Blocking does not cancel a trade already in progress, and it does not clear a
-              deferred agreement between you. Those stand. You can cancel a trade yourself
+              bridging fee held on one. Those stand. You can cancel a trade yourself
               from your trades list.
             </p>
 

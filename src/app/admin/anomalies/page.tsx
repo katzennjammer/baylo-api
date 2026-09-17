@@ -1,32 +1,34 @@
 import prisma from "@/lib/prisma"
 import { NEW_PARTNER_WINDOW_DAYS } from "@/lib/task-constants"
 import { suspensionState } from "@/lib/moderation"
+import { bracketOf } from "@/lib/brackets"
+import { valueCap } from "@/lib/trade-rules"
+import { ValueReviewActions } from "./ValueReviewActions"
 
 export const dynamic = "force-dynamic"
 export const revalidate = 0
 
 /**
- * /admin/anomalies — the two signals this system already produces and has never
- * shown anyone.
+ * /admin/anomalies — the signals this system records that need a human eye.
  *
- * Both have been written to the database for weeks with no surface, which means
- * neither has ever been read, which means the work of detecting them has so far
- * bought nothing. See the route at /api/admin/anomalies for the full note; the
- * short version:
+ *   VALUE REVIEWS      Listings whose owner asked for a value more than one
+ *                      bracket above the server's own suggestion. The value
+ *                      sets the bracket and the bracket is what trading is
+ *                      judged on, so this is the one place a person can move
+ *                      their own reach by typing. A QUEUE: somebody is waiting,
+ *                      their listing is invisible until it is answered, and the
+ *                      two buttons are the answer.
+ *   REPEAT PAIRS       Repeatable-task completions worth 0 Leaves — the faucet
+ *                      guard refusing a partner already traded with inside the
+ *                      window. Not misconduct on its own; a signal at volume.
  *
- *   DPA DEFAULTS       DeferredContract.defaultedAt, stamped by the deadline
- *                      sweep and never cleared even when the debt is later paid.
- *                      `Still owing` is what separates the two cases.
- *   REPEAT PAIRS       VERIFIED_SWAP task completions worth 0 Leaves — the
- *                      faucet guard refusing a partner already traded with
- *                      inside the window. Not misconduct on its own; a signal
- *                      at volume.
+ * THE REPEAT-PAIR HALF HAS NO BUTTON, deliberately. A zero-award swap is a
+ * signal, and a moderator who wants to act does it through the report queue or
+ * the user route, where an audit row gets written with a reason. The review
+ * half writes its own audit row (and notifies the owner), which is what earns
+ * it the right to be actioned from here.
  *
- * READ-ONLY BY DESIGN. There is no button on this page. A moderator who wants
- * to act does it through the report queue or the user route, where an audit row
- * gets written — an action taken from a dashboard with no report behind it and
- * no reason typed is exactly the unaccountable moderation the audit log exists
- * to prevent.
+ * The deferred-agreement defaults section went with DPAs on 16 Sep 2026.
  */
 
 const MIN_REPEATS = 3
@@ -46,16 +48,17 @@ const th: React.CSSProperties = { padding: "10px 12px", textAlign: "left", color
 const td: React.CSSProperties = { padding: "10px 12px", fontSize: 13 }
 
 export default async function AnomaliesPage() {
-  const [defaults, pairs] = await Promise.all([
-    prisma.deferredContract.findMany({
-      where: { defaultedAt: { not: null } },
+  const [reviews, pairs] = await Promise.all([
+    // Oldest first: a queue somebody is waiting in, unlike every other admin
+    // list here. Their listing shows to nobody until this is answered.
+    prisma.item.findMany({
+      where: { status: "PENDING_REVIEW" },
       select: {
-        id: true, status: true, amountLeaves: true, amountPaidLeaves: true,
-        deadline: true, defaultedAt: true, fulfilledAt: true, tradeId: true,
-        debtor: { select: { id: true, name: true, email: true, suspendedAt: true, suspendedUntil: true } },
-        creditor: { select: { name: true } },
+        id: true, title: true, category: true, condition: true,
+        valueLeaves: true, suggestedLeaves: true, valuationSource: true, updatedAt: true,
+        user: { select: { id: true, name: true, email: true, suspendedAt: true, suspendedUntil: true } },
       },
-      orderBy: { defaultedAt: "desc" },
+      orderBy: [{ updatedAt: "asc" }, { id: "asc" }],
       take: 100,
     }),
     // Raw SQL for the same reason /messages/conversations uses it: a GROUP BY
@@ -70,7 +73,7 @@ export default async function AnomaliesPage() {
         MAX(tc."createdAt") AS "lastAt"
       FROM "TaskCompletion" tc
       JOIN "TradeRequest" tr ON tr."id" = tc."refId"
-      WHERE tc."task" = 'VERIFIED_SWAP'
+      WHERE tc."task" IN ('SAFEZONE_MEETUP', 'VERIFIED_SWAP')
         AND tc."leaves" = 0
       GROUP BY tc."userId", "partnerId"
       HAVING COUNT(*) >= ${MIN_REPEATS}
@@ -101,52 +104,70 @@ export default async function AnomaliesPage() {
 
       <div style={card}>
         <div>
-          <p style={{ fontSize: 15, fontWeight: 800 }}>Deferred agreement defaults ({defaults.length})</p>
-          <p style={{ fontSize: 12, color: "#888", marginTop: 3, lineHeight: 1.55 }}>
-            Every contract that has ever missed its deadline. The default mark is never
-            cleared, not even when the debt is paid afterwards — paying late settles the
-            debt, not the record. <strong>Still owing</strong> is what separates the two.
+          <p style={{ fontSize: 15, fontWeight: 800 }}>Values waiting for review ({reviews.length})</p>
+          <p style={{ fontSize: 12, color: "#888", marginTop: 3, lineHeight: 1.55, maxWidth: "80ch" }}>
+            The owner asked for more than one bracket above the suggestion. Until this is
+            answered the listing shows to nobody but them. <strong>Approve</strong> publishes it
+            at the value they asked for; <strong>Reject</strong> leaves it hidden and tells them
+            to relist at the suggestion, edit within the cap, or delete it — it is never
+            published at a value its owner did not choose.
           </p>
         </div>
 
-        {defaults.length === 0 ? (
-          <p style={{ fontSize: 13, color: "#999" }}>No defaults recorded.</p>
+        {reviews.length === 0 ? (
+          <p style={{ fontSize: 13, color: "#999" }}>Nothing waiting.</p>
         ) : (
           <div style={{ overflowX: "auto" }}>
-            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 820 }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 900 }}>
               <thead>
                 <tr>
-                  <th style={th}>Debtor</th>
-                  <th style={th}>Creditor</th>
-                  <th style={th}>Principal</th>
-                  <th style={th}>Paid</th>
-                  <th style={th}>Still owing</th>
-                  <th style={th}>Deadline</th>
-                  <th style={th}>Defaulted</th>
-                  <th style={th}>Status</th>
+                  <th style={th}>Listing</th>
+                  <th style={th}>Owner</th>
+                  <th style={th}>Suggested</th>
+                  <th style={th}>Asked for</th>
+                  <th style={th}>Brackets</th>
+                  <th style={th}>Waiting since</th>
+                  <th style={th}>Decision</th>
                 </tr>
               </thead>
               <tbody>
-                {defaults.map((c) => {
-                  const owing = c.amountLeaves - c.amountPaidLeaves
+                {reviews.map((i) => {
+                  const suggested = i.suggestedLeaves
+                  const asked = i.valueLeaves
+                  const cap = suggested === null ? null : valueCap(suggested)
                   return (
-                    <tr key={c.id} style={{ borderTop: "1px solid rgba(0,0,0,.06)" }}>
+                    <tr key={i.id} style={{ borderTop: "1px solid rgba(0,0,0,.06)" }}>
                       <td style={td}>
-                        {c.debtor.name}
+                        {i.title}
                         <div style={{ fontSize: 11, color: "#aaa" }}>
-                          {c.debtor.email}
-                          {suspensionState(c.debtor).suspended && " · SUSPENDED"}
+                          {i.category} · {i.condition} · {i.valuationSource ?? "no source"}
                         </div>
                       </td>
-                      <td style={td}>{c.creditor.name}</td>
-                      <td style={td}>{c.amountLeaves}</td>
-                      <td style={td}>{c.amountPaidLeaves}</td>
-                      <td style={{ ...td, fontWeight: 700, color: owing > 0 ? "#b91c1c" : "#15803d" }}>
-                        {owing}
+                      <td style={td}>
+                        {i.user.name}
+                        <div style={{ fontSize: 11, color: "#aaa" }}>
+                          {i.user.email}
+                          {suspensionState(i.user).suspended && " · SUSPENDED"}
+                        </div>
                       </td>
-                      <td style={td}>{c.deadline.toLocaleDateString()}</td>
-                      <td style={td}>{c.defaultedAt?.toLocaleDateString()}</td>
-                      <td style={td}>{c.status}</td>
+                      <td style={td}>{suggested?.toLocaleString() ?? "—"}</td>
+                      <td style={{ ...td, fontWeight: 700 }}>{asked?.toLocaleString() ?? "—"}</td>
+                      <td style={td}>
+                        {suggested !== null && asked !== null ? (
+                          <>
+                            {bracketOf(suggested)} → <strong>{bracketOf(asked)}</strong>
+                            <div style={{ fontSize: 11, color: "#aaa" }}>
+                              live without review up to {cap?.maxBracketWithoutReview}
+                            </div>
+                          </>
+                        ) : (
+                          "—"
+                        )}
+                      </td>
+                      <td style={td}>{i.updatedAt.toLocaleDateString()}</td>
+                      <td style={td}>
+                        <ValueReviewActions itemId={i.id} />
+                      </td>
                     </tr>
                   )
                 })}
@@ -160,7 +181,8 @@ export default async function AnomaliesPage() {
         <div>
           <p style={{ fontSize: 15, fontWeight: 800 }}>Repeat trade pairs ({pairs.length})</p>
           <p style={{ fontSize: 12, color: "#888", marginTop: 3, lineHeight: 1.55, maxWidth: "80ch" }}>
-            Pairs with {MIN_REPEATS} or more verified swaps that awarded <strong>0 Leaves</strong> —
+            Pairs with {MIN_REPEATS} or more completed swaps whose repeatable task awarded{" "}
+            <strong>0 Leaves</strong> —
             the faucet guard refusing a partner already traded with inside{" "}
             {NEW_PARTNER_WINDOW_DAYS} days. Friends genuinely do trade repeatedly, so a few
             of these mean nothing. A pair with a dozen is the shape of two accounts run by

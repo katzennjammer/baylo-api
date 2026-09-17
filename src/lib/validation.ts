@@ -280,20 +280,99 @@ export const updateItemSchema = z.object({
  * subtracts the sum of pending offers from the balance. leafAmountSchema makes
  * a negative unrepresentable at the boundary.
  */
-export const createOfferSchema = z.object({
-  postId: z.string().min(1).max(64),
-  offeredItems: z.array(z.object({
-    id: z.string().min(1).max(64),
-    title: z.string().max(MAX_TITLE).optional(),
-    imageUrl: z.string().max(MAX_URL).optional(),
-  })).max(20).optional(),
-  offeredLeaves: leafAmountSchema.nullish(),
-  message: optionalText(MAX_MESSAGE),
-}).refine((v) => (v.offeredItems?.length ?? 0) > 0 || (v.offeredLeaves ?? 0) > 0, {
-  message: "Must offer at least one item or some Leaves",
-})
+/**
+ * ONE item for ONE listing, since 16 Sep 2026.
+ *
+ * `offeredItems` (a list) and `offeredLeaves` are BOTH still named here, and
+ * both are refused with a sentence rather than stripped. This is a plain
+ * z.object, so an unrecognised key would be dropped silently and a shipped
+ * client sending the old shape would get a 201 for an offer that said
+ * something it did not mean -- the same failure `confirmSubmitSchema` refuses
+ * `safeZone: true` to avoid. A client that sends a single-element
+ * `offeredItems` is doing what every shipped client does, so that one case is
+ * ACCEPTED and mapped onto `offeredItemId`.
+ */
+export const createOfferSchema = z
+  .object({
+    postId: z.string().min(1).max(64),
+    /** The one item being offered. Preferred spelling. */
+    offeredItemId: z.string().min(1).max(64).optional(),
+    /** The old list. One element is accepted; more is refused below. */
+    offeredItems: z
+      .array(
+        z.object({
+          id: z.string().min(1).max(64),
+          title: z.string().max(MAX_TITLE).optional(),
+          imageUrl: z.string().max(MAX_URL).optional(),
+        }),
+      )
+      .max(20)
+      .optional(),
+    /** Gone. Named so it can be refused; see the note above. */
+    offeredLeaves: leafAmountSchema.nullish(),
+    message: optionalText(MAX_MESSAGE),
+    /**
+     * Required for a bridge (an item one bracket below the listing), absent
+     * otherwise. The route decides which case this is -- the client does not
+     * get to declare that an offer is free.
+     */
+    consent: z
+      .object({
+        accepted: z.literal(true),
+        policyVersion: z.string().min(1).max(32),
+      })
+      .optional(),
+  })
+  .superRefine((v, ctx) => {
+    if (v.offeredLeaves != null) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["offeredLeaves"],
+        message:
+          "Offers no longer carry Leaves. Offer an item in the same bracket, or one bracket below and pay the bridging fee.",
+      })
+    }
+    if ((v.offeredItems?.length ?? 0) > 1) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["offeredItems"],
+        message: "An offer is one item for one item. Choose which item you are offering.",
+      })
+    }
+    if (!v.offeredItemId && !v.offeredItems?.[0]?.id) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["offeredItemId"],
+        message: "Name the item you are offering.",
+      })
+    }
+  })
+  .transform((v) => ({
+    postId: v.postId,
+    offeredItemId: (v.offeredItemId ?? v.offeredItems?.[0]?.id) as string,
+    message: v.message,
+    consent: v.consent,
+  }))
 
-export const offerActionSchema = z.object({ action: z.enum(["accept", "decline"]) })
+/**
+ * The receiver's decision, and -- when THEY are the one paying the bridging
+ * fee -- their agreement to it.
+ *
+ * `consent` is required only for an accept of an offer whose item is one
+ * bracket ABOVE their listing, which is the case where the receiver moves up
+ * and therefore pays. The route decides that, not the client: a body that
+ * carries consent for a free offer is harmless and ignored, and one that omits
+ * it for a chargeable accept is refused with CONSENT_REQUIRED.
+ */
+export const offerActionSchema = z.object({
+  action: z.enum(["accept", "decline"]),
+  consent: z
+    .object({
+      accepted: z.literal(true),
+      policyVersion: z.string().min(1).max(32),
+    })
+    .optional(),
+})
 
 export const createTradeSchema = z.object({
   offeredItemId: z.string().min(1).max(64),

@@ -157,7 +157,7 @@ export interface V1Owner {
    * The denormalised counter. STILL SENT, because clients render it as a plain
    * "N trades" statistic — but it is NOT what `trustTier` is computed from, and
    * nothing should derive a tier from it. It has drifted above the real
-   * COMPLETED count on live rows. See `loadEffectiveTiers`.
+   * COMPLETED count on live rows. See `loadTrustTiers`.
    */
   totalTrades: number
   lifetimeLeaves: number
@@ -268,7 +268,7 @@ export interface V1ItemRow {
  * "no trade access", so a caller that forgets it under-shares rather than
  * over-shares — the same fail-safe direction resolvePickup() takes.
  *
- * `tiers` comes from loadEffectiveTiers() and follows the same rule: omitting
+ * `tiers` comes from loadTrustTiers() and follows the same rule: omitting
  * it yields a null tier rather than a guessed one.
  */
 export function v1Item(

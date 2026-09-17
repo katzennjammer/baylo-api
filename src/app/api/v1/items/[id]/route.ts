@@ -6,7 +6,7 @@ import { resolveSession } from "@/lib/api-auth"
 import prisma from "@/lib/prisma"
 import { preciseAccessItemIds } from "@/lib/item-visibility"
 import { visibleItemWhere } from "@/lib/blocking"
-import { loadEffectiveTiers } from "@/lib/contracts"
+import { loadTrustTiers } from "@/lib/trust-tiers"
 import { expireStaleOffers } from "@/lib/offers"
 import { ok, unauthenticated, notFound } from "@/lib/v1/envelope"
 import { parseQuery } from "@/lib/v1/query"
@@ -29,7 +29,7 @@ export const dynamic = "force-dynamic"
  *   3  any existing pending offer from this viewer
  *   4  the viewer's tradeable items, for the offer sheet's picker
  *   5  the viewer's Leaf balance
- *   6  the owner's trust tier (three aggregates, inside loadEffectiveTiers)
+ *   6  the owner's trust tier (two aggregates, inside loadTrustTiers)
  *
  * ON (6), ADDED FOR THE ITEM DETAIL SCREEN. This route used to send
  * `owner.trustTier: null` — the field existed and was never populated, because
@@ -99,7 +99,18 @@ export async function GET(
   // Deliberately one answer for all four: a 403 on the blocked case would tell
   // the blocked party that the listing exists and therefore that they have been
   // blocked, which hands a harasser a signal to switch accounts.
+  /*
+   * REMOVED is delisted. PENDING_REVIEW is a listing whose owner asked for a
+   * value more than one bracket above the suggestion and which an admin has
+   * not approved -- it exists, it is theirs, and NOBODY ELSE MAY SEE IT. The
+   * discovery queries all filter `status: AVAILABLE`, so this detail route is
+   * the one place it could leak, which is why the owner check is explicit here
+   * rather than left to the same `visibleItemWhere` that handles blocks.
+   */
   if (!item || item.status === "REMOVED") return notFound("Item not found")
+  if (item.status === "PENDING_REVIEW" && item.userId !== viewerId) {
+    return notFound("Item not found")
+  }
 
   const isOwner = item.userId === viewerId
 
@@ -134,7 +145,7 @@ export async function GET(
     }),
     // The same function the contract gates enforce with, so the badge on this
     // screen can never promise something the server would then refuse.
-    loadEffectiveTiers(prisma, [{ id: item.userId, rating: item.user.rating }]),
+    loadTrustTiers(prisma, [{ id: item.userId, rating: item.user.rating }]),
   ])
 
   const shaped = v1Item(item as unknown as V1ItemRow, viewerId, access, tiers)

@@ -1,6 +1,6 @@
 import type { PrismaClient } from "@/generated/prisma/client"
 import { bracketOf, type Bracket } from "@/lib/brackets"
-import { bridgingFee, offerLegality, type OfferLegality } from "@/lib/trade-rules"
+import { offerTerms, type FeePayer, type OfferLegality } from "@/lib/trade-rules"
 
 /**
  * Everything the server checks about the two ITEMS of an offer, from the
@@ -20,6 +20,12 @@ import { bridgingFee, offerLegality, type OfferLegality } from "@/lib/trade-rule
  * The premium gate and the tier cap are NOT here. They are about the person
  * acquiring, not about the pair of items, and they already run in
  * @/lib/reputation-gate on both paths. This module is the items.
+ *
+ * WHAT IT RETURNS ABOUT MONEY is `fee` and `payer`, from offerTerms(). Both
+ * directions of bridge are legal -- one bracket either way -- and the side
+ * handing over the LOWER item is the one that pays. A route reads `payer` to
+ * decide whose balance to touch and whose consent to demand; it never works
+ * that out from the brackets itself.
  */
 
 type CheckDb = Pick<PrismaClient, "item">
@@ -31,16 +37,18 @@ export type OfferRefusal =
   | "NOT_YOUR_ITEM"
   | "OWN_LISTING"
   | "OFFER_BRACKET_TOO_LOW"
-  | "OFFER_BRACKET_HIGHER"
+  | "OFFER_BRACKET_TOO_HIGH"
 
 export type OfferAssessment =
   | {
       ok: true
       offeredBracket: Bracket
       targetBracket: Bracket
-      legality: Extract<OfferLegality, "same" | "bridge">
+      legality: Extract<OfferLegality, "same" | "bridgeUp" | "bridgeDown">
       /** 0 for same-bracket. */
       fee: number
+      /** Who owes `fee`. null when there is none. See @/lib/trade-rules. */
+      payer: FeePayer | null
       offered: { id: string; title: string; userId: string }
       target: { id: string; title: string; userId: string }
     }
@@ -110,18 +118,10 @@ export async function assessOffer(
 
   const offeredBracket = bracketOf(offered.valueLeaves)
   const targetBracket = bracketOf(target.valueLeaves)
-  const legality = offerLegality(offeredBracket, targetBracket)
+  const terms = offerTerms(offeredBracket, targetBracket)
   const brackets = { offeredBracket, targetBracket }
 
-  if (legality === "higher") {
-    return refuse(
-      "OFFER_BRACKET_HIGHER",
-      `"${offered.title}" is Bracket ${offeredBracket}, above "${target.title}" at Bracket ${targetBracket}. ` +
-        "You can only offer an item in the same bracket, or one bracket below.",
-      brackets,
-    )
-  }
-  if (legality === "tooLow") {
+  if (terms.legality === "tooLow") {
     return refuse(
       "OFFER_BRACKET_TOO_LOW",
       `"${offered.title}" is Bracket ${offeredBracket}, ${targetBracket - offeredBracket} brackets below ` +
@@ -130,18 +130,22 @@ export async function assessOffer(
       brackets,
     )
   }
-
-  const fee = legality === "bridge" ? bridgingFee(offeredBracket) : 0
-  // bridgingFee() is null only for the top bracket, and a top-bracket item can
-  // never be "one below" anything, so this is unreachable. Stated as a refusal
-  // rather than a throw so a future bracket-table edit fails closed.
-  if (fee === null) return refuse("OFFER_BRACKET_HIGHER", "Nothing sits above the top bracket.", brackets)
+  if (terms.legality === "tooHigh") {
+    return refuse(
+      "OFFER_BRACKET_TOO_HIGH",
+      `"${offered.title}" is Bracket ${offeredBracket}, ${offeredBracket - targetBracket} brackets above ` +
+        `"${target.title}" at Bracket ${targetBracket}. You can go up or down by one bracket at most — ` +
+        "offer something closer to what you are asking for.",
+      brackets,
+    )
+  }
 
   return {
     ok: true,
     ...brackets,
-    legality,
-    fee,
+    legality: terms.legality,
+    fee: terms.fee,
+    payer: terms.payer,
     offered: { id: offered.id, title: offered.title, userId: offered.userId },
     target: { id: target.id, title: target.title, userId: target.userId },
   }
@@ -153,7 +157,7 @@ export function refusalStatus(code: OfferRefusal): number {
     case "ITEM_NOT_FOUND":
       return 404
     case "OFFER_BRACKET_TOO_LOW":
-    case "OFFER_BRACKET_HIGHER":
+    case "OFFER_BRACKET_TOO_HIGH":
     case "NOT_YOUR_ITEM":
       return 403
     case "ITEM_NOT_AVAILABLE":

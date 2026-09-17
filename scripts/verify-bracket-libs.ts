@@ -15,16 +15,20 @@
 // DATABASE_URL pointed there, and drops it. See scripts/scratch.ps1.
 //
 // What it pins down, in order:
-//   1  offerLegality / feeForOffer over every bracket pair; bridgingFee is
-//      10 x bracket for 1..9 and null for 10; tradeReward is 2 x bracket
+//   1  offerLegality / offerTerms over every bracket pair, BOTH directions:
+//      one lower and one higher are legal, two or more apart is not, the fee
+//      is 10 x the LOWER bracket and the payer is whoever gives that item;
+//      tradeReward is 2 x bracket
 //   2  valueCap / classifyValue: lower always ok, up to one bracket ok,
 //      further is review, the top bracket has no ceiling
-//   3  assessOffer(): same, bridge (with the fee), too low, higher, unvalued,
-//      not yours, your own listing, not available, missing
-//   4  the fee: hold debits and writes HOLD; a short balance refuses and
-//      writes nothing; release credits and writes RELEASE once; pay credits
-//      the receiver and writes PAID once; the three reconciliation checks
-//      hold after every step, including with the fee on a live trade
+//   3  assessOffer(): same, bridge up (proposer pays), bridge down (receiver
+//      pays), too low, too high, unvalued, not yours, your own listing, not
+//      available, missing
+//   4  the fee, BOTH DIRECTIONS: hold debits and writes HOLD; a short balance
+//      refuses and writes nothing; release credits and writes RELEASE once;
+//      pay credits the counterparty and writes PAID once; a receiver-paid
+//      bridge holds nothing while the offer is pending and everything once it
+//      is accepted; the three reconciliation checks hold after every step
 //   5  the reward: 2 x bracket to each side, lifetimeLeaves moves, issuance
 //      reconciles; placeholder and unvalued pay nothing; the pair, item and
 //      daily-cap gates each deny; already_awarded on a replay; reversal
@@ -39,6 +43,7 @@ import {
   classifyValue,
   feeForOffer,
   offerLegality,
+  offerTerms,
   tradeReward,
   TRADE_REWARD_DAILY_CAP_LEAVES,
   TRADE_REWARD_PER_BRACKET,
@@ -48,6 +53,7 @@ import {
 import { holdBridgeFee, payBridgeFee, releaseBridgeFee, heldBridgeFees } from "../src/lib/bridge-fee"
 import { awardTradeRewards, reverseTradeRewards } from "../src/lib/trade-reward"
 import { assessOffer } from "../src/lib/offer-check"
+import { releaseTradeFee } from "../src/lib/trade-fee-release"
 import { decideItemValue } from "../src/lib/valuation-server"
 import { ledgerInvariant } from "./lib/ledger-invariant"
 
@@ -132,23 +138,45 @@ async function main() {
   if (!start.ok) { console.log("\nthe live ledger does not reconcile; fix that first"); process.exit(1) }
 
   // ═══ 1  the rules ═══
-  head("1  offerLegality / bridgingFee / tradeReward")
+  head("1  offerLegality / offerTerms / bridgingFee / tradeReward")
   check("same bracket → same", offerLegality(3, 3) === "same")
-  check("one below → bridge", offerLegality(2, 3) === "bridge")
+  check("one below → bridgeUp", offerLegality(2, 3) === "bridgeUp")
+  check("one above → bridgeDown", offerLegality(4, 3) === "bridgeDown")
   check("two below → tooLow", offerLegality(1, 3) === "tooLow")
   check("nine below → tooLow", offerLegality(1, 10) === "tooLow")
-  check("one above → higher", offerLegality(4, 3) === "higher")
-  check("far above → higher", offerLegality(10, 1) === "higher")
+  check("two above → tooHigh", offerLegality(5, 3) === "tooHigh")
+  check("far above → tooHigh", offerLegality(10, 1) === "tooHigh")
+
+  // The fee is 10 x the LOWER bracket in BOTH directions, and the payer is
+  // whoever hands that lower item over. Checked over every legal pair rather
+  // than at a few points, so a change to either function has to survive the
+  // whole table.
   let feeTable = true
+  let payerTable = true
   for (let b = 1; b < BRACKET_COUNT; b++) {
     if (bridgingFee(b) !== BRIDGE_FEE_PER_BRACKET * b) feeTable = false
-    if (feeForOffer(b, b + 1) !== BRIDGE_FEE_PER_BRACKET * b) feeTable = false
+    // offering b for b+1: the proposer gives the lower item and pays.
+    const up = offerTerms(b, b + 1)
+    if (up.fee !== BRIDGE_FEE_PER_BRACKET * b || up.payer !== "proposer" || up.feeBracket !== b) feeTable = false
+    if (up.legality !== "bridgeUp" || !up.allowed) payerTable = false
+    // offering b+1 for b: the receiver gives the lower item and pays.
+    const down = offerTerms(b + 1, b)
+    if (down.fee !== BRIDGE_FEE_PER_BRACKET * b || down.payer !== "receiver" || down.feeBracket !== b) feeTable = false
+    if (down.legality !== "bridgeDown" || !down.allowed) payerTable = false
   }
-  check("bridgingFee(b) = 10·b for b in 1..9, via the formula", feeTable && BRIDGE_FEE_PER_BRACKET === 10)
+  check("fee = 10 · the LOWER bracket, both directions, over every legal pair", feeTable && BRIDGE_FEE_PER_BRACKET === 10)
+  check("payer = whoever gives the lower item, over every legal pair", payerTable)
   check("1→2 is 10, 2→3 is 20, 6→7 is 60", bridgingFee(1) === 10 && bridgingFee(2) === 20 && bridgingFee(6) === 60)
-  check("bracket 10 cannot bridge", bridgingFee(10) === null && feeForOffer(10, 10) === 0)
-  check("same bracket costs 0", feeForOffer(5, 5) === 0)
-  check("illegal pairs have no fee", feeForOffer(1, 3) === null && feeForOffer(4, 3) === null)
+  check("offering bracket 7 for a bracket 6 listing costs the RECEIVER 60",
+    offerTerms(7, 6).fee === 60 && offerTerms(7, 6).payer === "receiver")
+  check("a bracket-10 item cannot be the lower half of a bridge", bridgingFee(10) === null)
+  check("two bracket-10 items are 'same', free", offerTerms(10, 10).fee === 0 && offerTerms(10, 10).payer === null)
+  check("bracket 10 offered for bracket 9 is legal, receiver pays 90",
+    offerTerms(10, 9).allowed && offerTerms(10, 9).fee === 90 && offerTerms(10, 9).payer === "receiver")
+  check("same bracket costs 0 and has no payer", feeForOffer(5, 5) === 0 && offerTerms(5, 5).payer === null)
+  check("illegal pairs have no fee", feeForOffer(1, 3) === null && feeForOffer(5, 3) === null)
+  check("an illegal pair reports fee 0 and no payer rather than a price",
+    offerTerms(1, 3).fee === 0 && offerTerms(1, 3).payer === null && !offerTerms(1, 3).allowed)
   let rewardTable = true
   for (let b = 1; b <= BRACKET_COUNT; b++) if (tradeReward(b) !== TRADE_REWARD_PER_BRACKET * b) rewardTable = false
   check("tradeReward(b) = 2·b for b in 1..10", rewardTable && TRADE_REWARD_PER_BRACKET === 2)
@@ -182,6 +210,7 @@ async function main() {
   const a2 = await item(a.id, "a-b2", 200)
   const a3 = await item(a.id, "a-b3", 300)
   const a4 = await item(a.id, "a-b4", 700)
+  const a5 = await item(a.id, "a-b5", 1200)
   const aNull = await item(a.id, "a-unvalued", null)
   const aBusy = await item(a.id, "a-busy", 300, "IN_TRADE")
   const b3 = await item(b.id, "b-b3", 400)
@@ -196,12 +225,20 @@ async function main() {
     const same = await assessOffer(prisma, { proposerId: a.id, offeredItemId: a3.id, targetItemId: b3.id })
     check("bracket 3 for bracket 3 → same, fee 0", same.ok && same.legality === "same" && same.fee === 0)
     const bridge = await assessOffer(prisma, { proposerId: a.id, offeredItemId: a2.id, targetItemId: b3.id })
-    check("bracket 2 for bracket 3 → bridge, fee 20", bridge.ok && bridge.legality === "bridge" && bridge.fee === 20 && bridge.offeredBracket === 2 && bridge.targetBracket === 3)
+    check("bracket 2 for bracket 3 → bridgeUp, fee 20, PROPOSER pays",
+      bridge.ok && bridge.legality === "bridgeUp" && bridge.fee === 20 && bridge.payer === "proposer" &&
+      bridge.offeredBracket === 2 && bridge.targetBracket === 3)
+    const down = await assessOffer(prisma, { proposerId: a.id, offeredItemId: a4.id, targetItemId: b3.id })
+    check("bracket 4 for bracket 3 → bridgeDown, fee 30, RECEIVER pays",
+      down.ok && down.legality === "bridgeDown" && down.fee === 30 && down.payer === "receiver" &&
+      down.offeredBracket === 4 && down.targetBracket === 3)
     const low = await assessOffer(prisma, { proposerId: a.id, offeredItemId: a1.id, targetItemId: b3.id })
     check("bracket 1 for bracket 3 → OFFER_BRACKET_TOO_LOW", !low.ok && low.code === "OFFER_BRACKET_TOO_LOW")
     check("…and the refusal says the rule, not 'levels'", !low.ok && /2 or more brackets above your item/.test(low.message) && /one bracket at most/.test(low.message))
-    const high = await assessOffer(prisma, { proposerId: a.id, offeredItemId: a4.id, targetItemId: b3.id })
-    check("bracket 4 for bracket 3 → OFFER_BRACKET_HIGHER", !high.ok && high.code === "OFFER_BRACKET_HIGHER")
+    const high = await assessOffer(prisma, { proposerId: a.id, offeredItemId: a5.id, targetItemId: b3.id })
+    check("bracket 5 for bracket 3 → OFFER_BRACKET_TOO_HIGH", !high.ok && high.code === "OFFER_BRACKET_TOO_HIGH")
+    check("…and the refusal says one bracket either way",
+      !high.ok && /up or down by one bracket at most/.test(high.message))
     const un1 = await assessOffer(prisma, { proposerId: a.id, offeredItemId: aNull.id, targetItemId: b3.id })
     const un2 = await assessOffer(prisma, { proposerId: a.id, offeredItemId: a3.id, targetItemId: bNull.id })
     check("an unvalued item on either side → ITEM_UNVALUED", !un1.ok && un1.code === "ITEM_UNVALUED" && !un2.ok && un2.code === "ITEM_UNVALUED")
@@ -283,14 +320,25 @@ async function main() {
     return tx.tradeRequest.create({
       data: {
         senderId: a.id, receiverId: b.id, offeredItemId: a2.id, requestedItemId: b3.id,
-        status: "ACCEPTED", bridgeFeeLeaves: 20,
+        // BOTH columns. A live trade with a fee and no payer is a bug the
+        // accept route cannot produce -- it writes them together -- and the
+        // per-user escrow figure cannot attribute one. Checked below.
+        status: "ACCEPTED", bridgeFeeLeaves: 20, bridgeFeePaidBySender: true,
       },
     })
   })
   {
     const j = await invariant("with the fee on a live trade")
     check("escrow still 20, counted once (on the trade, not the ACCEPTED offer)", j.escrow === start.escrow + 20 && j.held === start.held + 20)
-    check("heldBridgeFees(a) still 20", (await heldBridgeFees(prisma, a.id)) === 20)
+    check("heldBridgeFees(a) still 20, attributed to the proposer who paid",
+      (await heldBridgeFees(prisma, a.id)) === 20 && (await heldBridgeFees(prisma, b.id)) === 0)
+    // The invariant the two columns exist to keep: a live trade that carries a
+    // fee always says who paid it. Without this, the global escrow figure and
+    // the per-user one disagree and nobody can be refunded.
+    const orphanFees = await prisma.tradeRequest.count({
+      where: { status: { in: ["PENDING", "ACCEPTED", "CONFIRMING"] }, bridgeFeeLeaves: { not: null }, bridgeFeePaidBySender: null },
+    })
+    check("no live trade carries a fee without a payer", orphanFees === 0, `${orphanFees}`)
   }
   const completedAt = new Date()
   const paid = await prisma.$transaction(async (tx) => {
@@ -310,6 +358,115 @@ async function main() {
   check("a release after a pay is refused", releaseAfterPay === false && (await balance(a.id)).leaves === 80)
   {
     const j = await invariant("after pay")
+    check("escrow closed", j.escrow === start.escrow && j.held === start.held)
+  }
+
+  // ── the OTHER direction: the receiver pays, and not until they accept ──
+  head("4b  a receiver-paid bridge (offered item one bracket HIGHER)")
+  const rcv = await user("rcv", 100)
+  const rcvItem = await item(rcv.id, "rcv-b2", 150)   // bracket 2, the listing
+  const upItem = await item(a.id, "a-b3-up", 350)     // bracket 3, offered
+  const upOffer = await prisma.offer.create({
+    data: {
+      postId: rcvItem.id, senderId: a.id, receiverId: rcv.id, status: "PENDING",
+      offeredItems: JSON.stringify([{ id: upItem.id, title: upItem.title }]),
+      // The QUOTE. 10 x the lower bracket (2) = 20, owed by the RECEIVER.
+      bridgeFeeLeaves: 20, offeredBracket: 3, targetBracket: 2,
+    },
+  })
+  {
+    const assessed = await assessOffer(prisma, { proposerId: a.id, offeredItemId: upItem.id, targetItemId: rcvItem.id })
+    check("assessOffer agrees: fee 20, payer receiver", assessed.ok && assessed.fee === 20 && assessed.payer === "receiver")
+    const j = await invariant("with an up-bridge offer pending")
+    check("a PENDING up-bridge holds NOTHING (the quote is not an escrow)",
+      j.escrow === start.escrow && j.held === start.held)
+    check("…and neither party's balance moved",
+      (await balance(a.id)).leaves === 80 && (await balance(rcv.id)).leaves === 100)
+  }
+
+  // A receiver who cannot cover it.
+  const poor = await user("poor", 5)
+  const poorItem = await item(poor.id, "poor-b2", 160)
+  const poorOffer = await prisma.offer.create({
+    data: {
+      postId: poorItem.id, senderId: a.id, receiverId: poor.id, status: "PENDING",
+      offeredItems: JSON.stringify([{ id: upItem.id, title: upItem.title }]),
+      bridgeFeeLeaves: 20, offeredBracket: 3, targetBracket: 2,
+    },
+  })
+  const poorHold = await prisma.$transaction((tx) => holdBridgeFee(tx, { userId: poor.id, offerId: poorOffer.id, amount: 20 }))
+  check("a receiver who cannot cover the fee is refused, with what they have", !poorHold.ok && poorHold.have === 5)
+  check("…nothing written, nothing moved",
+    (await rows({ offerId: poorOffer.id })).length === 0 && (await balance(poor.id)).leaves === 5)
+  await prisma.offer.delete({ where: { id: poorOffer.id } })
+
+  // The accept: the receiver's Leaves move, and the trade records WHO paid.
+  const upTrade = await prisma.$transaction(async (tx) => {
+    const held = await holdBridgeFee(tx, { userId: rcv.id, offerId: upOffer.id, amount: 20 })
+    if (!held.ok) throw new Error("hold failed")
+    await tx.offer.update({ where: { id: upOffer.id }, data: { status: "ACCEPTED", consentAt: new Date(), policyVersion: "test" } })
+    return tx.tradeRequest.create({
+      data: {
+        senderId: a.id, receiverId: rcv.id, offeredItemId: upItem.id, requestedItemId: rcvItem.id,
+        status: "ACCEPTED", bridgeFeeLeaves: 20, bridgeFeePaidBySender: false,
+      },
+    })
+  })
+  check("accepting takes the fee off the RECEIVER", (await balance(rcv.id)).leaves === 80)
+  check("…and not off the proposer", (await balance(a.id)).leaves === 80)
+  {
+    const r = await rows({ offerId: upOffer.id })
+    check("one HOLD row, on the receiver", r.length === 1 && r[0].type === "BRIDGE_FEE_HOLD" && r[0].userId === rcv.id && r[0].amount === -20)
+    const j = await invariant("with a receiver-paid fee on a live trade")
+    check("escrow is 20 and the rows agree", j.escrow === start.escrow + 20 && j.held === start.held + 20)
+    check("heldBridgeFees attributes it to the RECEIVER",
+      (await heldBridgeFees(prisma, rcv.id)) === 20 && (await heldBridgeFees(prisma, a.id)) === 0)
+  }
+
+  // Completion pays it to the PROPOSER -- the side that gave the higher item.
+  const upAt = new Date()
+  const upPaid = await prisma.$transaction(async (tx) => {
+    await tx.tradeRequest.update({ where: { id: upTrade.id }, data: { status: "COMPLETED" } })
+    return payBridgeFee(tx, { receiverId: a.id, proposerName: "RCV", offerId: upOffer.id, tradeId: upTrade.id, amount: 20, at: upAt })
+  })
+  check("completion pays the fee to the PROPOSER", upPaid && (await balance(a.id)).leaves === 100)
+  check("…the receiver stays down 20", (await balance(rcv.id)).leaves === 80)
+  {
+    const j = await invariant("after an up-bridge completes")
+    check("escrow closed", j.escrow === start.escrow && j.held === start.held)
+  }
+
+  // And the cancel path, on a second up-bridge: the RECEIVER gets it back.
+  const rcv2Item = await item(rcv.id, "rcv-b2-second", 170)
+  const up2Item = await item(a.id, "a-b3-up2", 360)
+  const up2Offer = await prisma.offer.create({
+    data: {
+      postId: rcv2Item.id, senderId: a.id, receiverId: rcv.id, status: "ACCEPTED",
+      offeredItems: JSON.stringify([{ id: up2Item.id, title: up2Item.title }]),
+      bridgeFeeLeaves: 20, offeredBracket: 3, targetBracket: 2, consentAt: new Date(), policyVersion: "test",
+    },
+  })
+  const up2Trade = await prisma.$transaction(async (tx) => {
+    await holdBridgeFee(tx, { userId: rcv.id, offerId: up2Offer.id, amount: 20 })
+    return tx.tradeRequest.create({
+      data: {
+        senderId: a.id, receiverId: rcv.id, offeredItemId: up2Item.id, requestedItemId: rcv2Item.id,
+        status: "ACCEPTED", bridgeFeeLeaves: 20, bridgeFeePaidBySender: false,
+      },
+    })
+  })
+  check("the second up-bridge holds 20 from the receiver", (await balance(rcv.id)).leaves === 60)
+  const cancelled = await prisma.$transaction(async (tx) => {
+    await tx.tradeRequest.update({ where: { id: up2Trade.id }, data: { status: "CANCELLED" } })
+    return releaseTradeFee(tx, {
+      id: up2Trade.id, senderId: a.id, receiverId: rcv.id, requestedItemId: rcv2Item.id,
+      bridgeFeeLeaves: 20, bridgeFeePaidBySender: false,
+    }, "cancelled")
+  })
+  check("cancelling returns it to the RECEIVER, who paid", cancelled?.userId === rcv.id && cancelled?.amount === 20)
+  check("…their balance is whole again", (await balance(rcv.id)).leaves === 80)
+  {
+    const j = await invariant("after an up-bridge cancels")
     check("escrow closed", j.escrow === start.escrow && j.held === start.held)
   }
 

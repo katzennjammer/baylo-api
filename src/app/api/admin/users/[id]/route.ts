@@ -22,9 +22,9 @@ export const dynamic = "force-dynamic"
  *
  * WHAT IT DELIBERATELY DOES NOT DO. Exactly what blocking does not do, and for
  * the identical reason: it does not cancel their in-flight trades and it does
- * not void their Deferred Points Agreements. A suspension that cleared debts
+ * not release a bridging fee held on one. A suspension that cleared obligations
  * would make misbehaving the cheapest way to escape one, and this system does
- * not do reversals — see the note on the DeferredContract model. The debt
+ * not do reversals — the items changed hands in person. The obligation
  * stands, the deadline keeps running, and the sweep will still default them.
  *
  * NOTE THE ROLE FLOOR: ADMIN, not MODERATOR. Suspension is the heaviest button
@@ -156,7 +156,7 @@ export async function POST(
     // most likely to assume happened and it did not.
     note:
       action === "suspend"
-        ? "Their in-flight trades and any deferred agreements are unaffected — a suspension does not clear a debt."
+        ? "Their in-flight trades are unaffected — a suspension does not undo a swap or release a bridging fee."
         : null,
   })
 }

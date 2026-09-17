@@ -16,6 +16,7 @@
 // by the UI is not a limit — the client is not a trusted participant.
 
 import type { TrustTier } from "@/lib/reputation"
+import { bracketOf } from "@/lib/brackets"
 
 // ── Tier derivation ──────────────────────────────────────────────────────────
 //
@@ -42,13 +43,21 @@ export const TIER_THRESHOLDS = {
 
 export interface TierLimits {
   /**
-   * The most valuable item (Item.valueLeaves) this tier may ACQUIRE in a trade,
-   * whether by initiating one or by accepting one. `null` is unlimited.
+   * The most valuable item (Item.valueLeaves) this tier may ACQUIRE, as the
+   * ladder was originally written. REFERENCE ONLY since 17 Sep 2026 -- the
+   * gate enforces `maxItemBracket`, derived from this. See
+   * TIER_MAX_ITEM_BRACKET for why.
+   */
+  maxItemValueLeaves: number | null
+  /**
+   * The highest BRACKET this tier may ACQUIRE. `null` is unlimited. THIS is
+   * what enforceItemValueCeiling() compares against, and what the refusal
+   * names.
    *
    * Applied to the item the user RECEIVES, never the one they give away — the
    * exposure being capped is the counterparty's, not theirs.
    */
-  maxItemValueLeaves: number | null
+  maxItemBracket: number | null
   /** Whether this tier may propose a Deferred Points Agreement as the debtor. */
   mayProposeDpa: boolean
   /**
@@ -84,6 +93,42 @@ export const TIER_MAX_ITEM_VALUE: Record<TrustTier, number | null> = {
   "Trusted Trader": 3000,
   "Top Trader": null,
 }
+
+/**
+ * THE CAP THE GATE ACTUALLY ENFORCES: the same ladder, as a BRACKET.
+ *
+ * ── WHY THE LEAVES FIGURE STOPPED BEING ENFORCEABLE (17 Sep 2026) ───────────
+ *
+ * Since bracket trading, a viewer never sees another person's exact value --
+ * every listing in the offer flow is "Bracket 4". A cap of 600 Leaves sits in
+ * the MIDDLE of bracket 4 (501-900), so two tiles that both read "Bracket 4"
+ * behaved differently: a 550-Leaf item could be traded for and a 700-Leaf one
+ * could not, with nothing on screen to tell them apart. The refusal said so in
+ * as many words -- `"Air Max" is in Bracket 4. As a New Trader you can trade
+ * for items up to Bracket 4` -- which is not a sentence anybody can act on.
+ *
+ * So the cap is rounded UP to the bracket its Leaves figure falls in, and the
+ * gate compares brackets. The effect on each tier, stated plainly because it
+ * is a real widening and not a refactor:
+ *
+ *   New Trader      600 -> bracket 4, i.e. up to 900 in practice
+ *   Rising Trader   900 -> bracket 4  (900 is the top of bracket 4: unchanged)
+ *   Trusted Trader  3000 -> bracket 7 (4000), where the PREMIUM gate bites
+ *                   first for a non-subscriber, so nothing widens in practice
+ *   Top Trader      null -> no cap
+ *
+ * The alternative was rounding DOWN, which narrows every tier to the last
+ * bracket that fits entirely inside its figure and would have cut a New Trader
+ * from 600 to 500 -- tightening a limit as a side effect of a presentation
+ * change is the worse of the two, and the bottom rung was raised to 600 in the
+ * first place so that a new account could reach the ordinary listing.
+ */
+export const TIER_MAX_ITEM_BRACKET: Record<TrustTier, number | null> = Object.fromEntries(
+  (Object.keys(TIER_MAX_ITEM_VALUE) as TrustTier[]).map((tier) => [
+    tier,
+    TIER_MAX_ITEM_VALUE[tier] === null ? null : bracketOf(TIER_MAX_ITEM_VALUE[tier] as number),
+  ]),
+) as Record<TrustTier, number | null>
 
 /**
  * How much of an item's value a tier may promise rather than pay.
@@ -157,6 +202,7 @@ export const TIER_LIMITS: Record<TrustTier, TierLimits> = Object.fromEntries(
     tier,
     {
       maxItemValueLeaves: TIER_MAX_ITEM_VALUE[tier],
+      maxItemBracket: TIER_MAX_ITEM_BRACKET[tier],
       // Redundant with a ceiling of 0 and stated anyway: it is the field a gate
       // reads to refuse a proposal outright, and a reader of that gate should
       // not have to know that zero means the same thing.
