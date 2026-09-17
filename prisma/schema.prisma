@@ -288,9 +288,19 @@ model Item {
   category    Category
   condition   Condition
   // The FINAL value: what the owner is asking, after any override they made.
-  // This is the number every other surface reads. It is bounded server-side to
-  // OVERRIDE_BAND_PCT either side of suggestedLeaves (see @/lib/valuation).
+  // This is the number every other surface reads. The owner may set it lower
+  // than the suggestion freely, or higher up to ONE BRACKET above the
+  // suggestion's bracket; anything above that is stored here as REQUESTED and
+  // the listing sits in PENDING_REVIEW until an admin approves it (see
+  // decideItemValue() in @/lib/valuation-server and the ItemStatus note).
   valueLeaves Int?
+
+  // TRUE when the owner typed their own value rather than taking the
+  // suggestion. Stored, not derived from valueLeaves != suggestedLeaves: an
+  // owner can type the suggested number back in, and a category re-valuation
+  // can move suggestedLeaves under a value the owner never touched. The admin
+  // Listings page shows both numbers and this flag side by side.
+  valueSetByUser Boolean @default(false)
 
   // The valuation model's own number, before the owner touched it. Stored
   // alongside the final value rather than instead of it so the divergence
@@ -540,6 +550,16 @@ model TradeRequest {
   // code path that moves currency; it does not get to guess.
   offeredLeaves Int?
 
+  /**
+   * The bridging fee this trade carries, copied from the Offer at accept for
+   * exactly the reason `offeredLeaves` is: settlement and cancellation read
+   * the trade and never re-find the offer. NULL means same-bracket, no fee.
+   * The Leaves themselves are already out of the proposer's balance (held at
+   * proposal); completion pays them to the receiver, REJECTED/CANCELLED
+   * returns them. See Offer.bridgeFeeLeaves.
+   */
+  bridgeFeeLeaves Int?
+
   messages              Message[]
   reviews               Review[]
   swapConfirmationCodes SwapConfirmationCode[]
@@ -690,8 +710,14 @@ enum TaskKind {
   VERIFY_ACCOUNT
   COMPLETE_PROFILE
   FIRST_LISTING
+  // LEGACY. Paid 20 Leaves per completed trade until 16 Sep 2026, when the
+  // per-trade payout became TRADE_REWARD (2 x bracket, see @/lib/trade-rules).
+  // The value stays for the rows already written; nothing awards it now.
   VERIFIED_SWAP
   SAFEZONE_MEETUP
+  // One-time: the first trade this account ever completed. What replaced the
+  // per-trade VERIFIED_SWAP as a task -- a milestone, not a faucet.
+  FIRST_TRADE
 }
 
 model SwapConfirmationCode {
@@ -781,6 +807,17 @@ enum ItemStatus {
   TRADED
   OWNED
   REMOVED
+  /**
+   * The owner asked for a value more than one bracket above the suggestion,
+   * and an admin has not yet said yes. A STATUS rather than a flag because
+   * every discovery query in this codebase already filters on
+   * `status: AVAILABLE`, so a listing in review is invisible to everyone but
+   * its owner and the admin Anomalies tab without a single WHERE clause
+   * changing. Approve moves it to AVAILABLE at the requested value. Reject
+   * does NOT publish it: it stays here, the owner is told, and they choose
+   * to relist at the suggestion, edit within the cap, or delete.
+   */
+  PENDING_REVIEW
 }
 
 enum TradeStatus {
@@ -833,6 +870,13 @@ enum NotificationType {
    */
   MEETUP_PROPOSED
   MEETUP_AGREED
+  /**
+   * The outcome of a value review on the recipient's own listing. Two types
+   * for the same reason ID verification has two: the approval says "it's
+   * live", the rejection carries a choice the owner has to make.
+   */
+  LISTING_VALUE_APPROVED
+  LISTING_VALUE_REJECTED
 }
 
 enum FollowStatus {
@@ -905,6 +949,13 @@ model Offer {
   receiverId    String
   receiver      User        @relation("ReceivedOffers", fields: [receiverId], references: [id])
   offeredItems  String      @db.Text
+  /**
+   * LEGACY. Leaves the sender added on top of their item, from before trading
+   * became bracket-based (16 Sep 2026). New offers never carry one -- the
+   * schema refuses the field -- and the column exists only so the offers and
+   * trades that were already in flight settle the way they were agreed.
+   * `availableLeaves()` still subtracts it for PENDING rows for that reason.
+   */
   offeredLeaves Int?
   message       String?     @db.Text
   status        OfferStatus @default(PENDING)
@@ -912,13 +963,40 @@ model Offer {
   updatedAt     DateTime    @updatedAt
 
   /**
-   * Deferred agreements proposed alongside this offer.
+   * ── THE BRIDGE ────────────────────────────────────────────────────────────
    *
-   * A LIST rather than one, for the same reason the trade side is a list: a
-   * creditor who declines a 300-Leaf promise may well accept a 150-Leaf one,
-   * and the DECLINED row stays because it is a fact about this debtor. At most
-   * one is ever in a COMMITTING status — enforced by the one-at-a-time rule in
-   * @/lib/reputation-gate, not by a unique index.
+   * An offer is one item for one item, and the offered item is either in the
+   * SAME bracket as the listing or exactly ONE below it. The second case is a
+   * bridge, and it costs the proposer `bridgingFee(offeredBracket)` Leaves --
+   * see @/lib/trade-rules for the formula, which is never written out here.
+   *
+   * `bridgeFeeLeaves` NULL means same-bracket, no fee. Non-null means the fee
+   * was HELD when the offer was created: a BRIDGE_FEE_HOLD ledger row on the
+   * proposer and the same amount off their balance, in the same transaction
+   * as this row. It is released (BRIDGE_FEE_RELEASE) when the offer or the
+   * trade it becomes dies, and paid to the receiver (BRIDGE_FEE_PAID) when the
+   * trade completes. The trade carries its own copy, see TradeRequest.
+   *
+   * `offeredBracket` / `targetBracket` are SNAPSHOTS of the two brackets at
+   * proposal, for the audit trail and for the accept-time re-check to name
+   * what moved. They are not read as the rule -- the rule is re-derived from
+   * `Item.valueLeaves` on every check.
+   *
+   * `consentAt` / `policyVersion` record the proposer ticking "I agree to the
+   * bridging fee and the trading policy". Required on a bridge, absent on a
+   * same-bracket offer, and the version is TRADING_POLICY_VERSION at the time.
+   */
+  bridgeFeeLeaves Int?
+  offeredBracket  Int?
+  targetBracket   Int?
+  consentAt       DateTime?
+  policyVersion   String?   @db.VarChar(32)
+
+  /**
+   * LEGACY. Deferred Points Agreements were removed on 16 Sep 2026 -- the
+   * bridging fee covers the whole gap now. The relation and the table stay so
+   * the one FULFILLED contract and its ledger pair keep round-tripping through
+   * backups; no code path writes a row any more.
    */
   contracts DeferredContract[]
 
@@ -970,14 +1048,43 @@ enum LeafTxType {
   // SUM(User.leaves) == SUM(LeafTransaction.amount) survives every payment.
   CONTRACT_PAY
   CONTRACT_COLLECT
+  // ── Bracket trading (16 Sep 2026) ──
+  //
+  // The bridging fee, in three rows over the life of one offer. HOLD is a real
+  // debit -- the Leaves leave User.leaves the moment the offer is made -- so
+  // SUM(User.leaves) == SUM(amount) keeps holding at every step. While the
+  // offer lives, the held amount is in ESCROW: on no user's balance, and the
+  // negative HOLD row is the only trace of it. Exactly one of RELEASE (back to
+  // the proposer) or PAID (to the receiver) closes it, and the three then net
+  // to zero. See @/lib/bridge-fee.
+  BRIDGE_FEE_HOLD
+  BRIDGE_FEE_RELEASE
+  BRIDGE_FEE_PAID
+  // ISSUANCE. New Leaves entering the system when a trade completes,
+  // 2 x the bracket of the item that user gave -- never its value. The one
+  // formula is tradeReward() in @/lib/trade-rules. REVERSAL is the admin undo,
+  // negative, and is the only thing that ever decrements lifetimeLeaves.
+  TRADE_REWARD
+  TRADE_REWARD_REVERSAL
 }
 
 // Each row is one atomic Leaf movement (credit or debit).
-// Leaves are non-monetary. Two legitimate sources of a row:
+// Leaves are non-monetary. The legitimate sources of a row:
 //   - a completed trade settlement, which always writes a matching
-//     TRADE_SPEND / TRADE_RECEIVE pair and nets to zero across users;
+//     TRADE_SPEND / TRADE_RECEIVE pair and nets to zero across users (legacy
+//     offeredLeaves only, since 16 Sep 2026);
 //   - a TASK_REWARD, written in the same transaction that increments both
-//     leaves and lifetimeLeaves, and rate-limited by WEEKLY_TASK_LEAF_CAP.
+//     leaves and lifetimeLeaves, and rate-limited by WEEKLY_TASK_LEAF_CAP;
+//   - a bridging fee HOLD / RELEASE / PAID triple, see LeafTxType;
+//   - a TRADE_REWARD, issuance on completion, see LeafTxType.
+//
+// THE RECONCILIATION, in full, as scripts/lib/ledger-invariant.ts checks it:
+//   SUM(User.leaves) == SUM(amount)                      every row, signed
+//   SUM(User.leaves) + escrow == issuance                nothing minted outside
+//     escrow   = -(HOLD + RELEASE + PAID)                the issuance types
+//     issuance =  SIGNUP_GRANT + TASK_REWARD + TRADE_REWARD + TRADE_REWARD_REVERSAL
+//   escrow == SUM(bridgeFeeLeaves on live offers/trades) the ledger agrees with
+//                                                        the rows it points at
 //
 // The two timestamps answer different questions and must not be conflated:
 //   createdAt — when THIS ROW was written. Never backdated. For a backfill this
@@ -1475,6 +1582,16 @@ enum AdminActionKind {
    * message because that is the part the sender can act on.
    */
   OFFER_EXPIRED
+  // ── Bracket trading (16 Sep 2026) ──
+  // A value review decided, either way. `detail` carries both numbers.
+  LISTING_VALUE_APPROVED
+  LISTING_VALUE_REJECTED
+  // The TRADE_REWARD on a completed trade taken back from both parties. The
+  // reward ONLY -- the bridging fee stays with the receiver, because the
+  // items changed hands in person and nothing here can undo that.
+  TRADE_REWARD_REVERSED
+  // An admin cancelled a trade on the parties' behalf (test data, a dispute).
+  TRADE_CANCELLED
 }
 
 enum AdminTargetType {
@@ -1483,6 +1600,7 @@ enum AdminTargetType {
   USER
   HUB
   ID_VERIFICATION
+  TRADE
 }
 
 /**
