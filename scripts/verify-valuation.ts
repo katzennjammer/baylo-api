@@ -6,7 +6,9 @@
 //   - a valuation response carries valuationSource, set to one of exactly two
 //     values, and the Item it produces stores that value
 //   - DETERMINISM: identical inputs return byte-identical output, twice
-//   - condition CHANGES the number: same category, two conditions, two values
+//   - condition CHANGES the number: same category, two conditions, two values,
+//     and the arithmetic of whichever path the data takes -- category band on
+//     an empty database, condition-normalised comparables on a seeded one
 //   - a user value BELOW the suggestion is accepted, however far below
 //   - a value up to ONE BRACKET above the suggestion's bracket is accepted and
 //     goes live; both numbers and `valueSetByUser` are stored
@@ -25,12 +27,16 @@ import { signAccessToken } from "../src/lib/auth-tokens"
 import {
   CONDITION_MULTIPLIERS,
   CATEGORY_BANDS,
+  COMPARABLE_SELECT,
+  MAX_COMPARABLES,
+  comparablesWhere,
   OVERRIDE_BAND_PCT,
   MIN_COMPARABLES,
   MAX_REVALUATIONS,
   valueItem,
   overrideBounds,
 } from "../src/lib/valuation"
+import { requireScratchSchema } from "./lib/live-guard"
 
 const BASE = process.env.ACCEPT_BASE ?? "http://127.0.0.1:3100"
 const P = "zzval-"
@@ -88,6 +94,7 @@ const listing = (over: Record<string, unknown>) => ({
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 async function main() {
+  requireScratchSchema("scripts/verify-valuation.ts")
   console.log(`Driving ${BASE}\n`)
   await cleanup()
 
@@ -158,44 +165,74 @@ async function main() {
 
   // ── 4. Condition changes the value.
   //
-  // KNOWN TO FAIL ON A SEEDED DATABASE, AND LEFT THAT WAY ON PURPOSE (2026-09-15).
+  // THE ARITHMETIC IS RESTATED BY HAND, FOR WHICHEVER PATH THE DATABASE TAKES.
   //
-  // The two "band midpoint × multiplier" checks below assume the CATEGORY-BAND
-  // path, which valueItem() takes only when a category has fewer than
+  // This section used to assert the CATEGORY-BAND arithmetic unconditionally,
+  // and valueItem() only takes that path when a category has fewer than
   // MIN_COMPARABLES settled, priced items. prisma/seed.ts deliberately plants
-  // FOUR settled ELECTRONICS items so that the COMPARABLES path is reachable at
-  // all, so on a seeded database this section gets comparables-derived values
-  // (157 / 51 from the seed data) and the two equality checks fail.
+  // four settled ELECTRONICS rows so the COMPARABLES path is reachable at all,
+  // so the two equality checks failed on every seeded database -- 47 of 49,
+  // with a comment explaining that red meant the seed was present.
   //
-  // The valuation is correct in that case -- recomputed by hand from the seed
-  // rows it matches to the Leaf -- and the determinism checks above are the
-  // ones the "objective and consistent" claim rests on, and they pass.
+  // A test that is expected to fail is not a test. It is also the one shape of
+  // failure that hides a real regression, because the eye learns to skip it.
   //
-  // DO NOT "FIX" THIS BY POINTING IT AT AN EMPTY CATEGORY. That would make it
-  // pass by avoiding the comparables case rather than covering it, and this
-  // project has already had tests that could not fail. The honest fix, when
-  // someone has time, is to assert the RIGHT expectation for whichever path
-  // the database actually takes: read valuationSource from the response and
-  // check band arithmetic for "category_band" or the normalised-mean
-  // arithmetic (see valueItem) for "comparables". Until then, two red lines
-  // here on a seeded database mean the seed is present, not that the code is
-  // wrong -- and two green lines would mean the seed is absent.
+  // So the harness reads `valuationSource` off the response and checks the
+  // arithmetic that source implies:
+  //
+  //   category_band   midpoint of the band x the condition multiplier
+  //   comparables     each settled row normalised by ITS OWN condition
+  //                   multiplier, meaned, x this condition's multiplier
+  //
+  // Both are written out here in full rather than by calling valueItem(),
+  // which would only prove the function equals itself. The comparables are
+  // read with the same where/order/take the server uses -- see
+  // fetchComparables() in @/lib/valuation-server -- because a different
+  // ordering would silently value a different sample.
   console.log("\n4. condition affects value — same category, different condition")
   const mint    = await post("/api/items", token, listing({ title: `${P}mint`, category: "ELECTRONICS", condition: "NEW" }))
   const cracked = await post("/api/items", token, listing({ title: `${P}cracked`, category: "ELECTRONICS", condition: "POOR" }))
   const mintV    = mint.body.valueLeaves as number
   const crackedV = cracked.body.valueLeaves as number
-  console.log(`  NEW  ELECTRONICS -> valueLeaves=${mintV} suggested=${mint.body.suggestedLeaves} source=${mint.body.valuationSource}`)
+  const source   = mint.body.valuationSource as string
+  console.log(`  NEW  ELECTRONICS -> valueLeaves=${mintV} suggested=${mint.body.suggestedLeaves} source=${source}`)
   console.log(`  POOR ELECTRONICS -> valueLeaves=${crackedV} suggested=${cracked.body.suggestedLeaves} source=${cracked.body.valuationSource}`)
   check("both created", mint.status === 201 && cracked.status === 201, `${mint.status}/${cracked.status}`)
   check("the two values differ", mintV !== crackedV, `${mintV} vs ${crackedV}`)
   check("NEW is worth more than POOR", mintV > crackedV, `${mintV} <= ${crackedV}`)
+  check("both items took the SAME path", cracked.body.valuationSource === source,
+    `${source} vs ${cracked.body.valuationSource}`)
 
-  const [lo, hi] = CATEGORY_BANDS.ELECTRONICS
-  const expectNew  = Math.floor(((lo + hi) / 2) * CONDITION_MULTIPLIERS.NEW + 0.5)
-  const expectPoor = Math.floor(((lo + hi) / 2) * CONDITION_MULTIPLIERS.POOR + 0.5)
-  check("NEW matches the band midpoint × its multiplier", mintV === expectNew, `${mintV} != ${expectNew}`)
-  check("POOR matches the band midpoint × its multiplier", crackedV === expectPoor, `${crackedV} != ${expectPoor}`)
+  // valueItem()'s rounding, restated: half-up, floored at 1 Leaf.
+  const round1 = (n: number) => Math.max(1, Math.floor(n + 0.5))
+
+  let base: number
+  if (source === "comparables") {
+    const rows = await prisma.item.findMany({
+      where: comparablesWhere("ELECTRONICS"),
+      select: COMPARABLE_SELECT,
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: MAX_COMPARABLES,
+    })
+    const normalised = rows
+      .filter((r) => (r.valueLeaves ?? 0) > 0)
+      .map((r) => (r.valueLeaves as number) / CONDITION_MULTIPLIERS[r.condition as keyof typeof CONDITION_MULTIPLIERS])
+    base = normalised.reduce((a, b) => a + b, 0) / normalised.length
+    console.log(`  comparables path: ${normalised.length} settled rows, condition-normalised mean ${base.toFixed(3)}`)
+    check(`the sample is at or above MIN_COMPARABLES (${MIN_COMPARABLES})`,
+      normalised.length >= MIN_COMPARABLES, `${normalised.length}`)
+  } else {
+    const [lo, hi] = CATEGORY_BANDS.ELECTRONICS
+    base = (lo + hi) / 2
+    console.log(`  category_band path: band ${lo}-${hi}, midpoint ${base}`)
+  }
+
+  check(`NEW  = base × ${CONDITION_MULTIPLIERS.NEW} (${source})`,
+    mintV === round1(base * CONDITION_MULTIPLIERS.NEW),
+    `${mintV} != ${round1(base * CONDITION_MULTIPLIERS.NEW)}`)
+  check(`POOR = base × ${CONDITION_MULTIPLIERS.POOR} (${source})`,
+    crackedV === round1(base * CONDITION_MULTIPLIERS.POOR),
+    `${crackedV} != ${round1(base * CONDITION_MULTIPLIERS.POOR)}`)
 
   // ── 5. valuationSource is persisted, not just returned.
   console.log("\n5. valuationSource is stored on the Item")

@@ -31,6 +31,7 @@ import "dotenv/config"
 import prisma from "../src/lib/prisma"
 import { openCode, sealCode, sealingAvailable } from "../src/lib/swap-code-seal"
 import { MAX_CODE_ATTEMPTS } from "../src/lib/swap-code"
+import { requireScratchSchema } from "./lib/live-guard"
 
 const RUN = `vsc${Date.now().toString(36)}`
 const ids = {
@@ -56,6 +57,7 @@ function check(label: string, condition: boolean, detail?: unknown) {
 
 
 async function main() {
+  requireScratchSchema("scripts/verify-swap-code-and-settle.ts")
   console.log(`\n── swap code sealing ─────────────────────────────────────────`)
 
   // ── 1. the seal itself, before any database is involved ──────────────────

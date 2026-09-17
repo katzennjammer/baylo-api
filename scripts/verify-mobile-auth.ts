@@ -29,6 +29,7 @@
 import net from "net"
 import prisma from "../src/lib/prisma"
 import { SIGNUP_GRANT_LEAVES } from "../src/lib/task-constants"
+import { requireScratchSchema } from "./lib/live-guard"
 
 const BASE = process.env.ACCEPT_BASE ?? "http://127.0.0.1:3100"
 const SMTP_PORT = Number(process.env.ACCEPT_SMTP_PORT ?? 2525)
@@ -163,6 +164,7 @@ async function ledgerTotals() {
 }
 
 async function main() {
+  requireScratchSchema("scripts/verify-mobile-auth.ts")
   const sink = await startSmtpSink(SMTP_PORT)
   console.log(`SMTP sink listening on 127.0.0.1:${SMTP_PORT}`)
   console.log(`Driving ${BASE}\n`)

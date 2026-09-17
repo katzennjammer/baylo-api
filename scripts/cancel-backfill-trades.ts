@@ -23,6 +23,7 @@
 
 import prisma from "@/lib/prisma"
 import { writeAudit } from "@/lib/moderation"
+import { requireScratchSchema } from "./lib/live-guard"
 
 const TRADE_IDS = ["cmqfix0001backfill000001a", "cmqfix0002backfill000002b"]
 const REASON = "backfill test data"
@@ -38,6 +39,7 @@ async function invariant(label: string) {
 }
 
 async function main() {
+  requireScratchSchema("scripts/cancel-backfill-trades.ts")
   const actor = await prisma.user.findFirst({
     where: { role: "ADMIN", deletedAt: null },
     select: { id: true, name: true, email: true },

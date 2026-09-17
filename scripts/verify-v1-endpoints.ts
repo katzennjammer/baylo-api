@@ -15,6 +15,7 @@
 //   npx tsx --env-file=.env scripts/verify-v1-endpoints.ts
 import prisma from "../src/lib/prisma"
 import { signAccessToken } from "../src/lib/auth-tokens"
+import { requireScratchSchema } from "./lib/live-guard"
 
 const BASE = process.env.ACCEPT_BASE ?? "http://127.0.0.1:3100"
 const P = "zzv1-"
@@ -162,6 +163,7 @@ async function seed() {
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 async function main() {
+  requireScratchSchema("scripts/verify-v1-endpoints.ts")
   console.log(`Driving ${BASE}\n`)
   await cleanup()
   const { owner, viewer, withPickup } = await seed()

@@ -212,9 +212,33 @@ npm run seed       # (re)seed the development data — idempotent
 npx tsx --env-file=.env scripts/verify-token-auth.ts
 ```
 
-**They create and delete rows.** Run them on a **scratch schema**, never on
-the live tables — see [Scratch schemas](#scratch-schemas-for-harnesses-and-a-second-dev-server)
-below. Most need a dev server running on `:3100`
+**They create and delete rows, and since 17 Sep 2026 they enforce that
+themselves.** Every script in this repo that writes — the harnesses, the seed,
+the backfills, the demo seeder, the one-shot MySQL move — calls
+`requireScratchSchema()` from `scripts/lib/live-guard.ts` on its first line and
+**refuses to run when `DATABASE_URL` points at `public`**:
+
+```
+  REFUSING TO RUN: scripts/verify-moderation.ts writes rows, and DATABASE_URL
+  points at schema `public`, which is the live database.
+```
+
+Run it on a scratch schema instead — see
+[Scratch schemas](#scratch-schemas-for-harnesses-and-a-second-dev-server) below.
+If you genuinely mean live (a one-off backfill, a production seed), take a
+backup and pass `--live`, which is the only thing that lifts the refusal:
+
+```bash
+npx tsx --env-file=.env scripts/backfill-task-rewards.ts --live
+npm run seed -- --live
+```
+
+The flag is not readable from the environment on purpose. A stale shell, a CI
+runner or a pasted command cannot supply it by accident the way `FORCE=1` can.
+Read-only tools (`check-new-enum-rows`, `pg-backup`, `verify-trust-tier`,
+`analyze-*`) are not guarded — reading live is the correct thing for them to do.
+
+Most need a dev server running on `:3100`
 (`ACCEPT_BASE` overrides it); the two that register accounts
 (`verify-email-verification`, `verify-mobile-auth`) need a *fresh* dev server
 each, because registration is limited to 3 per hour per client and the limiter
@@ -223,12 +247,13 @@ lives in the server's memory.
 > Most `verify-*.ts` failures on a fresh setup are environmental rather than
 > real regressions — usually the register rate limit, a missing SMTP sink, or a
 > harness process from an earlier run still holding port 2525 and its log file.
-> Check those before chasing a failure. Two failures are **known and
-> deliberate** on a seeded database and documented in the scripts themselves:
-> `verify-valuation` section 4 (assumes the band path; the seed provides
-> comparables) and `verify-moderation`'s "no API route writes `User.role`"
-> (tripped by the admin role-management route; pending a decision on which rule
-> wins).
+> Check those before chasing a failure. One failure is **known and deliberate**
+> and documented in the script itself: `verify-moderation`'s "no API route
+> writes `User.role`" (tripped by the admin role-management route; pending a
+> decision on which rule wins). `verify-valuation` section 4 used to be a second
+> one — it asserted the category-band arithmetic on a database whose seed
+> provides comparables — and was fixed on 17 Sep 2026 to assert whichever path
+> the data actually takes. A test that is expected to fail is not a test.
 
 `scripts/migrate-mysql-to-postgres.ts` is the one-shot data move from the old
 MariaDB database. See [Coming from MySQL](#coming-from-mysql-teammates-read-this).
@@ -254,8 +279,22 @@ dance:
 The HTTP harnesses (`verify-*-http`, `verify-v1-endpoints`,
 `verify-bracket-trading`) drive a dev server, so the server has to be the one
 bound to scratch: start it with `-Dev` on `:3001` and point the harness at it
-(`ACCEPT_BASE=http://localhost:3001`). `verify-bracket-libs.ts` and
-`verify-safezone-faucet.ts` refuse to run on `public` at all.
+(`ACCEPT_BASE=http://localhost:3001`).
+
+Two things that cost an hour on 17 Sep 2026, both worth knowing:
+
+* **Next 16 allows one `next dev` per directory.** A second one prints
+  `Another next dev server is already running` and exits, whatever port you
+  gave it. Stop the first (`taskkill /PID <pid> /F`) before starting a scratch
+  one.
+* **Delete `.next` if the API 404s.** After that aborted start, the dev server
+  came up "Ready" and served every `/api/**` route as the not-found page. The
+  route manifest was half-written. `Remove-Item -Recurse -Force .next` fixes it.
+
+**Prove the server is on the schema you think it is** before trusting an HTTP
+harness: create a marker user through the scratch `DATABASE_URL`, sign it a
+token, and call `/api/v1/profile/me`. A 200 with that name means bound; a 401
+means the server is reading somewhere else.
 
 In PowerShell the URL is `"${base}?schema=x"`, **with braces**: `"$base?schema"`
 reads a variable named `base?schema` and hands Prisma an empty string.

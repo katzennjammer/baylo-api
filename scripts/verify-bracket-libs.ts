@@ -35,7 +35,8 @@
 //      writes the negative rows once and moves lifetimeLeaves back
 //   6  decideItemValue(): the four decisions, valueSetByUser, needsReview
 
-import prisma, { databaseSchema } from "../src/lib/prisma"
+import prisma from "../src/lib/prisma"
+import { requireScratchSchema } from "./lib/live-guard"
 import type { Prisma } from "../src/generated/prisma/client"
 import { BRACKET_COUNT, bracketOf, bracketRange } from "../src/lib/brackets"
 import {
@@ -125,14 +126,7 @@ async function cleanup() {
 }
 
 async function main() {
-  const schema = databaseSchema()
-  if (schema === "public") {
-    console.error(
-      "\n  REFUSING TO RUN on the live schema. Use: .\\scripts\\scratch.ps1 -Run scripts\\verify-bracket-libs.ts\n",
-    )
-    process.exit(1)
-  }
-  console.log(`schema: ${schema}`)
+  requireScratchSchema("scripts/verify-bracket-libs.ts")
   await cleanup()
   const start = await invariant("at start")
   if (!start.ok) { console.log("\nthe live ledger does not reconcile; fix that first"); process.exit(1) }

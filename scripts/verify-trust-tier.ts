@@ -39,6 +39,9 @@ function check(name: string, cond: boolean, detail = "") {
   }
 }
 
+// READ-ONLY, so it does NOT call requireScratchSchema(): it issues GETs and
+// SELECTs and writes nothing, and running it against live is the point --
+// the badges it checks are the ones real users are looking at.
 async function main() {
   const users = await prisma.user.findMany({
     where: { deletedAt: null },

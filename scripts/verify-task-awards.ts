@@ -10,6 +10,7 @@ import prisma from "../src/lib/prisma"
 import { awardTask, reconcileTasks } from "../src/lib/tasks"
 import { WEEKLY_TASK_LEAF_CAP, TASK_REWARDS } from "../src/lib/task-constants"
 import { computeImpactData } from "../src/lib/impact-constants"
+import { requireScratchSchema } from "./lib/live-guard"
 
 const P = "ZZTEST_"
 let pass = 0, fail = 0
@@ -44,6 +45,7 @@ async function mkCompletedTrade(aId: string, bId: string, i1: string, i2: string
 }
 
 async function main() {
+  requireScratchSchema("scripts/verify-task-awards.ts")
   await cleanup()
 
   const a = await mkUser("alice"), b = await mkUser("bob"), c = await mkUser("carol")

@@ -2,6 +2,7 @@
 // roll back the trade itself. Run against a scratch DB.
 import prisma from "../src/lib/prisma"
 import { awardTask } from "../src/lib/tasks"
+import { requireScratchSchema } from "./lib/live-guard"
 
 const P = "ZZTX_"
 let pass = 0, fail = 0
@@ -21,6 +22,7 @@ async function cleanup() {
 }
 
 async function main() {
+  requireScratchSchema("scripts/verify-settlement-tx.ts")
   await cleanup()
 
   const a = await prisma.user.create({ data: { name: P + "a", email: P + "a@t.local", password: "x" } })

@@ -31,6 +31,7 @@
 // of two literals, and inventing a third is a lie about the schema.
 
 import prisma from "../src/lib/prisma"
+import { requireScratchSchema } from "./lib/live-guard"
 
 const PREFIX = "demo-brk-"
 
@@ -136,6 +137,7 @@ async function remove() {
 }
 
 async function main() {
+  requireScratchSchema("scripts/seed-demo-brackets.ts")
   const removing = process.argv.includes("--remove")
   console.log(removing ? "\nRemoving demo bracket listings" : "\nSeeding demo bracket listings")
   if (removing) await remove()

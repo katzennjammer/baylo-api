@@ -25,6 +25,7 @@ import prisma from "../src/lib/prisma"
 import { signAccessToken } from "../src/lib/auth-tokens"
 import { hashIdNumber } from "../src/lib/id-verification"
 import { idImageExists, uploadIdImage } from "../src/lib/id-verification-image"
+import { requireScratchSchema } from "./lib/live-guard"
 
 const BASE = process.env.ACCEPT_BASE ?? "http://127.0.0.1:3100"
 const P = "zzidv-"
@@ -185,6 +186,7 @@ const NEW_LISTING = {
 }
 
 async function main() {
+  requireScratchSchema("scripts/verify-id-verification.ts")
   console.log(`ID verification acceptance — ${BASE}`)
   await cleanup()
   await invariant("at start")

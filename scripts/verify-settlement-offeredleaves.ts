@@ -29,6 +29,7 @@
 import bcrypt from "bcryptjs"
 import prisma from "../src/lib/prisma"
 import { signAccessToken } from "../src/lib/auth-tokens"
+import { requireScratchSchema } from "./lib/live-guard"
 
 const BASE = process.env.ACCEPT_BASE ?? "http://127.0.0.1:3100"
 const P = "zzsettle-"
@@ -191,6 +192,7 @@ async function settle(opts: {
 }
 
 async function main() {
+  requireScratchSchema("scripts/verify-settlement-offeredleaves.ts")
   console.log(`Driving ${BASE}\n`)
   await cleanup()
 

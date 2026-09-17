@@ -31,10 +31,13 @@
 //      hand-written request body, not by a screen
 //  10  the ledger reconciliation holds after every single step
 
-import prisma, { databaseSchema } from "../src/lib/prisma"
+import prisma from "../src/lib/prisma"
+import { requireScratchSchema } from "./lib/live-guard"
 import { signAccessToken } from "../src/lib/auth-tokens"
 import { TRADING_POLICY_VERSION } from "../src/lib/trade-rules"
 import { ledgerInvariant } from "./lib/ledger-invariant"
+import { bracketOf } from "../src/lib/brackets"
+import { loadStanding } from "../src/lib/reputation-gate"
 
 const BASE = process.env.ACCEPT_BASE ?? "http://127.0.0.1:3001"
 const P = "ZZBRKHTTP_"
@@ -121,6 +124,50 @@ async function cleanup() {
   await prisma.user.deleteMany({ where: { id: { in: ids } } })
 }
 
+/**
+ * Lifts a fixture user clear of the TRUST-TIER CAP.
+ *
+ * ── WHY THIS HARNESS HAS TO CARE ABOUT TIERS AT ALL ─────────────────────────
+ *
+ * Two gates stand between a user and an item: the BRACKET rule, which is this
+ * file's subject, and the tier cap, which limits how valuable an item a user
+ * may ACQUIRE until they have traded a few times. A fresh fixture user is a
+ * New Trader, and on 17 Sep 2026 that cap was tightened from "bracket 4 in
+ * practice" to bracket 3 when it stopped rounding up.
+ *
+ * Four checks in section 3 turned red overnight, and NOT because the bracket
+ * rule broke -- because bob, accepting a bracket-4 item, was refused by a
+ * limit this file is not testing. The failures even read convincingly
+ * ("TIER_ITEM_VALUE_CAP"), which is the dangerous kind: a harness whose
+ * fixtures quietly depend on an unrelated config number reports that number's
+ * changes as failures of the feature.
+ *
+ * So the fixture users are given completed trades until their cap clears every
+ * value this file uses, and `check()`ed to confirm it -- if a future tier tune
+ * puts them back under, ONE named check fails with the reason instead of four
+ * confusing ones somewhere else.
+ *
+ * The manufactured trades are against a DEDICATED PARTNER and DEDICATED ITEMS,
+ * never against each other and never with a fixture item. The reward gates
+ * (repeat-pair, same-item) key on exactly those two things, so promoting alice
+ * through bob -- or through the item she is about to trade -- would silently
+ * suppress the very reward section 8 asserts.
+ */
+async function promote(user: { id: string; name: string | null }, completed: number) {
+  const partner = await mkUser(`partner-${user.name?.slice(P.length) ?? "x"}`)
+  const mine = await mkItem(user.id, `promo-mine-${partner.id.slice(-6)}`, 10)
+  const theirs = await mkItem(partner.id, `promo-theirs-${partner.id.slice(-6)}`, 10)
+  for (let i = 0; i < completed; i++) {
+    await prisma.tradeRequest.create({
+      data: {
+        senderId: user.id, receiverId: partner.id,
+        offeredItemId: mine.id, requestedItemId: theirs.id,
+        status: "COMPLETED",
+      },
+    })
+  }
+}
+
 /** Completes a trade by writing what the confirm route writes, then calling it. */
 async function completeTrade(tradeId: string) {
   // The two codes, cross-submitted, is a long HTTP dance already covered by
@@ -136,12 +183,8 @@ async function completeTrade(tradeId: string) {
 }
 
 async function main() {
-  const schema = databaseSchema()
-  if (schema === "public") {
-    console.error("\n  REFUSING TO RUN on the live schema. See the header for the scratch recipe.\n")
-    process.exit(1)
-  }
-  console.log(`schema: ${schema}   base: ${BASE}`)
+  const schema = requireScratchSchema("scripts/verify-bracket-trading.ts")
+  console.log(`  base:   ${BASE}   (schema ${schema})`)
 
   const ping = await fetch(`${BASE}/api/leaves`).catch(() => null)
   if (!ping) {
@@ -166,6 +209,20 @@ async function main() {
   const t3c = await mkItem(bob.id, "b-b3c", 430)
   const t3d = await mkItem(bob.id, "b-b3d", 440)
   const t3e = await mkItem(bob.id, "b-b3e", 450)
+
+  // Clear of the tier cap -- see promote(). Ten completed trades is Trusted
+  // Trader, whose cap is bracket 6; the highest value this file asks anybody to
+  // acquire is a4 at 700 (bracket 4). The assertion below is the point: it
+  // states the dependency instead of leaving it implicit in a fixture number.
+  await promote(alice, 10)
+  await promote(bob, 10)
+  const HIGHEST_ACQUIRED = 700
+  for (const u of [alice, bob]) {
+    const st = await loadStanding(u.id)
+    check(`${u.name} is clear of the tier cap (bracket ${bracketOf(HIGHEST_ACQUIRED)} needed, ${st.tier} allows ${st.limits.maxItemBracket ?? "any"})`,
+      st.limits.maxItemBracket === null || st.limits.maxItemBracket >= bracketOf(HIGHEST_ACQUIRED),
+      `${st.tier} caps at bracket ${st.limits.maxItemBracket}`)
+  }
 
   // ═══ 1 same bracket ═══
   head("1  same bracket: allowed, free")

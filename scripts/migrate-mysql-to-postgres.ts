@@ -37,6 +37,7 @@
 // scratch database only -- it will not ask twice).
 import mariadb from "mariadb"
 import { Client } from "pg"
+import { requireScratchSchema } from "./lib/live-guard"
 
 const PG_URL = process.env.DATABASE_URL
 const MY_URL = process.env.MYSQL_URL
@@ -71,6 +72,7 @@ function myConfig(url: string) {
 function fail(msg: string): never { console.error(`\n  FAILED: ${msg}\n`); process.exit(1) }
 
 async function main() {
+  requireScratchSchema("scripts/migrate-mysql-to-postgres.ts")
   const my = await mariadb.createConnection(myConfig(MY_URL!))
   const pg = new Client({ connectionString: PG_URL })
   await pg.connect()

@@ -23,6 +23,7 @@ import { readFileSync, readdirSync, statSync } from "node:fs"
 import { join } from "node:path"
 import prisma from "../src/lib/prisma"
 import { signAccessToken } from "../src/lib/auth-tokens"
+import { requireScratchSchema } from "./lib/live-guard"
 
 const BASE = process.env.ACCEPT_BASE ?? "http://127.0.0.1:3100"
 const P = "zzmod-"
@@ -125,6 +126,7 @@ async function makeItem(userId: string, title: string) {
 }
 
 async function main() {
+  requireScratchSchema("scripts/verify-moderation.ts")
   console.log(`Moderation acceptance — ${BASE}`)
   await cleanup()
   await invariant("at start")

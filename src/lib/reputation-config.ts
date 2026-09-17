@@ -16,7 +16,7 @@
 // by the UI is not a limit — the client is not a trusted participant.
 
 import type { TrustTier } from "@/lib/reputation"
-import { bracketOf } from "@/lib/brackets"
+import { BRACKET_CEILINGS, type Bracket } from "@/lib/brackets"
 
 // ── Tier derivation ──────────────────────────────────────────────────────────
 //
@@ -45,8 +45,8 @@ export interface TierLimits {
   /**
    * The most valuable item (Item.valueLeaves) this tier may ACQUIRE, as the
    * ladder was originally written. REFERENCE ONLY since 17 Sep 2026 -- the
-   * gate enforces `maxItemBracket`, derived from this. See
-   * TIER_MAX_ITEM_BRACKET for why.
+   * gate enforces `maxItemBracket`, derived from this by rounding DOWN to a
+   * whole bracket. See TIER_MAX_ITEM_BRACKET for why.
    */
   maxItemValueLeaves: number | null
   /**
@@ -83,6 +83,10 @@ export interface TierLimits {
  * unusable before anybody has traded once; 600 covers the ordinary listing and
  * still stops a brand-new account reaching for a laptop.
  *
+ * WHAT A TIER ACTUALLY REACHES is the bracket below: these figures are
+ * rounded DOWN to a whole bracket before anything is enforced, so a New Trader
+ * reaches 500, not 600. See TIER_MAX_ITEM_BRACKET.
+ *
  * `null` at the top is unlimited and is deliberate: a Top Trader has 25+
  * completed trades and a rating to protect, which is the only enforcement this
  * platform has.
@@ -107,26 +111,42 @@ export const TIER_MAX_ITEM_VALUE: Record<TrustTier, number | null> = {
  * as many words -- `"Air Max" is in Bracket 4. As a New Trader you can trade
  * for items up to Bracket 4` -- which is not a sentence anybody can act on.
  *
- * So the cap is rounded UP to the bracket its Leaves figure falls in, and the
- * gate compares brackets. The effect on each tier, stated plainly because it
- * is a real widening and not a refactor:
+ * So the cap is a BRACKET and the gate compares brackets.
  *
- *   New Trader      600 -> bracket 4, i.e. up to 900 in practice
- *   Rising Trader   900 -> bracket 4  (900 is the top of bracket 4: unchanged)
- *   Trusted Trader  3000 -> bracket 7 (4000), where the PREMIUM gate bites
- *                   first for a non-subscriber, so nothing widens in practice
- *   Top Trader      null -> no cap
+ * ── IT ROUNDS DOWN ──────────────────────────────────────────────────────────
  *
- * The alternative was rounding DOWN, which narrows every tier to the last
- * bracket that fits entirely inside its figure and would have cut a New Trader
- * from 600 to 500 -- tightening a limit as a side effect of a presentation
- * change is the worse of the two, and the bottom rung was raised to 600 in the
- * first place so that a new account could reach the ordinary listing.
+ * The cap becomes the highest bracket that fits ENTIRELY inside the tier's
+ * Leaves figure -- the last bracket whose ceiling is at or below it. Rounding
+ * up would have been the kinder arithmetic and it is the wrong one: this is a
+ * safety limit, and a limit must never come out LOOSER than it was written
+ * because the way it is displayed changed. Nobody set 600 intending 900.
+ * Every tier under this rule reaches at most what its figure already allowed:
+ *
+ *   New Trader      600   -> bracket 3 (up to 500)
+ *   Rising Trader   900   -> bracket 4 (up to 900: exact, unchanged)
+ *   Trusted Trader  3,000 -> bracket 6 (up to 2,500)
+ *   Top Trader      null  -> no cap
+ *
+ * Two of those are tighter than the Leaves figure by the width of one bracket.
+ * That is the cost of a cap a person can act on, and it is paid in the safe
+ * direction. To give a tier the rest of its bracket, RAISE ITS FIGURE in
+ * TIER_MAX_ITEM_VALUE to that bracket's ceiling -- deliberately, in one place,
+ * where the next reader can see it was a decision.
  */
+export function capBracketFor(maxValueLeaves: number): Bracket {
+  // The last ceiling at or below the figure; its index + 1 is the bracket.
+  // Nothing fits below bracket 1, which is the floor.
+  let bracket = 1
+  for (let i = 0; i < BRACKET_CEILINGS.length; i++) {
+    if (BRACKET_CEILINGS[i] <= maxValueLeaves) bracket = i + 1
+  }
+  return bracket
+}
+
 export const TIER_MAX_ITEM_BRACKET: Record<TrustTier, number | null> = Object.fromEntries(
   (Object.keys(TIER_MAX_ITEM_VALUE) as TrustTier[]).map((tier) => [
     tier,
-    TIER_MAX_ITEM_VALUE[tier] === null ? null : bracketOf(TIER_MAX_ITEM_VALUE[tier] as number),
+    TIER_MAX_ITEM_VALUE[tier] === null ? null : capBracketFor(TIER_MAX_ITEM_VALUE[tier] as number),
   ]),
 ) as Record<TrustTier, number | null>
 

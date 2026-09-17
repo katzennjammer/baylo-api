@@ -39,6 +39,7 @@
 
 import prisma from "../src/lib/prisma"
 import { SAFE_ZONE_HUB_SEED, type SeedHub } from "./safezone-hub-data"
+import { requireScratchSchema } from "./lib/live-guard"
 
 const DRY = process.argv.includes("--dry")
 
@@ -57,6 +58,7 @@ function line(hub: SeedHub) {
 }
 
 async function main() {
+  requireScratchSchema("scripts/seed-safezone-hubs.ts")
   const ids = new Set(SAFE_ZONE_HUB_SEED.map((h) => h.id))
   if (ids.size !== SAFE_ZONE_HUB_SEED.length) {
     throw new Error("duplicate hub id in SAFE_ZONE_HUB_SEED")

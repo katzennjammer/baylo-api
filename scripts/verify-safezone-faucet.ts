@@ -24,6 +24,7 @@
 //   9  SUM(User.leaves) == SUM(LeafTransaction.amount) throughout
 
 import prisma from "../src/lib/prisma"
+import { requireScratchSchema } from "./lib/live-guard"
 import { awardTask, reconcileTasks } from "../src/lib/tasks"
 import { TASK_REWARDS, NEW_PARTNER_WINDOW_DAYS } from "../src/lib/task-constants"
 import { resolveMeetupHub } from "../src/lib/safe-zones"
@@ -142,16 +143,10 @@ async function invariant(where: string) {
 const DAY = 24 * 60 * 60 * 1000
 
 async function main() {
-  // `?schema=scratch_x` on a Postgres URL is honoured by src/lib/prisma.ts
-  // since 16 Sep 2026; before that the pattern matched and the writes went to
-  // public anyway. scripts/scratch.ps1 -Run is the way to get here.
-  if (!/faucetcheck|scratch|test/i.test(process.env.DATABASE_URL ?? "")) {
-    console.error(
-      "\n  REFUSING TO RUN: DATABASE_URL does not look like a scratch database.\n" +
-        "  This harness creates and deletes rows. See the header.\n",
-    )
-    process.exit(1)
-  }
+  // This used to sniff the URL for /faucetcheck|scratch|test/, which passed on
+  // a LIVE URL containing the word "test" and failed on a perfectly good
+  // scratch schema that did not. The schema is the fact; the guard reads it.
+  requireScratchSchema("scripts/verify-safezone-faucet.ts")
 
   await cleanup()
 

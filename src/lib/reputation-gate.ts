@@ -172,10 +172,10 @@ export async function enforcePremiumForListing(
  * ... up to Bracket 4`. Two tiles both reading "Bracket 4", one tradeable and
  * one not, with nothing on screen to tell them apart.
  *
- * So the CAP ITSELF is a bracket now -- see TIER_MAX_ITEM_BRACKET, which
- * documents what that widened -- and this compares brackets on both sides. The
- * Leaves figure survives in the config as the thing the bracket is derived
- * from.
+ * So the CAP ITSELF is a bracket now -- rounded DOWN, so that rewording a
+ * limit can never loosen it; see TIER_MAX_ITEM_BRACKET -- and this compares
+ * brackets on both sides. The Leaves figure survives in the config as the
+ * thing the bracket is derived from.
  *
  * An item with a NULL valueLeaves passes here, and cannot reach a trade
  * anyway — see the note on the premium gate.

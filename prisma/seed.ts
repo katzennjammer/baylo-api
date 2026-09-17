@@ -86,6 +86,7 @@ import { PrismaClient } from "../src/generated/prisma/client"
 import { PrismaPg } from "@prisma/adapter-pg"
 import bcrypt from "bcryptjs"
 import { SAFE_ZONE_HUB_SEED } from "../scripts/safezone-hub-data"
+import { requireScratchSchema, targetSchema } from "../scripts/lib/live-guard"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Client
@@ -117,13 +118,21 @@ if (!process.env.DATABASE_URL) {
  * live already held those rows, so every table count matched the verified
  * backup afterwards. That was luck, not design.
  *
- * The schema is parsed off the URL and handed to the adapter, and it is
- * PRINTED before anything is written -- a seed is the one script whose whole
- * job is to overwrite rows, so which database it is pointed at should never
- * have to be inferred.
+ * The schema is parsed off the URL and handed to the adapter. It was also
+ * PRINTED, and printing turned out not to be enough: a line of scrollback tells
+ * you which database you overwrote, after you have overwritten it. So the seed
+ * now REFUSES `public` outright unless the operator types --live:
+ *
+ *     npm run seed                  scratch only; refuses live
+ *     npm run seed -- --live        live, after a backup, deliberately
+ *
+ * See scripts/lib/live-guard.ts, which every writing script in this repo now
+ * calls. This is the script that made the case for it.
  */
+requireScratchSchema("prisma/seed.ts")
+
 const seedUrl = new URL(process.env.DATABASE_URL)
-const seedSchema = seedUrl.searchParams.get("schema") ?? "public"
+const seedSchema = targetSchema()
 seedUrl.searchParams.delete("schema")
 
 const prisma = new PrismaClient({

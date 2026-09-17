@@ -9,6 +9,7 @@
  */
 import prisma from "../src/lib/prisma"
 import { reconcileTasks } from "../src/lib/tasks"
+import { requireScratchSchema } from "./lib/live-guard"
 
 const TASK_LABEL: Record<string, string> = {
   VERIFY_ACCOUNT:   "VERIFY_ACCOUNT",
@@ -19,6 +20,7 @@ const TASK_LABEL: Record<string, string> = {
 }
 
 async function main() {
+  requireScratchSchema("scripts/backfill-task-rewards.ts")
   const users = await prisma.user.findMany({
     orderBy: { createdAt: "asc" },
     select:  { id: true, name: true, email: true, leaves: true, lifetimeLeaves: true },

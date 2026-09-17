@@ -26,6 +26,7 @@ import "dotenv/config"
 import prisma from "../src/lib/prisma"
 import { signAccessToken } from "../src/lib/auth-tokens"
 import { sealCode, sealingAvailable } from "../src/lib/swap-code-seal"
+import { requireScratchSchema } from "./lib/live-guard"
 
 const BASE = process.env.ACCEPT_BASE ?? "http://127.0.0.1:3100"
 
@@ -71,6 +72,7 @@ async function call(
 }
 
 async function main() {
+  requireScratchSchema("scripts/verify-settle-and-code-http.ts")
   console.log(`Driving ${BASE}\n`)
 
   // ── fixtures ─────────────────────────────────────────────────────────────
