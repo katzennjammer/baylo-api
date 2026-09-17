@@ -132,6 +132,10 @@ export async function GET(req: NextRequest) {
       id: true,
       status: true,
       offeredLeaves: true,
+      // The bridging fee and who paid it, so a trade row can say "your 20
+      // comes back if this is cancelled" without a second request.
+      bridgeFeeLeaves: true,
+      bridgeFeePaidBySender: true,
       // The hub is selected; the legacy `safeZoneMeetup` boolean on the wire is
       // DERIVED from it below. One source of truth, two field names -- a stored
       // boolean beside the key is a second source of truth that can disagree
@@ -215,6 +219,8 @@ export async function GET(req: NextRequest) {
       direction: isSender ? "sent" : "received",
       kind,
       offeredLeaves: t.offeredLeaves,
+      bridgeFeeLeaves: t.bridgeFeeLeaves,
+      bridgeFeePaidBySender: t.bridgeFeePaidBySender,
       counterparty,
       /*
        * ── SUPPRESSED ONLY WHEN IT IS ACTUALLY A PLACEHOLDER ────────────────

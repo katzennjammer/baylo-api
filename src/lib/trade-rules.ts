@@ -58,7 +58,7 @@ import { BRACKET_COUNT, bracketOf, bracketRange, type Bracket } from "@/lib/brac
 export const TRADING_POLICY_VERSION = "2026-09-16"
 
 /** Where the policy lives. The consent sheet links here. */
-export const TRADING_POLICY_PATH = "/trust#trading"
+export const TRADING_POLICY_PATH = "/policy/trading"
 
 // ── Legality ─────────────────────────────────────────────────────────────────
 
