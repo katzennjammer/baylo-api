@@ -1,18 +1,41 @@
-// Counts live rows that use an enum value main's Prisma client does not know.
+// Counts live rows that use an enum value the CHECKED-OUT branch's Prisma
+// client does not know.
 //
-// The bracket-trading migration (16 Sep 2026) added enum VALUES to the live
-// database while `main` still ran the old client. That is safe only while no
-// row USES one of them: Prisma refuses to deserialise a row whose enum column
-// holds a value outside the generated type, so a single PENDING_REVIEW item
-// would make main's feed query throw. Run this before switching a live server
-// back to main, and expect every count to be zero.
+// ── WHY ─────────────────────────────────────────────────────────────────────
+//
+// Prisma refuses to deserialise a row whose enum column holds a value outside
+// the generated type. So the moment one branch's migration adds an enum value
+// to the SHARED live database and something writes a row using it, every
+// checkout whose schema lacks that value 500s on any query touching the table
+// -- not on the feature, on the table.
+//
+// That gap opened on 16 Sep 2026: bracket-trading deployed
+// 20260916000000_bracket_trading to live while main still had the old schema,
+// and two AdminAction rows (the June backfill trades, cancelled with audit
+// rows) used TRADE_CANCELLED / TRADE. main's admin audit page would have
+// thrown on them.
+//
+// IT IS CLOSED, AND THIS SCRIPT IS HOW IT STAYS CLOSED. main took the schema
+// side of that migration -- enum values and nullable columns, no feature code
+// -- so every value below is now modelled by both branches and MAIN_LACKS is
+// empty. The pattern is the rule for next time: when a branch migrates the
+// shared database, the schema half lands on main first, and nothing writes a
+// new value until it has.
 //
 //   npx tsx --env-file=.env scripts/check-new-enum-rows.ts
 //
-// Exits 1 when any count is non-zero. Raw SQL on purpose: the whole point is
-// to count values the client may not model.
+// Exits 1 only if a value in MAIN_LACKS is in use. Raw SQL on purpose: the
+// whole point is to count values a client may not model.
 
 import prisma from "@/lib/prisma"
+
+/**
+ * Values the live database can hold that `main` CANNOT read.
+ *
+ * Empty since main took the schema-only commit. Add to it the moment a branch
+ * deploys an enum value main has not got, and empty it again when main does.
+ */
+const MAIN_LACKS: readonly string[] = []
 
 const CHECKS: { table: string; column: string; values: string[] }[] = [
   { table: "LeafTransaction", column: "type", values: ["BRIDGE_FEE_HOLD", "BRIDGE_FEE_RELEASE", "BRIDGE_FEE_PAID", "TRADE_REWARD", "TRADE_REWARD_REVERSAL"] },
@@ -30,19 +53,21 @@ const COLUMNS: { table: string; column: string }[] = [
 ]
 
 async function main() {
-  let nonZero = 0
-  console.log("rows using an enum value main's client does not know:")
+  let unreadable = 0
+  console.log("rows using a value the bracket-trading migration added:")
   for (const c of CHECKS) {
     for (const v of c.values) {
       const [{ n }] = await prisma.$queryRawUnsafe<{ n: bigint }[]>(
         `SELECT COUNT(*)::bigint AS n FROM "${c.table}" WHERE "${c.column}"::text = $1`, v,
       )
       const count = Number(n)
-      if (count > 0) nonZero++
-      console.log(`  ${String(count).padStart(4)}  ${c.table}.${c.column} = ${v}`)
+      const lacking = MAIN_LACKS.includes(v)
+      if (count > 0 && lacking) unreadable++
+      const note = count > 0 && lacking ? "   <- main CANNOT read this" : ""
+      console.log(`  ${String(count).padStart(4)}  ${c.table}.${c.column} = ${v}${note}`)
     }
   }
-  console.log("rows with a value in a column main's client does not select (harmless to main, listed for completeness):")
+  console.log("rows with a value in a column main models but never selects (harmless, listed for completeness):")
   for (const c of COLUMNS) {
     const [{ n }] = await prisma.$queryRawUnsafe<{ n: bigint }[]>(
       `SELECT COUNT(*)::bigint AS n FROM "${c.table}" WHERE "${c.column}" IS NOT NULL`,
@@ -52,9 +77,13 @@ async function main() {
   const [{ n: userSet }] = await prisma.$queryRawUnsafe<{ n: bigint }[]>(`SELECT COUNT(*)::bigint AS n FROM "Item" WHERE "valueSetByUser"`)
   console.log(`  ${String(Number(userSet)).padStart(4)}  Item.valueSetByUser = true (backfilled; a default-false column main never reads)`)
 
-  console.log(nonZero === 0 ? "\nSAFE FOR MAIN: no row uses a new enum value" : `\nNOT SAFE FOR MAIN: ${nonZero} value(s) in use`)
+  console.log(
+    unreadable === 0
+      ? "\nSAFE FOR MAIN: main's schema models every value live holds"
+      : `\nNOT SAFE FOR MAIN: ${unreadable} value(s) in use that main cannot read`,
+  )
   await prisma.$disconnect()
-  process.exit(nonZero === 0 ? 0 : 1)
+  process.exit(unreadable === 0 ? 0 : 1)
 }
 
 main().catch(async (e) => { console.error(e); await prisma.$disconnect(); process.exit(1) })

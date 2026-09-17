@@ -316,8 +316,16 @@ Two earlier chains are archived and read by nothing:
 
 ### Adding a migration from here
 
-**Not `prisma migrate dev`.** It needs a shadow database it can create, and the
-Supabase role cannot. Author the SQL from the diff, read it, save it, deploy it:
+**Never `prisma migrate dev` against the shared Supabase URL.** Two reasons,
+and the second is the one that costs data: it needs a shadow database the
+Supabase role cannot create, and when it decides the database has drifted from
+the migration history it offers to RESET it — which on this URL means dropping
+the live tables. `migrate deploy` only ever applies pending migrations forward
+and has no reset path; it is the only migration command that should ever see
+the live URL. For iterating on a schema, push it to a scratch schema instead
+(`.\scripts\scratch.ps1 -Push -Name scratch_x`), which touches nothing live.
+
+So: author the SQL from the diff, read it, save it, deploy it:
 
 ```bash
 # 1. edit prisma/schema.prisma
@@ -331,6 +339,16 @@ npx prisma generate
 
 Enum additions become `ALTER TYPE ... ADD VALUE`, which Postgres 17 runs fine
 inside Prisma's migration transaction. Do not edit the baseline.
+
+**A migration deployed from a branch changes the database for every branch.**
+Prisma refuses to read a row whose enum column holds a value the generated
+client does not model, so a value added on a feature branch and then USED
+turns every `main` checkout into a 500 on that whole table — not on the
+feature, on the table. Land the schema half (enum values and nullable columns,
+no feature code) on `main` first, and run
+`npx tsx --env-file=.env scripts/check-new-enum-rows.ts` before pointing a
+`main` checkout at the live database. This is exactly what happened on
+16 Sep 2026 and how it was closed.
 
 ### Coming from MySQL (teammates, read this)
 
