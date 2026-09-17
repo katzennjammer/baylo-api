@@ -5,6 +5,7 @@ import prisma from "@/lib/prisma"
 import { ok, unauthenticated, notFound, forbidden, conflict } from "@/lib/v1/envelope"
 import { parseJsonBody } from "@/lib/v1/body"
 import { MEETUP_SELECT, v1MeetupPlan } from "@/lib/meetup"
+import { notifyMeetupChanged } from "@/lib/meetup-events"
 
 export const dynamic = "force-dynamic"
 
@@ -123,6 +124,8 @@ export async function POST(
     // The agreement is recorded. A failed notification must not make the caller
     // retry a write that has already happened.
   })
+
+  await notifyMeetupChanged(partnerId, { tradeId: trade.id, kind: "agreed", actorId: viewerId })
 
   return ok({ plan: v1MeetupPlan(updated) })
 }

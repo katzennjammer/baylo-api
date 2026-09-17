@@ -6,6 +6,7 @@ import { ok, unauthenticated, notFound, forbidden, conflict, invalid } from "@/l
 import { parseJsonBody } from "@/lib/v1/body"
 import { v1Hub } from "@/lib/safe-zones"
 import { MEETUP_SELECT, allHubs, listingHubIds, proposableHub, v1MeetupPlan } from "@/lib/meetup"
+import { notifyMeetupChanged } from "@/lib/meetup-events"
 
 export const dynamic = "force-dynamic"
 
@@ -236,6 +237,9 @@ export async function POST(
     // notification must not turn a successful arrangement into an error the
     // client will retry, which would then write the same plan twice.
   })
+
+  // The partner's phone learns NOW, not on its next pull. See lib/meetup-events.
+  await notifyMeetupChanged(partnerId, { tradeId: trade.id, kind: "proposed", actorId: viewerId })
 
   return ok({ plan: v1MeetupPlan(updated) })
 }
