@@ -58,7 +58,10 @@ try {
   function Invoke-Drop {
     Write-Host "  dropping schema $Name"
     $env:DATABASE_URL = $base
-    npx tsx -e "const {Client}=require('pg');(async()=>{const c=new Client({connectionString:process.env.DATABASE_URL});await c.connect();await c.query('DROP SCHEMA IF EXISTS ""$Name"" CASCADE');await c.end()})()"
+    # A script file, not `npx tsx -e`: the inline form resolved `pg` from tsx's
+    # own install and failed with MODULE_NOT_FOUND (18 Sep 2026).
+    npx tsx scripts/drop-scratch-schema.ts $Name
+    if ($LASTEXITCODE -ne 0) { throw "drop failed" }
   }
 
   if ($Drop) { Invoke-Drop; return }
