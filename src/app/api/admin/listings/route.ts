@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic"
 
 const querySchema = z.strictObject({
   q: z.string().trim().max(120).optional(),
-  status: z.enum(["available", "in_trade", "traded", "owned", "removed", "hidden"]).optional(),
+  status: z.enum(["available", "pending_review", "value_rejected", "in_trade", "traded", "owned", "removed", "hidden"]).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
 })
 
@@ -28,7 +28,7 @@ export async function GET(req: NextRequest) {
         ...(status === "hidden"
           ? [{ moderationHiddenAt: { not: null } }]
           : status
-            ? [{ status: status.toUpperCase() as "AVAILABLE" | "IN_TRADE" | "TRADED" | "OWNED" | "REMOVED" | "PENDING_REVIEW" }]
+            ? [{ status: status.toUpperCase() as "AVAILABLE" | "IN_TRADE" | "TRADED" | "OWNED" | "REMOVED" | "PENDING_REVIEW" | "VALUE_REJECTED" }]
             : []),
       ],
     },

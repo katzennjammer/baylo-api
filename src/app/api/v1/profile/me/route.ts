@@ -1,3 +1,4 @@
+import type { ItemStatus } from "@/generated/prisma/client"
 import { NextRequest } from "next/server"
 import { z } from "zod"
 import { resolveSession } from "@/lib/api-auth"
@@ -13,6 +14,9 @@ import { V1_ITEM_SELECT, V1_ITEM_OWNER_SELECT, v1ItemStatsSelect, v1Item, type V
 import { taskLabel } from "@/lib/v1/taxonomy"
 import { loadStanding, publicStanding } from "@/lib/reputation-gate"
 import { loadIdVerificationState, publicIdVerification } from "@/lib/id-verification"
+
+/** What the owner's own shelf lists. See the note at step 2. */
+const SHELF_STATUSES: ItemStatus[] = ["AVAILABLE", "OWNED", "PENDING_REVIEW", "VALUE_REJECTED"]
 
 export const dynamic = "force-dynamic"
 
@@ -73,16 +77,28 @@ export async function GET(req: NextRequest) {
   if (!user) return unauthenticated()
 
   // ── 2 ── both shelf tabs in one pass.
+  //
+  // THE SHELF SHOWS EVERYTHING THE OWNER STILL HAS A DECISION ON. Until
+  // 18 Sep 2026 it showed AVAILABLE and OWNED only, so a listing parked for a
+  // value review, or rejected by one, was on nobody's screen at all -- the
+  // notification about it could not be opened and the shelf did not list it.
+  // PENDING_REVIEW and VALUE_REJECTED now come through with their status, and
+  // a moderator-hidden listing (still AVAILABLE, with moderationHiddenAt set)
+  // comes through as it always did but now SAYS SO: see `hiddenByModerator`
+  // on the item shape. The client labels the tile from those two fields.
+  //
+  // `listed` still counts AVAILABLE only. A listing waiting on a review is not
+  // listed, and the number in the tab header should not claim it is.
   const statusCounts = await prisma.item.groupBy({
     by: ["status"],
-    where: { userId: viewerId, status: { in: ["AVAILABLE", "OWNED"] } },
+    where: { userId: viewerId, status: { in: SHELF_STATUSES } },
     _count: { id: true },
   })
   const countFor = (s: string) => statusCounts.find((r) => r.status === s)?._count.id ?? 0
 
   // ── 3 ── the shelf itself: both tabs' worth, newest first.
   const itemRows = await prisma.item.findMany({
-    where: { userId: viewerId, status: { in: ["AVAILABLE", "OWNED"] }, ...(olderThan(cursor) ?? {}) },
+    where: { userId: viewerId, status: { in: SHELF_STATUSES }, ...(olderThan(cursor) ?? {}) },
     select: {
       ...V1_ITEM_SELECT,
       user: { select: V1_ITEM_OWNER_SELECT },
@@ -187,6 +203,10 @@ export async function GET(req: NextRequest) {
       counts: {
         listed: countFor("AVAILABLE"),
         owned: countFor("OWNED"),
+        // The two review states, so a shelf can badge its tab without
+        // counting tiles client-side.
+        waitingReview: countFor("PENDING_REVIEW"),
+        valueRejected: countFor("VALUE_REJECTED"),
         completedTrades: trades.length,
         reviews: user._count.reviewsReceived,
         followers: user._count.followers,

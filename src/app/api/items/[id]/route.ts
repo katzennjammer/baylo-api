@@ -184,16 +184,22 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
       const requested = body.valueLeaves !== undefined ? body.valueLeaves : item.valueLeaves
 
       const valued = await decideItemValue(category, condition, requested)
+      const inReview = item.status === "PENDING_REVIEW" || item.status === "VALUE_REJECTED"
       valuationData = {
         ...valued.data,
         // Three states move here: an AVAILABLE listing whose new value needs
-        // review is hidden; a PENDING_REVIEW listing (rejected, or waiting)
-        // whose owner has brought the value back within the cap goes live;
-        // anything else keeps its status.
+        // review is hidden; a listing in review (PENDING_REVIEW, waiting, or
+        // VALUE_REJECTED, answered) whose owner has brought the value back
+        // within the cap goes live; anything else keeps its status.
+        //
+        // A VALUE_REJECTED listing re-parked above the cap goes back to
+        // PENDING_REVIEW as a NEW review: the rejection reason is cleared
+        // with it, because it described a value that no longer exists. The
+        // audit row keeps the old decision.
         ...(valued.needsReview
-          ? { status: "PENDING_REVIEW" as const }
-          : item.status === "PENDING_REVIEW"
-            ? { status: "AVAILABLE" as const }
+          ? { status: "PENDING_REVIEW" as const, valueRejectionReason: null }
+          : inReview
+            ? { status: "AVAILABLE" as const, valueRejectionReason: null }
             : {}),
       }
       valueReview = {

@@ -1,5 +1,7 @@
 import { NextRequest } from "next/server"
-import { valueNeedsPremium } from "@/lib/brackets"
+import { bracketOf, valueNeedsPremium } from "@/lib/brackets"
+import { valueCap } from "@/lib/trade-rules"
+import { valueRejectionSentence } from "@/lib/value-rejection"
 import { isPremium } from "@/lib/premium"
 import { z } from "zod"
 import { resolveSession } from "@/lib/api-auth"
@@ -54,6 +56,56 @@ export const dynamic = "force-dynamic"
 
 const querySchema = z.strictObject({})
 
+/**
+ * The owner-facing account of a listing's moderation state.
+ *
+ *   state "waiting"    PENDING_REVIEW: an admin has not answered yet.
+ *   state "rejected"   VALUE_REJECTED: answered no; the owner chooses.
+ *   state "hidden"     moderationHiddenAt set: a takedown. Takes precedence
+ *                      over the value states because it is the one the owner
+ *                      cannot undo by editing.
+ *   null               nothing to explain.
+ *
+ * Both values AND both brackets, like the admin queue: the owner is being
+ * asked to move the number inside a bracket, and the bracket is the unit the
+ * cap is expressed in. `capBracket` is the highest bracket that goes live
+ * without a review, straight from valueCap().
+ *
+ * `appeal` is filled in by part C; until then it says an appeal is possible
+ * and names nothing, and the client treats a null `appeal.id` as "not yet
+ * filed".
+ */
+function ownerReview(item: {
+  status: string
+  moderationHiddenAt: Date | null
+  valueLeaves: number | null
+  suggestedLeaves: number | null
+  valueRejectionReason: string | null
+}) {
+  const hidden = item.moderationHiddenAt !== null
+  const state = hidden
+    ? ("hidden" as const)
+    : item.status === "PENDING_REVIEW"
+      ? ("waiting" as const)
+      : item.status === "VALUE_REJECTED"
+        ? ("rejected" as const)
+        : null
+  if (state === null) return null
+  const suggested = item.suggestedLeaves
+  return {
+    state,
+    hiddenAt: item.moderationHiddenAt,
+    requestedLeaves: item.valueLeaves,
+    suggestedLeaves: suggested,
+    requestedBracket: item.valueLeaves === null ? null : bracketOf(item.valueLeaves),
+    suggestedBracket: suggested === null ? null : bracketOf(suggested),
+    capBracket: suggested === null ? null : valueCap(suggested).maxBracketWithoutReview,
+    reasonCode: state === "rejected" ? item.valueRejectionReason : null,
+    reason: state === "rejected" ? valueRejectionSentence(item.valueRejectionReason) : null,
+    appeal: { id: null as string | null, status: null as string | null, canAppeal: state !== "waiting" },
+  }
+}
+
 export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
@@ -75,8 +127,16 @@ export async function GET(
   // does not come back and the 404 below covers it — rather than being fetched
   // and then rejected by a second `if`, which is the shape that eventually
   // grows a path around it.
+  //
+  // THE OWNER IS EXEMPT FROM THAT WHERE (18 Sep 2026). visibleItemWhere() says
+  // "not hidden, owner not blocked, owner not suspended", and every clause of
+  // it is about somebody ELSE looking. Applied to the owner it produced the
+  // one outcome worse than a takedown: a tile on their own shelf that answered
+  // "Item not found" when tapped, with nothing anywhere saying why. An owner
+  // reads their own listing in every state, and the `review` block below is
+  // where the state is explained.
   const item = await prisma.item.findFirst({
-    where: { id, ...visibleItemWhere(viewerId) },
+    where: { id, OR: [{ userId: viewerId }, visibleItemWhere(viewerId)] },
     select: {
       ...V1_ITEM_SELECT,
       imageHash: true,
@@ -108,7 +168,10 @@ export async function GET(
    * rather than left to the same `visibleItemWhere` that handles blocks.
    */
   if (!item || item.status === "REMOVED") return notFound("Item not found")
-  if (item.status === "PENDING_REVIEW" && item.userId !== viewerId) {
+  if (
+    (item.status === "PENDING_REVIEW" || item.status === "VALUE_REJECTED") &&
+    item.userId !== viewerId
+  ) {
     return notFound("Item not found")
   }
 
@@ -163,6 +226,13 @@ export async function GET(
 
   return ok({
     item: { ...shaped, imageHash: item.imageHash, updatedAt: item.updatedAt },
+    // What happened to this listing, for its owner. NULL for everyone else
+    // and for a listing nothing has happened to. The client draws the review
+    // screen from this block alone -- both values, both brackets, the cap it
+    // can edit back inside, the reason, and whether an appeal is possible --
+    // so that the explanation for "why can nobody see my listing" is one
+    // request and not three.
+    review: isOwner ? ownerReview(item) : null,
     viewer: {
       isOwner,
       // An owner cannot offer on their own listing, and neither can anyone once

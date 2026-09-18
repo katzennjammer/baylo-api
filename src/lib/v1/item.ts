@@ -46,6 +46,12 @@ export const V1_ITEM_SELECT = {
   suggestedLeaves: true,
   valuationSource: true,
   status: true,
+  // The two owner-only facts about a listing nobody else can see. On every
+  // public read path they are null/false by construction (the WHERE clause
+  // already excluded anything else); they carry information only on the
+  // owner's own shelf and detail, which is where the client labels the tile.
+  moderationHiddenAt: true,
+  valueRejectionReason: true,
   wantedItems: true, // read only to produce `wanted`; never emitted under this name
   imageHash: true,
   createdAt: true,
@@ -194,6 +200,18 @@ export interface V1Item {
   /** "comparables" | "category_band" | null for pre-model listings. */
   valuationSource: string | null
   status: string
+  /**
+   * TRUE when a moderator has taken the listing down. Only ever true on the
+   * owner's own reads -- every other path filters it out -- and it is what
+   * lets the shelf say "hidden by a moderator" instead of 404ing on tap.
+   */
+  hiddenByModerator: boolean
+  /**
+   * The code a value review was refused with, while status is VALUE_REJECTED.
+   * Null otherwise. The owner's sentence for it lives in @/lib/value-rejection
+   * (server) and its mirror in the app.
+   */
+  valueRejectionReason: string | null
   wanted: string | null
   pickup: PublicPickup | null
   /**
@@ -240,6 +258,9 @@ export interface V1ItemRow {
   suggestedLeaves: number | null
   valuationSource: string | null
   status: string
+  /** Optional: rows from a select that predates 18 Sep 2026 still shape. */
+  moderationHiddenAt?: Date | null
+  valueRejectionReason?: string | null
   wantedItems: string | null
   createdAt: Date
   userId: string
@@ -290,6 +311,8 @@ export function v1Item(
     suggestedLeaves: row.suggestedLeaves,
     valuationSource: row.valuationSource,
     status: row.status,
+    hiddenByModerator: row.moderationHiddenAt != null,
+    valueRejectionReason: row.valueRejectionReason ?? null,
     wanted: row.wantedItems ?? null,
     pickup: resolvePickup(row, viewerId, tradeAccessIds),
     // null when the caller did not select them. See the note on the field: a

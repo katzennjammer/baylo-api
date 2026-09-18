@@ -3,7 +3,7 @@ import { NEW_PARTNER_WINDOW_DAYS } from "@/lib/task-constants"
 import { suspensionState } from "@/lib/moderation"
 import { bracketOf } from "@/lib/brackets"
 import { valueCap } from "@/lib/trade-rules"
-import { ValueReviewActions } from "./ValueReviewActions"
+import { ValueReviewActions } from "../listings/ValueReviewActions"
 
 export const dynamic = "force-dynamic"
 export const revalidate = 0
@@ -17,7 +17,10 @@ export const revalidate = 0
  *                      judged on, so this is the one place a person can move
  *                      their own reach by typing. A QUEUE: somebody is waiting,
  *                      their listing is invisible until it is answered, and the
- *                      two buttons are the answer.
+ *                      two buttons are the answer. A rejected listing LEAVES
+ *                      this queue (status VALUE_REJECTED, 18 Sep 2026): it is
+ *                      waiting for its owner, not for us, and the Listings
+ *                      page's "Value rejected" filter is where those live.
  *   REPEAT PAIRS       Repeatable-task completions worth 0 Leaves — the faucet
  *                      guard refusing a partner already traded with inside the
  *                      window. Not misconduct on its own; a signal at volume.
@@ -108,9 +111,10 @@ export default async function AnomaliesPage() {
           <p style={{ fontSize: 12, color: "#888", marginTop: 3, lineHeight: 1.55, maxWidth: "80ch" }}>
             The owner asked for more than one bracket above the suggestion. Until this is
             answered the listing shows to nobody but them. <strong>Approve</strong> publishes it
-            at the value they asked for; <strong>Reject</strong> leaves it hidden and tells them
-            to relist at the suggestion, edit within the cap, or delete it — it is never
-            published at a value its owner did not choose.
+            at the value they asked for; <strong>Reject</strong> moves it out of this queue,
+            still hidden, and tells them which reason — they relist at the suggestion, edit
+            within the cap, delete it, or appeal. It is never published at a value its owner
+            did not choose.
           </p>
         </div>
 
