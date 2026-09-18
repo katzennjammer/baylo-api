@@ -1749,6 +1749,27 @@ model AdminAction {
 /// document, and for the same reason: a wire value generated from a database
 /// enum name changes the day somebody renames the enum, and a shipped mobile
 /// client has already parsed the old spelling.
+// ─────────────────────────────────────────────────────────────────────────────
+// NOT MODELLED HERE, BUT PRESENT IN THE LIVE DATABASE (noticed 18 Sep 2026):
+//
+//   table "Achievement"        (id, key, name, description, icon, criterion,
+//                              threshold, isActive, createdAt, updatedAt)
+//   table "UserAchievement"    (id, unlockedAt, userId, achievementId, displayOrder)
+//   enum  "AchievementCriterion"
+//
+// They hold rows and appear in no migration in this repository and no commit
+// on any branch -- somebody pushed them to live directly. Until they are
+// modelled, `prisma migrate diff --from-config-datasource` will propose
+// DROPPING all three every time it runs. DO NOT LET THAT INTO A MIGRATION:
+// every migration.sql authored from that diff has to have the drops removed by
+// hand (20260918000000_value_rejection_appeals did). `migrate deploy` never
+// touches them on its own -- it only applies files in prisma/migrations.
+//
+// Ownership is being confirmed with the teammate who built the feature; the
+// right fix is to model them here (schema half on main, as usual) so the diff
+// goes quiet.
+// ─────────────────────────────────────────────────────────────────────────────
+
 enum ListingAppealKind {
   /** Against a LISTING_VALUE_REJECTED decision. Overturn publishes at the requested value. */
   VALUE_REJECTION
