@@ -1,9 +1,16 @@
 // Acceptance harness for the task-reward faucet caps.
 // Runs against a scratch DB — point DATABASE_URL at it before running.
+//
+// 16 Sep 2026: the partner-gated repeatable task exercised in [1] and [2] is
+// SAFEZONE_MEETUP now. VERIFIED_SWAP was folded into TRADE_REWARD (see
+// @/lib/trade-rules) and is no longer a TaskKey; the guards it carried are the
+// same guards SAFEZONE_MEETUP carries, so the assertions are unchanged apart
+// from the amount (10, not 20). FIRST_TRADE joins the one-time set in [3].
 import prisma from "../src/lib/prisma"
 import { awardTask, reconcileTasks } from "../src/lib/tasks"
 import { WEEKLY_TASK_LEAF_CAP, TASK_REWARDS } from "../src/lib/task-constants"
 import { computeImpactData } from "../src/lib/impact-constants"
+import { requireScratchSchema } from "./lib/live-guard"
 
 const P = "ZZTEST_"
 let pass = 0, fail = 0
@@ -38,6 +45,7 @@ async function mkCompletedTrade(aId: string, bId: string, i1: string, i2: string
 }
 
 async function main() {
+  requireScratchSchema("scripts/verify-task-awards.ts")
   await cleanup()
 
   const a = await mkUser("alice"), b = await mkUser("bob"), c = await mkUser("carol")
@@ -49,44 +57,44 @@ async function main() {
   //       increments BOTH balances.
   console.log("\n[1] first trade with a new partner")
   const t1 = await mkCompletedTrade(a.id, b.id, ia1.id, ib1.id)
-  const r1 = await awardTask(prisma, a.id, "VERIFIED_SWAP", t1.id, { partnerId: b.id, tradeId: t1.id })
+  const r1 = await awardTask(prisma, a.id, "SAFEZONE_MEETUP", t1.id, { partnerId: b.id, tradeId: t1.id })
   let ua = await prisma.user.findUnique({ where: { id: a.id } })
   let ledger = await prisma.leafTransaction.findMany({ where: { userId: a.id, type: "TASK_REWARD" } })
-  check("awards VERIFIED_SWAP", r1.awarded === TASK_REWARDS.VERIFIED_SWAP, JSON.stringify(r1))
-  check("leaves incremented", ua!.leaves === 20, `leaves=${ua!.leaves}`)
-  check("lifetimeLeaves incremented", ua!.lifetimeLeaves === 20, `lifetime=${ua!.lifetimeLeaves}`)
-  check("one TASK_REWARD ledger row", ledger.length === 1 && ledger[0].amount === 20)
+  check("awards SAFEZONE_MEETUP", r1.awarded === TASK_REWARDS.SAFEZONE_MEETUP, JSON.stringify(r1))
+  check("leaves incremented", ua!.leaves === 10, `leaves=${ua!.leaves}`)
+  check("lifetimeLeaves incremented", ua!.lifetimeLeaves === 10, `lifetime=${ua!.lifetimeLeaves}`)
+  check("one TASK_REWARD ledger row", ledger.length === 1 && ledger[0].amount === 10)
   check("balance reconstructable from ledger",
     ledger.reduce((s, r) => s + r.amount, 0) === ua!.leaves)
 
   // idempotency: same trade again
-  const r1b = await awardTask(prisma, a.id, "VERIFIED_SWAP", t1.id, { partnerId: b.id, tradeId: t1.id })
+  const r1b = await awardTask(prisma, a.id, "SAFEZONE_MEETUP", t1.id, { partnerId: b.id, tradeId: t1.id })
   ua = await prisma.user.findUnique({ where: { id: a.id } })
   check("same trade re-award is a no-op", r1b.awarded === 0 && r1b.reason === "already_awarded", JSON.stringify(r1b))
-  check("balance unchanged after re-award", ua!.leaves === 20)
+  check("balance unchanged after re-award", ua!.leaves === 10)
 
   // ── 2. A SECOND trade with the SAME partner inside 30 days awards zero ─────
   console.log("\n[2] second trade, same partner, inside 30 days")
   const t2 = await mkCompletedTrade(a.id, b.id, ia2.id, ib2.id)
-  const r2 = await awardTask(prisma, a.id, "VERIFIED_SWAP", t2.id, { partnerId: b.id, tradeId: t2.id })
+  const r2 = await awardTask(prisma, a.id, "SAFEZONE_MEETUP", t2.id, { partnerId: b.id, tradeId: t2.id })
   ua = await prisma.user.findUnique({ where: { id: a.id } })
   check("repeat partner awards zero", r2.awarded === 0 && r2.reason === "repeat_partner", JSON.stringify(r2))
-  check("balance unchanged", ua!.leaves === 20 && ua!.lifetimeLeaves === 20)
+  check("balance unchanged", ua!.leaves === 10 && ua!.lifetimeLeaves === 10)
   const zeroRow = await prisma.taskCompletion.findUnique({
-    where: { userId_task_refId: { userId: a.id, task: "VERIFIED_SWAP", refId: t2.id } },
+    where: { userId_task_refId: { userId: a.id, task: "SAFEZONE_MEETUP", refId: t2.id } },
   })
   check("zero recorded so it cannot reopen later", zeroRow?.leaves === 0)
 
   // a DIFFERENT partner still pays
   const t3 = await mkCompletedTrade(a.id, c.id, ia3.id, ic1.id)
-  const r3 = await awardTask(prisma, a.id, "VERIFIED_SWAP", t3.id, { partnerId: c.id, tradeId: t3.id })
+  const r3 = await awardTask(prisma, a.id, "SAFEZONE_MEETUP", t3.id, { partnerId: c.id, tradeId: t3.id })
   ua = await prisma.user.findUnique({ where: { id: a.id } })
-  check("new partner still awards", r3.awarded === 20, JSON.stringify(r3))
-  check("lifetimeLeaves now 40", ua!.lifetimeLeaves === 40)
+  check("new partner still awards", r3.awarded === 10, JSON.stringify(r3))
+  check("lifetimeLeaves now 20", ua!.lifetimeLeaves === 20)
 
   // ── 3. One-time tasks are one-time (the unique constraint) ────────────────
   console.log("\n[3] one-time tasks")
-  for (const task of ["FIRST_LISTING", "VERIFY_ACCOUNT", "COMPLETE_PROFILE"] as const) {
+  for (const task of ["FIRST_LISTING", "VERIFY_ACCOUNT", "COMPLETE_PROFILE", "FIRST_TRADE"] as const) {
     const first = await awardTask(prisma, c.id, task)
     const second = await awardTask(prisma, c.id, task)
     check(`${task} awards once then no-ops`,

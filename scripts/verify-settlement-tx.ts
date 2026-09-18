@@ -2,6 +2,7 @@
 // roll back the trade itself. Run against a scratch DB.
 import prisma from "../src/lib/prisma"
 import { awardTask } from "../src/lib/tasks"
+import { requireScratchSchema } from "./lib/live-guard"
 
 const P = "ZZTX_"
 let pass = 0, fail = 0
@@ -21,6 +22,7 @@ async function cleanup() {
 }
 
 async function main() {
+  requireScratchSchema("scripts/verify-settlement-tx.ts")
   await cleanup()
 
   const a = await prisma.user.create({ data: { name: P + "a", email: P + "a@t.local", password: "x" } })
@@ -34,9 +36,9 @@ async function main() {
   })
 
   // Pre-award A so the in-transaction award hits the duplicate path.
-  await awardTask(prisma, a.id, "VERIFIED_SWAP", trade.id, { partnerId: b.id, tradeId: trade.id })
+  await awardTask(prisma, a.id, "SAFEZONE_MEETUP", trade.id, { partnerId: b.id, tradeId: trade.id })
   const preA = await prisma.user.findUnique({ where: { id: a.id } })
-  check("A pre-awarded outside the tx", preA!.lifetimeLeaves === 20)
+  check("A pre-awarded outside the tx", preA!.lifetimeLeaves === 10)
 
   // Now run the settlement shape: trade + item updates, then awards for both.
   await prisma.$transaction(async (tx) => {
@@ -46,7 +48,7 @@ async function main() {
     await tx.user.updateMany({ where: { id: { in: [a.id, b.id] } }, data: { totalTrades: { increment: 1 } } })
 
     for (const [uid, pid] of [[a.id, b.id], [b.id, a.id]] as const) {
-      await awardTask(tx, uid, "VERIFIED_SWAP", trade.id, { partnerId: pid, tradeId: trade.id })
+      await awardTask(tx, uid, "SAFEZONE_MEETUP", trade.id, { partnerId: pid, tradeId: trade.id })
     }
   })
 
@@ -58,10 +60,10 @@ async function main() {
   check("trade COMPLETED despite the duplicate award", t!.status === "COMPLETED", t!.status)
   check("items transferred", it1!.userId === b.id && it1!.status === "OWNED")
   check("totalTrades incremented", ua!.totalTrades === 1 && ub!.totalTrades === 1)
-  check("A not double-awarded", ua!.lifetimeLeaves === 20, `lifetime=${ua!.lifetimeLeaves}`)
-  check("B awarded once", ub!.lifetimeLeaves === 20 && ub!.leaves === 20, `lifetime=${ub!.lifetimeLeaves}`)
+  check("A not double-awarded", ua!.lifetimeLeaves === 10, `lifetime=${ua!.lifetimeLeaves}`)
+  check("B awarded once", ub!.lifetimeLeaves === 10 && ub!.leaves === 10, `lifetime=${ub!.lifetimeLeaves}`)
 
-  const rows = await prisma.taskCompletion.count({ where: { task: "VERIFIED_SWAP", refId: trade.id } })
+  const rows = await prisma.taskCompletion.count({ where: { task: "SAFEZONE_MEETUP", refId: trade.id } })
   check("exactly 2 completion rows (one per user)", rows === 2, `rows=${rows}`)
 
   const ledger = await prisma.leafTransaction.findMany({
@@ -69,8 +71,8 @@ async function main() {
   })
   check("exactly 2 TASK_REWARD ledger rows", ledger.length === 2, `rows=${ledger.length}`)
   check("ledger sums equal both users' balances",
-    ledger.filter((r) => r.userId === a.id).reduce((s, r) => s + r.amount, 0) === 20 &&
-    ledger.filter((r) => r.userId === b.id).reduce((s, r) => s + r.amount, 0) === 20)
+    ledger.filter((r) => r.userId === a.id).reduce((s, r) => s + r.amount, 0) === 10 &&
+    ledger.filter((r) => r.userId === b.id).reduce((s, r) => s + r.amount, 0) === 10)
 
   await cleanup()
   console.log(`\n${pass} passed, ${fail} failed`)

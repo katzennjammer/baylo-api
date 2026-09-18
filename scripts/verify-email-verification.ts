@@ -17,6 +17,7 @@
 import net from "net"
 import prisma from "../src/lib/prisma"
 import { SIGNUP_GRANT_LEAVES, TASK_REWARDS } from "../src/lib/task-constants"
+import { requireScratchSchema } from "./lib/live-guard"
 
 /** Comfortably over 18. See the note at the first register call below. */
 const ADULT_DOB = "1995-06-15"
@@ -184,6 +185,7 @@ async function ledgerTotals() {
 }
 
 async function main() {
+  requireScratchSchema("scripts/verify-email-verification.ts")
   const sink = await startSmtpSink(SMTP_PORT)
   console.log(`SMTP sink listening on 127.0.0.1:${SMTP_PORT}`)
   console.log(`Driving ${BASE}\n`)

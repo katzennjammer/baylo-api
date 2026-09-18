@@ -1,5 +1,5 @@
 import type { PrismaClient } from "@/generated/prisma/client"
-import { COMMITTING_STATUSES } from "@/lib/contracts"
+import { releaseBridgeFee } from "@/lib/bridge-fee"
 
 /**
  * Offers, and the one thing that was missing from them: an end.
@@ -9,9 +9,11 @@ import { COMMITTING_STATUSES } from "@/lib/contracts"
  * An offer had no expiry. It sat PENDING until the receiver acted, and if they
  * never did, it sat PENDING forever. That was not a cosmetic gap:
  *
- *   - `availableLeaves()` subtracts every PENDING offer's `offeredLeaves` from
- *     the sender's balance. Leaves pledged to an offer nobody would ever answer
- *     were held indefinitely.
+ *   - Leaves committed to an offer nobody would ever answer were held
+ *     indefinitely. That was `offeredLeaves` then and it is the BRIDGING FEE
+ *     now, which is a stronger version of the same problem: the fee has
+ *     actually left the proposer's balance (see @/lib/bridge-fee), so an offer
+ *     that never ends is Leaves that never come back.
  *   - The app said otherwise. The offer screen's footnote reads "Marco has
  *     three days to reply." and its pending state reads "then it expires on its
  *     own." Both were false, and a promise the product makes and the database
@@ -50,7 +52,7 @@ import { COMMITTING_STATUSES } from "@/lib/contracts"
  * sender would be told they had 40 fewer Leaves than they really did.
  */
 
-type OfferDb = Pick<PrismaClient, "offer" | "deferredContract" | "notification">
+type OfferDb = Pick<PrismaClient, "offer" | "notification" | "user" | "leafTransaction">
 
 /** The window, in days. See the long note above before changing it. */
 export const OFFER_EXPIRY_DAYS = 3
@@ -83,19 +85,19 @@ export function offerExpiryCutoff(now: Date = new Date()): Date {
  * they were refused by someone who in fact never opened the message. That is a
  * fact about another person that the database would be inventing.
  *
- * ── THE LEAVES COME BACK WITH NO SEPARATE STEP ──────────────────────────────
+ * ── THE FEE COMES BACK, AND IT IS A WRITE NOW ───────────────────────────────
  *
- * `availableLeaves()` counts only PENDING rows, so the moment the status moves
- * the arithmetic changes. There is nothing to credit and nothing to get out of
- * step — which is also why this sweep can run from any read path without a
- * transaction around it.
+ * It used to be arithmetic: `availableLeaves()` counted only PENDING rows, so
+ * moving the status was the whole of the release and this sweep could run from
+ * any read path without a transaction. The bridging fee is a real debit, so
+ * expiry has to CREDIT it back and write a BRIDGE_FEE_RELEASE row — and the
+ * status change and the credit have to be one transaction, or an offer can
+ * read EXPIRED with its fee still in escrow.
  *
- * ── AND SO DOES THE PROMISE ─────────────────────────────────────────────────
- *
- * A deferred agreement proposed alongside an expiring offer goes DECLINED, for
- * the same reason it does when the offer is declined or withdrawn: nobody broke
- * anything, and the debtor's one contract slot has to come free or an offer
- * nobody ever read would lock them out of proposing for good.
+ * That is the cost of the hold being real, and it is paid here: one small
+ * transaction per expiring offer, on a path that finds one stale offer on a
+ * quiet day and none most of the time. The conditional status write inside it
+ * is still what makes two concurrent sweeps produce one expiry.
  *
  * `scope` narrows the work. A balance read sweeps that sender's offers; an item
  * detail sweeps that listing's. Unscoped is every stale offer, which no request
@@ -118,36 +120,42 @@ export async function expireStaleOffers(
       id: true,
       senderId: true,
       offeredLeaves: true,
+      bridgeFeeLeaves: true,
+      offeredBracket: true,
+      targetBracket: true,
       post: { select: { title: true } },
-      contracts: {
-        where: { status: { in: [...COMMITTING_STATUSES] } },
-        select: { id: true },
-        take: 1,
-      },
     },
   })
   if (stale.length === 0) return 0
 
   let expired = 0
   for (const offer of stale) {
-    // Conditional on PENDING, so two concurrent sweeps produce one expiry and
-    // one no-op rather than two. Same guard every other transition here uses.
-    const moved = await db.offer.updateMany({
-      where: { id: offer.id, status: "PENDING" },
-      data: { status: "EXPIRED" },
-    })
-    // count === 0 means another request got there first — the receiver accepted
-    // it a moment ago, or the sender withdrew it. Not an error, and emphatically
-    // not a reason to expire a contract or send a notification for it.
-    if (moved.count !== 1) continue
-    expired += 1
+    /*
+     * ONLY A PROPOSER-PAID FEE IS IN ESCROW.
+     *
+     * `bridgeFeeLeaves` is the quoted price of the bridge and is set in both
+     * directions. It is HELD only when the proposer is the payer -- when they
+     * offered the lower-bracket item. An offer of something HIGHER quotes a fee
+     * the receiver would have paid on accepting, and an offer that expires was
+     * never accepted, so nothing was ever taken and there is nothing to give
+     * back. Refunding it would mint Leaves from a price tag.
+     */
+    const proposerPaid =
+      offer.offeredBracket !== null &&
+      offer.targetBracket !== null &&
+      offer.offeredBracket < offer.targetBracket
+    const fee = proposerPaid ? offer.bridgeFeeLeaves ?? 0 : 0
 
-    if (offer.contracts[0]) {
-      await db.deferredContract.updateMany({
-        where: { id: offer.contracts[0].id, status: "PENDING_ACCEPT" },
-        data: { status: "DECLINED" },
-      })
-    }
+    // The status and the refund together. Conditional on PENDING, so two
+    // concurrent sweeps produce one expiry and one no-op rather than two, and
+    // the transaction means the refund cannot outlive a rolled-back expiry or
+    // the reverse.
+    const released = await runExpiry(db, offer.id, offer.senderId, fee)
+    // false means another request got there first — the receiver accepted it a
+    // moment ago, or the sender withdrew it. Not an error, and emphatically not
+    // a reason to send a notification for it.
+    if (!released) continue
+    expired += 1
 
     /*
      * The sender is told, because something of theirs changed while they were
@@ -166,9 +174,11 @@ export async function expireStaleOffers(
           type: "OFFER_EXPIRED",
           message:
             `your offer on "${offer.post.title}" expired after ${OFFER_EXPIRY_DAYS} days` +
-            (offer.offeredLeaves
-              ? ` — ${offer.offeredLeaves} Leaves are back in your balance`
-              : ""),
+            (fee > 0
+              ? ` — your ${fee}-Leaf bridging fee is back in your balance`
+              : offer.offeredLeaves
+                ? ` — ${offer.offeredLeaves} Leaves are back in your balance`
+                : ""),
           link: `/dashboard/tradeplace`,
         },
       })
@@ -178,4 +188,65 @@ export async function expireStaleOffers(
   }
 
   return expired
+}
+
+/**
+ * One offer's expiry: the conditional status write and, when there is a fee,
+ * the refund, in one transaction. Returns true when THIS call expired it.
+ *
+ * Split out so the loop above reads as the policy it is. The narrow `OfferDb`
+ * is what lets `expireStaleOffers` run against a transaction client from a
+ * caller that already has one -- but a nested `$transaction` is not something
+ * every client supports, so this takes the interactive path only when the
+ * client offers one and falls back to sequential writes otherwise. The
+ * fallback's failure mode is the one the old code had for the status alone,
+ * and it is confined to a caller that is already inside a transaction of its
+ * own -- where the enclosing rollback covers both writes anyway.
+ */
+async function runExpiry(
+  db: OfferDb,
+  offerId: string,
+  senderId: string,
+  fee: number,
+): Promise<boolean> {
+  const work = async (tx: OfferDb) => {
+    const moved = await tx.offer.updateMany({
+      where: { id: offerId, status: "PENDING" },
+      data: { status: "EXPIRED" },
+    })
+    if (moved.count !== 1) return false
+    if (fee > 0) {
+      await releaseBridgeFee(tx, { userId: senderId, offerId, amount: fee, reason: "expired" })
+    }
+    return true
+  }
+
+  const client = db as OfferDb & { $transaction?: (fn: (tx: OfferDb) => Promise<boolean>) => Promise<boolean> }
+  if (typeof client.$transaction === "function") return client.$transaction(work)
+  return work(db)
+}
+
+/**
+ * `Offer.offeredItems` is a JSON string written by a client. Parsed defensively.
+ *
+ * Anything that is not an object with a non-empty string `id` is dropped, and a
+ * malformed blob yields `[]` rather than throwing. Since 16 Sep 2026 a new
+ * offer always holds exactly one entry; older rows may hold several, and the
+ * FIRST is the one every shipped client ever sent and the one the chat card
+ * drew, so that is the one the accept path reads.
+ *
+ * It lived in @/lib/contracts, which was where the DPA value arithmetic
+ * happened to need it. That file is gone; the function is about offers.
+ */
+export function parseOfferedItemIds(raw: string): string[] {
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed
+      .filter((x): x is { id?: unknown } => !!x && typeof x === "object")
+      .map((x) => x.id)
+      .filter((id): id is string => typeof id === "string" && id.length > 0)
+  } catch {
+    return []
+  }
 }

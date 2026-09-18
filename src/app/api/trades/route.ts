@@ -5,6 +5,8 @@ import pusher from "@/lib/pusher"
 import { ITEM_PUBLIC_SELECT, preciseAccessItemIds, shapeItem } from "@/lib/item-visibility"
 import { parseBody, createTradeSchema, tradeStatusSchema } from "@/lib/validation"
 import { enforceInitiateTrade, enforceAcceptTrade } from "@/lib/reputation-gate"
+import { assessOffer, refusalStatus } from "@/lib/offer-check"
+import { releaseTradeFee, TRADE_FEE_SELECT } from "@/lib/trade-fee-release"
 import { enforceNotBlocked } from "@/lib/blocking"
 
 export async function GET() {
@@ -104,6 +106,43 @@ export async function POST(req: NextRequest) {
     // also hide the button, and that hiding is a courtesy: this check is what
     // makes the limit real, and it must keep holding for a caller who never
     // loaded the page.
+    /*
+     * ── THE BRACKET RULE APPLIES HERE TOO, AND A BRIDGE CANNOT BE SENT ──────
+     *
+     * This route is the WEB direct-trade path: it proposes a swap without an
+     * Offer row. The same pair rule binds it -- same bracket, or one below --
+     * because a rule that only bound /api/offers would be avoided by sending
+     * the request that skips it.
+     *
+     * A BRIDGE IS REFUSED rather than charged. The fee needs consent, and
+     * consent needs the sheet that states the amount, the balance before and
+     * after, and the policy; this route has no such surface and inventing a
+     * silent charge on a path the user reached from a different screen is
+     * exactly what the consent record exists to prevent. Same-bracket trades
+     * go through unchanged, which is every trade this route has ever created.
+     */
+    const pair = await assessOffer(prisma, {
+      proposerId: session.user.id,
+      offeredItemId,
+      targetItemId: requestedItemId,
+    })
+    if (!pair.ok) {
+      return NextResponse.json(
+        { error: pair.message, code: pair.code, offeredBracket: pair.offeredBracket, targetBracket: pair.targetBracket },
+        { status: refusalStatus(pair.code) },
+      )
+    }
+    if (pair.fee > 0) {
+      return NextResponse.json(
+        {
+          error: `Offering a Bracket ${pair.offeredBracket} item for a Bracket ${pair.targetBracket} item costs ${pair.fee} Leaves. Send it as an offer so you can agree to the bridging fee first.`,
+          code: "BRIDGE_NEEDS_OFFER",
+          fee: pair.fee,
+        },
+        { status: 400 },
+      )
+    }
+
     const gate = await enforceInitiateTrade(session.user.id, [requestedItemId])
     if (gate.response) return gate.response
 
@@ -247,7 +286,7 @@ export async function PATCH(req: NextRequest) {
               { requestedItemId: { in: itemIds } },
             ],
           },
-          select: { id: true, senderId: true, receiverId: true, requestedItem: { select: { title: true } } },
+          select: { ...TRADE_FEE_SELECT, requestedItem: { select: { title: true } } },
         })
 
         if (rivals.length > 0) {
@@ -255,6 +294,14 @@ export async function PATCH(req: NextRequest) {
             where: { id: { in: rivals.map((r) => r.id) } },
             data: { status: "REJECTED" },
           })
+
+          // Each rival that carried a bridging fee returns it to whoever paid.
+          // A trade auto-declined because the item went elsewhere is not one
+          // anybody walked away from, and holding their Leaves for it would be
+          // the least defensible refund this system could withhold.
+          for (const rival of rivals) {
+            await releaseTradeFee(tx, rival, "rejected")
+          }
 
           // Notify each sender that their trade was auto-declined
           for (const rival of rivals) {
@@ -321,7 +368,15 @@ export async function PATCH(req: NextRequest) {
     }
 
     if (status === "REJECTED") {
-      await prisma.tradeRequest.update({ where: { id: tradeId }, data: { status: "REJECTED" } })
+      // The status and the refund together; see releaseTradeFee().
+      const rejected = await prisma.tradeRequest.findUnique({
+        where: { id: tradeId },
+        select: TRADE_FEE_SELECT,
+      })
+      await prisma.$transaction(async (tx) => {
+        await tx.tradeRequest.update({ where: { id: tradeId }, data: { status: "REJECTED" } })
+        if (rejected) await releaseTradeFee(tx, rejected, "rejected")
+      })
       await prisma.notification.create({
         data: {
           userId:  trade.senderId,

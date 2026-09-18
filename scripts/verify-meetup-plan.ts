@@ -30,6 +30,7 @@
 import prisma from "../src/lib/prisma"
 import { sharedHubs, allHubs, listingHubIds, proposableHub, v1MeetupPlan, NO_MEETUP_PLAN } from "../src/lib/meetup"
 import { resolveMeetupHub } from "../src/lib/safe-zones"
+import { requireScratchSchema } from "./lib/live-guard"
 
 const P = "ZZMEETUP_"
 let pass = 0
@@ -102,6 +103,7 @@ const mkHub = (tag: string, isActive = true) =>
 const soon = (days: number) => new Date(Date.now() + days * 86_400_000)
 
 async function main() {
+  requireScratchSchema("scripts/verify-meetup-plan.ts")
   await cleanup()
 
   const [a, b] = await Promise.all([mkUser("a"), mkUser("b")])

@@ -3,7 +3,7 @@ import { z } from "zod"
 import { resolveSession } from "@/lib/api-auth"
 import prisma from "@/lib/prisma"
 import pusher from "@/lib/pusher"
-import { COMMITTING_STATUSES } from "@/lib/contracts"
+import { releaseBridgeFee } from "@/lib/bridge-fee"
 import { leafBalances } from "@/lib/leaves"
 import { expireStaleOffers } from "@/lib/offers"
 import { ok, unauthenticated, notFound, conflict } from "@/lib/v1/envelope"
@@ -22,9 +22,10 @@ export const dynamic = "force-dynamic"
  * state to move to. A sender was held until the other person acted, and the
  * consequences were not cosmetic:
  *
- *   - `availableLeaves()` subtracts every PENDING offer's `offeredLeaves` from
- *     the sender's balance. Leaves pledged to an offer nobody ever answered were
- *     held indefinitely, and the sender could not release them.
+ *   - Leaves committed to an offer nobody ever answered were held
+ *     indefinitely, and the sender could not release them. That is truer now
+ *     than it was: the bridging fee has actually left the proposer's balance
+ *     (see @/lib/bridge-fee), so an offer with no exit is Leaves with no exit.
  *   - Sending an offer to a stranger who abandons the app cost the sender a
  *     permanent slice of their balance with no recourse.
  *
@@ -35,16 +36,12 @@ export const dynamic = "force-dynamic"
  *
  * ── WHAT COMES BACK WITH IT ─────────────────────────────────────────────────
  *
- * The pledged Leaves, immediately and with no separate release step:
- * `availableLeaves()` counts only PENDING rows, so the moment the status moves
- * the arithmetic changes. That is why the balance is returned in the response —
- * it is the number the sender came here to change, and making them refetch it
- * would leave the screen showing the old one.
- *
- * A deferred agreement proposed alongside the offer goes DECLINED, for the same
- * reason it does when the receiver declines: it is off the table, nobody broke
- * a promise, and the debtor's one contract slot has to come free or a withdrawn
- * offer would lock them out of proposing for good.
+ * The bridging fee, as a BRIDGE_FEE_RELEASE row and a credit, in the same
+ * transaction as the status. Not "with no separate release step" any more —
+ * that was true while the hold was arithmetic over PENDING rows, and the fee
+ * is a real debit. The balance is returned in the response because it is the
+ * number the sender came here to change, and making them refetch it would
+ * leave the screen showing the old one.
  *
  * ── ONE THING IT DELIBERATELY DOES NOT DO ───────────────────────────────────
  *
@@ -81,12 +78,10 @@ export async function POST(
       senderId: true,
       receiverId: true,
       offeredLeaves: true,
+      bridgeFeeLeaves: true,
+      offeredBracket: true,
+      targetBracket: true,
       post: { select: { title: true } },
-      contracts: {
-        where: { status: { in: [...COMMITTING_STATUSES] } },
-        select: { id: true },
-        take: 1,
-      },
     },
   })
   if (!offer) return notFound("Offer not found")
@@ -113,22 +108,40 @@ export async function POST(
     )
   }
 
-  // Conditional on PENDING, so two taps produce one withdrawal and one 409
-  // rather than two — the same guard the contract routes use.
-  const moved = await prisma.offer.updateMany({
-    where: { id: offer.id, status: "PENDING" },
-    data: { status: "WITHDRAWN" },
-  })
-  if (moved.count !== 1) {
-    return conflict("This offer was just resolved by another request")
-  }
-
-  // The promise goes with it. See the header.
-  if (offer.contracts[0]) {
-    await prisma.deferredContract.updateMany({
-      where: { id: offer.contracts[0].id, status: "PENDING_ACCEPT" },
-      data: { status: "DECLINED" },
+  /*
+   * The status and the refund in one transaction, conditional on PENDING so
+   * two taps produce one withdrawal and one 409 rather than two.
+   *
+   * ONLY A PROPOSER-PAID FEE IS RETURNED. `bridgeFeeLeaves` is the QUOTE and is
+   * set in both directions; it is held only when the proposer is the payer,
+   * which is when they offered the LOWER item. On an up-bridge the receiver
+   * would have paid at accept and never did, so there is nothing in escrow --
+   * crediting the sender here would invent Leaves out of a number that was
+   * only ever a price tag.
+   */
+  const proposerPaid =
+    offer.offeredBracket !== null &&
+    offer.targetBracket !== null &&
+    offer.offeredBracket < offer.targetBracket
+  const fee = proposerPaid ? offer.bridgeFeeLeaves ?? 0 : 0
+  const withdrew = await prisma.$transaction(async (tx) => {
+    const moved = await tx.offer.updateMany({
+      where: { id: offer.id, status: "PENDING" },
+      data: { status: "WITHDRAWN" },
     })
+    if (moved.count !== 1) return false
+    if (fee > 0) {
+      await releaseBridgeFee(tx, {
+        userId: offer.senderId,
+        offerId: offer.id,
+        amount: fee,
+        reason: "withdrawn",
+      })
+    }
+    return true
+  })
+  if (!withdrew) {
+    return conflict("This offer was just resolved by another request")
   }
 
   // Read AFTER the status moved, so it reflects the released Leaves rather than
@@ -150,9 +163,6 @@ export async function POST(
       offer: { id: offer.id, status: "WITHDRAWN" },
       viewer: { leaves: balances.leaves, availableLeaves: balances.available },
     },
-    {
-      releasedLeaves: offer.offeredLeaves ?? 0,
-      contractDeclined: offer.contracts.length > 0,
-    },
+    { releasedLeaves: fee },
   )
 }

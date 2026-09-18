@@ -2,18 +2,61 @@ import { NextRequest, NextResponse } from "next/server"
 import { resolveSession } from "@/lib/api-auth"
 import prisma from "@/lib/prisma"
 import pusher from "@/lib/pusher"
-import { availableLeaves } from "@/lib/leaves"
-import { expireStaleOffers } from "@/lib/offers"
+import { expireStaleOffers, parseOfferedItemIds } from "@/lib/offers"
 import { offerActionSchema, parseBody } from "@/lib/validation"
-import { enforceAcceptTrade, loadStanding } from "@/lib/reputation-gate"
-import { DPA } from "@/lib/reputation-config"
-import {
-  COMMITTING_STATUSES,
-  netValueTo,
-  offerAsTradeSides,
-  parseOfferedItemIds,
-} from "@/lib/contracts"
+import { enforceAcceptTrade } from "@/lib/reputation-gate"
+import { assessOffer, refusalStatus } from "@/lib/offer-check"
+import { holdBridgeFee, releaseBridgeFee } from "@/lib/bridge-fee"
+import { TRADING_POLICY_VERSION } from "@/lib/trade-rules"
 
+/**
+ * PATCH /api/offers/[id] — the RECEIVER accepts or declines.
+ *
+ * ── THE RULES ARE RE-CHECKED HERE, NOT TRUSTED FROM THE OFFER ───────────────
+ *
+ * An offer records the two brackets it was judged on and the fee it paid. This
+ * route does not take those on trust: it re-derives both brackets from the
+ * items as they are NOW and refuses if they have moved. An owner can relist,
+ * an admin can approve a value review, a revaluation can land — and accepting
+ * under rules neither party agreed to is worse than asking for a fresh offer.
+ * (The edit path refuses to move a value while an offer is pending, which
+ * makes this a narrow case rather than an ordinary one. It is checked anyway:
+ * "narrow" is not "impossible", and this is where currency moves.)
+ *
+ * The premium gate and the tier cap run against what the ACCEPTER receives.
+ *
+ * ── THE RECEIVER MAY BE THE ONE WHO PAYS ────────────────────────────────────
+ *
+ * The side handing over the LOWER-bracket item pays. When the proposer offered
+ * something smaller, they paid at propose and this route only moves the hold
+ * onto the trade. When the proposer offered something BIGGER — equally legal —
+ * the receiver is the one moving up, and accepting is the moment they commit.
+ * So an up-bridge accept:
+ *
+ *   demands consent IN THIS REQUEST (`consent.accepted` plus the current
+ *   policy version), because this tap is where they agree to be charged;
+ *   holds the fee off their balance in the accept transaction, refusing with
+ *   need-vs-have if they cannot cover it;
+ *   records `consentAt` / `policyVersion` on the offer — the columns belong to
+ *   whoever paid, and on this path that is them.
+ *
+ * ── WHAT THE FEE DOES AT EACH OUTCOME ───────────────────────────────────────
+ *
+ *   accept    held (by whichever side owes it) and recorded on the
+ *             TradeRequest as `bridgeFeeLeaves` + `bridgeFeePaidBySender`.
+ *             Nothing is PAID yet: it reaches the counterparty at completion,
+ *             and a trade that never completes returns it.
+ *   decline   a proposer-paid hold is released; an up-bridge never held
+ *             anything, so there is nothing to return.
+ *
+ * ── WHAT LEFT ON 16 SEP 2026 ────────────────────────────────────────────────
+ *
+ * Roughly a third of this handler: every deferred-agreement check (the
+ * debtor's tier, their open-contract count, their debt ceiling, the value
+ * difference the promise had to fit inside), the contract status transitions,
+ * and the sender-balance re-check for `offeredLeaves`. Offers do not carry
+ * Leaves any more and there are no promises to accept alongside them.
+ */
 export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
     const session = await resolveSession()
@@ -21,14 +64,14 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
     const { id: offerId } = await params
 
-    // Sweep before reading the row, so an offer that aged out is seen as EXPIRED
-    // rather than accepted three days late. Scoped to nothing — the id is not a
-    // sender or a post, and one row's worth of sweep is what this costs.
+    // Sweep before reading the row, so an offer that aged out is seen as
+    // EXPIRED rather than accepted three days late — and its fee is already
+    // back with the proposer by the time this reads the status.
     await expireStaleOffers(prisma)
 
     const parsed = await parseBody(req, offerActionSchema)
     if (!parsed.ok) return parsed.response
-    const { action } = parsed.data
+    const { action, consent } = parsed.data
 
     const offer = await prisma.offer.findUnique({
       where: { id: offerId },
@@ -36,14 +79,6 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         post: { select: { id: true, title: true, valueLeaves: true } },
         sender: { select: { id: true, name: true } },
         receiver: { select: { id: true, name: true } },
-        // A promise proposed alongside this offer, if there is one. At most one
-        // is ever in a COMMITTING status — the one-at-a-time rule — so this is
-        // a findFirst in list clothing.
-        contracts: {
-          where: { status: { in: [...COMMITTING_STATUSES] } },
-          select: { id: true, amountLeaves: true, deadline: true, debtorId: true, status: true },
-          take: 1,
-        },
       },
     })
     if (!offer) return NextResponse.json({ error: "Offer not found" }, { status: 404 })
@@ -53,323 +88,312 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     if (offer.status !== "PENDING") {
       return NextResponse.json({ error: "Offer already resolved" }, { status: 400 })
     }
-    // Guard: a user must not trade with themselves
     if (offer.senderId === offer.receiverId) {
       return NextResponse.json({ error: "Cannot trade with yourself" }, { status: 400 })
     }
 
-    // ── Reputation gate, ACCEPT path ──
-    //
-    // The accepter is acquiring the offered items, so the premium bracket gate
-    // and the tier value ceiling apply to those. The defaulted-trader block does
-    // not: accepting is the one move a defaulter must keep, because Leaves
-    // arriving this way are what pays their debt down.
-    //
-    // offeredItems is a JSON blob written by the client. Only well-formed
-    // string ids are passed on; enforceAcceptTrade() looks them up in Item and
-    // an id that matches nothing simply caps nothing, which is the same
-    // treatment an unvalued item gets.
-    if (action === "accept") {
-      let offeredIds: string[] = []
-      try {
-        const raw: unknown = JSON.parse(offer.offeredItems)
-        if (Array.isArray(raw)) {
-          offeredIds = raw
-            .filter((x): x is { id?: unknown } => !!x && typeof x === "object")
-            .map((x) => x.id)
-            .filter((id): id is string => typeof id === "string" && id.length > 0)
-        }
-      } catch {
-        offeredIds = []
-      }
-      if (offeredIds.length > 0) {
-        const gate = await enforceAcceptTrade(session.user.id, offeredIds)
-        if (gate.response) return gate.response
-      }
-    }
-
-    // Re-check with the SAME rule used when the offer was created: total minus
-    // leaves already committed to the sender's other still-pending offers. This
-    // offer is excluded from that sum so it is not counted against itself.
-    if (action === "accept" && offer.offeredLeaves && offer.offeredLeaves > 0) {
-      // The SENDER's other offers, not the accepter's: it is the sender's balance
-      // this is measured against, and one of their other offers may have lapsed.
-      await expireStaleOffers(prisma, { senderId: offer.senderId })
-      const available = await availableLeaves(prisma, offer.senderId, { excludeOfferId: offerId })
-      if (offer.offeredLeaves > available) {
-        return NextResponse.json(
-          { error: `Cannot accept — the sender now has only ${available} Leaves available but this offer requires ${offer.offeredLeaves}` },
-          { status: 400 },
-        )
-      }
-    }
-
-    /*
-     * ── THE PROMISE, IF THERE IS ONE ──────────────────────────────────────────
-     *
-     * A DPA proposed alongside this offer is accepted BY accepting the offer.
-     * The creditor read the debtor's record on the preview screen and is now
-     * saying yes to the whole arrangement; splitting consent into two taps would
-     * leave a window in which the trade exists and the promise does not, and the
-     * settlement gate would block the trade until the second tap arrived.
-     *
-     * So every check /api/v1/contracts/[id]/accept would have run, runs here,
-     * BEFORE anything is written. The debtor's standing can have moved since
-     * they proposed — a default swept in, another contract accepted, an item
-     * revalued — and the creditor must not be able to accept an arrangement the
-     * server would then refuse to honour.
+    // The item the sender put up. A legacy row may name several; the first is
+    // the one every shipped client ever sent and the one the card drew.
+    const offeredItemId = parseOfferedItemIds(offer.offeredItems)[0] ?? null
+    const fee = offer.bridgeFeeLeaves ?? 0
+    /**
+     * Who owes it, from the brackets stored on the offer. Re-derived from the
+     * live items below and cross-checked, so a stale row cannot decide whose
+     * Leaves move; this is the reading used before that check has run.
      */
-    const pendingContract = offer.contracts[0] ?? null
+    const proposerPays =
+      offer.offeredBracket !== null &&
+      offer.targetBracket !== null &&
+      offer.offeredBracket < offer.targetBracket
 
-    if (action === "accept" && pendingContract) {
-      const debtor = await loadStanding(pendingContract.debtorId)
-
-      if (debtor.completedTrades < DPA.minCompletedTradesToOwe) {
+    if (action === "accept") {
+      if (!offeredItemId) {
         return NextResponse.json(
           {
-            error: `This offer includes a promise, and ${offer.sender?.name ?? "the sender"} now has ${debtor.completedTrades} completed trades — a debtor needs ${DPA.minCompletedTradesToOwe}. Accepting without the promise is not possible; ask them to send a new offer.`,
-            code: "DPA_MIN_COMPLETED_TRADES",
-          },
-          { status: 409 },
-        )
-      }
-      if (!debtor.limits.mayProposeDpa) {
-        return NextResponse.json(
-          {
-            error: `This offer includes a promise, and ${offer.sender?.name ?? "the sender"} is now a ${debtor.tier} and can no longer hold one.`,
-            code: "TIER_MAY_NOT_PROPOSE",
+            error:
+              "This offer predates one-item trading and has no item on it. Ask for a new offer.",
+            code: "OFFER_LEGACY_SHAPE",
           },
           { status: 409 },
         )
       }
 
-      // Other open contracts, this one excluded — it is PENDING_ACCEPT and so is
-      // already counted in openContracts/committedDebt by loadStanding().
-      const otherOpen = await prisma.deferredContract.count({
-        where: {
-          debtorId: pendingContract.debtorId,
-          status: { in: [...COMMITTING_STATUSES] },
-          id: { not: pendingContract.id },
-        },
+      // ── The pair, re-derived ──
+      const assessed = await assessOffer(prisma, {
+        proposerId: offer.senderId,
+        offeredItemId,
+        targetItemId: offer.postId,
       })
-      if (otherOpen >= DPA.maxConcurrentAsDebtor) {
+      if (!assessed.ok) {
+        return NextResponse.json(
+          { error: assessed.message, code: assessed.code, offeredBracket: assessed.offeredBracket, targetBracket: assessed.targetBracket },
+          { status: refusalStatus(assessed.code) },
+        )
+      }
+      // Brackets that moved since the offer was made. Refused with both
+      // figures, rather than silently honoured or silently re-priced -- the
+      // proposer consented to a specific fee for a specific pair.
+      if (
+        (offer.offeredBracket !== null && offer.offeredBracket !== assessed.offeredBracket) ||
+        (offer.targetBracket !== null && offer.targetBracket !== assessed.targetBracket) ||
+        assessed.fee !== fee
+      ) {
         return NextResponse.json(
           {
-            error: "The sender has taken on another deferred agreement since making this offer.",
-            code: "DPA_ONE_AT_A_TIME",
+            error: `The values behind this offer have changed since it was sent — it was Bracket ${offer.offeredBracket} for Bracket ${offer.targetBracket}, and it is now Bracket ${assessed.offeredBracket} for Bracket ${assessed.targetBracket}. Ask ${offer.sender?.name ?? "the sender"} for a new offer.`,
+            code: "OFFER_BRACKETS_MOVED",
+            was: { offeredBracket: offer.offeredBracket, targetBracket: offer.targetBracket, fee },
+            now: { offeredBracket: assessed.offeredBracket, targetBracket: assessed.targetBracket, fee: assessed.fee },
           },
           { status: 409 },
         )
       }
 
-      const ceiling = debtor.limits.maxOutstandingDebtLeaves
-      const otherCommitted = Math.max(0, debtor.committedDebt - pendingContract.amountLeaves)
-      if (otherCommitted + pendingContract.amountLeaves > ceiling) {
+      // ── Reputation gates, ACCEPT path ──
+      //
+      // The accepter is acquiring the offered item, so the premium bracket gate
+      // and the tier value ceiling apply to it.
+      const gate = await enforceAcceptTrade(session.user.id, [offeredItemId])
+      if (gate.response) return gate.response
+
+      /*
+       * AND THE PROPOSER'S SIDE, RE-CHECKED HERE TOO.
+       *
+       * They are acquiring the listing, and the premium gate is about whoever
+       * RECEIVES a bracket-7-or-above item. It was checked when they proposed;
+       * a subscription can lapse in the three days an offer may sit. Refusing
+       * at accept rather than letting the trade complete is the same reasoning
+       * that re-derives the brackets twenty lines up: this is the last moment
+       * before the items are committed.
+       *
+       * 409 rather than the gate's own 403, because it is not the ACCEPTER who
+       * is refused — telling them they need premium would be false.
+       */
+      const senderGate = await enforceAcceptTrade(offer.senderId, [offer.postId])
+      if (senderGate.response) {
         return NextResponse.json(
           {
-            error: `Accepting would put the sender at ${otherCommitted + pendingContract.amountLeaves} Leaves owed, over the ${ceiling} their tier allows.`,
-            code: "TIER_DEBT_CEILING",
+            error: `${offer.sender?.name ?? "The sender"} can no longer take on "${offer.post.title}" — their premium subscription has lapsed. The offer stays where it is.`,
+            code: "SENDER_GATE_FAILED",
           },
           { status: 409 },
         )
       }
 
-      // The value difference, re-derived: an item's valueLeaves may have been
-      // edited between the offer being sent and this moment.
-      const itemIds = parseOfferedItemIds(offer.offeredItems)
-      const offeredRows = itemIds.length
-        ? await prisma.item.findMany({
-            where: { id: { in: itemIds } },
-            select: { id: true, valueLeaves: true },
-          })
-        : []
-      const net = netValueTo(
-        offerAsTradeSides({
-          senderId: offer.senderId,
-          receiverId: offer.receiverId,
-          offeredLeaves: offer.offeredLeaves,
-          post: offer.post,
-          offeredItems: offeredRows,
-        }),
-        pendingContract.debtorId,
-      )
-      if (net === null || pendingContract.amountLeaves > net) {
-        return NextResponse.json(
-          {
-            error: `The value difference is now ${net ?? "undefined"} Leaves, which no longer covers the ${pendingContract.amountLeaves} promised. Ask for a new offer.`,
-            code: "DPA_AMOUNT_EXCEEDS_DIFFERENCE",
-          },
-          { status: 409 },
-        )
+      // ── The receiver's own consent, when the receiver is the payer ──
+      if (fee > 0 && !proposerPays) {
+        if (!consent?.accepted) {
+          return NextResponse.json(
+            {
+              error: `Accepting a Bracket ${offer.offeredBracket} item for your Bracket ${offer.targetBracket} one costs ${fee} Leaves. You have to agree to the bridging fee and the trading policy before this can be accepted.`,
+              code: "CONSENT_REQUIRED",
+              fee,
+              policyVersion: TRADING_POLICY_VERSION,
+            },
+            { status: 400 },
+          )
+        }
+        if (consent.policyVersion !== TRADING_POLICY_VERSION) {
+          return NextResponse.json(
+            {
+              error: "The trading policy has been updated. Reopen the offer to read the current one.",
+              code: "POLICY_VERSION_STALE",
+              policyVersion: TRADING_POLICY_VERSION,
+            },
+            { status: 409 },
+          )
+        }
       }
     }
 
     const newStatus = action === "accept" ? "ACCEPTED" : "DECLINED"
-    await prisma.offer.update({ where: { id: offerId }, data: { status: newStatus } })
 
     /*
-     * A DECLINED offer takes its promise with it.
+     * The status, the trade and the fee move together.
      *
-     * DECLINED, not DEFAULTED: nobody broke anything. The debtor proposed, the
-     * creditor said no, and the row stays as the durable fact that somebody
-     * looked at these numbers and refused — which is the same reasoning
-     * /contracts/[id]/decline gives for not deleting it. Critically it also
-     * FREES THE DEBTOR'S ONE CONTRACT SLOT immediately; leaving it PENDING_ACCEPT
-     * would lock them out of proposing to anyone else for good.
+     * This handler used to be a sequence of unwrapped writes, which was
+     * survivable while the worst outcome was a missing notification. It is not
+     * survivable now: an ACCEPTED offer whose fee never reached a TradeRequest
+     * is a fee in escrow that no completion can pay and no cancellation can
+     * release, and a DECLINED offer whose release was lost is Leaves that
+     * belong to nobody. So the writes that decide where the fee sits are in one
+     * transaction, and the chat/notification side-effects stay outside it.
      */
-    if (action === "decline" && pendingContract) {
-      await prisma.deferredContract.updateMany({
-        where: { id: pendingContract.id, status: "PENDING_ACCEPT" },
-        data: { status: "DECLINED" },
-      })
-    }
-
-    // Create an active TradeRequest so both users see it in "Active Trades"
     let tradeRecord: { id: string; offeredItemTitle: string; requestedItemTitle: string } | null = null
-    if (action === "accept") {
-      try {
-        const items: { id: string; title?: string }[] = JSON.parse(offer.offeredItems)
-        const isItemSwap   = items.length > 0
-        const offeredItemId = isItemSwap ? items[0].id : offer.postId
+    const now = new Date()
 
-        const [offeredItem, requestedItem] = await Promise.all([
-          prisma.item.findUnique({ where: { id: offeredItemId   }, select: { title: true } }),
-          prisma.item.findUnique({ where: { id: offer.postId    }, select: { title: true } }),
-        ])
+    let outcome: { raced: true } | { raced: false; trade: { id: string; offeredItemTitle: string; requestedItemTitle: string } | null }
+    try {
+      outcome = await prisma.$transaction(async (tx) => {
+      // Conditional on PENDING, so two taps produce one resolution.
+      const moved = await tx.offer.updateMany({
+        where: { id: offerId, status: "PENDING" },
+        data: { status: newStatus },
+      })
+      if (moved.count !== 1) return { raced: true as const }
 
-        const trade = await prisma.tradeRequest.create({
-          data: {
-            senderId:       offer.senderId,
-            receiverId:     offer.receiverId,
-            offeredItemId,
-            requestedItemId: offer.postId,
-            status:         "ACCEPTED",
-            message:        offer.message,
-            // Record the Leaves ON the trade, from the exact offer being
-            // accepted right here. Settlement reads this column and never
-            // re-derives the amount, because the reverse lookup
-            // (senderId + postId + ACCEPTED) is not unique — one sender/post
-            // pair already holds two accepted offers for different amounts.
-            // At this point there is no ambiguity to inherit: this is the
-            // offer, so this is the amount.
-            offeredLeaves:  offer.offeredLeaves ?? null,
-          },
-        })
-        /*
-         * ── THE PROMISE MOVES TO THE TRADE, AND BECOMES ACTIVE ──────────────
-         *
-         * `tradeId` is filled in and `offerId` is KEPT. Every downstream piece
-         * of machinery is trade-keyed — the settlement gate reads
-         * `{ tradeId, status: "PENDING_ACCEPT" }`, the deadline sweep and
-         * auto-payment both work off the contract row, and the creditor's
-         * preview prefers the trade once there is one — so re-pointing is what
-         * makes an offer-borne contract indistinguishable from a trade-borne one
-         * from here on. The offer stays as provenance.
-         *
-         * ACTIVE in the SAME statement, conditional on PENDING_ACCEPT. Two taps
-         * on Accept produce one ACTIVE contract and one no-op rather than two
-         * acceptances, which is the same guard /contracts/[id]/accept uses.
-         *
-         * NOT INSIDE A TRANSACTION WITH THE TRADE CREATE, and that is worth
-         * being honest about rather than quiet: this whole handler is a sequence
-         * of separate writes already (the offer update, the trade create, the
-         * notification, the message), and wrapping only these two would suggest
-         * a guarantee the rest of the path does not have. The failure mode if
-         * this write is lost is a trade whose promise is still PENDING_ACCEPT —
-         * which the settlement gate then blocks, loudly, rather than letting the
-         * swap complete with an unrecorded debt. That is the safe direction.
-         */
-        if (pendingContract) {
-          await prisma.deferredContract.updateMany({
-            where: { id: pendingContract.id, status: "PENDING_ACCEPT" },
-            data: { tradeId: trade.id, status: "ACTIVE", acceptedAt: new Date() },
+      if (action === "decline") {
+        // Only a proposer-paid hold exists to release. An up-bridge that is
+        // declined never held anything: the receiver is the payer and they
+        // have just said no.
+        if (fee > 0 && proposerPays) {
+          await releaseBridgeFee(tx, {
+            userId: offer.senderId,
+            offerId,
+            amount: fee,
+            reason: "declined",
           })
         }
-
-        tradeRecord = {
-          id: trade.id,
-          offeredItemTitle:   isItemSwap
-            ? (offeredItem?.title ?? "Item")
-            : `${offer.offeredLeaves ?? 0} Leaves`,
-          requestedItemTitle: requestedItem?.title ?? offer.post.title,
-        }
-      } catch (e) {
-        console.error("[offers/accept] failed to create TradeRequest:", e)
+        return { raced: false as const, trade: null }
       }
+
+      // The receiver's fee comes out of their balance HERE, inside the same
+      // transaction as the acceptance, with the same conditional-debit guard
+      // the propose path uses.
+      if (fee > 0 && !proposerPays) {
+        const held = await holdBridgeFee(tx, {
+          userId: offer.receiverId,
+          offerId,
+          amount: fee,
+          at: now,
+        })
+        /*
+         * THROWN, NOT RETURNED. The conditional status write above has already
+         * moved the offer to ACCEPTED in this transaction; returning here would
+         * COMMIT that -- leaving an offer marked accepted, no trade created and
+         * no fee taken, which is the worst state this route can produce and is
+         * unreachable by any other path. Throwing rolls the status back with
+         * the failed hold, and the caller answers 400 with need-vs-have.
+         * (Caught by verify-bracket-trading section 6, which is why the offer
+         * still reads PENDING after a refused accept.)
+         */
+        if (!held.ok) throw new ReceiverShort(fee, held.have)
+        await tx.offer.update({
+          where: { id: offerId },
+          data: { consentAt: now, policyVersion: TRADING_POLICY_VERSION },
+        })
+      }
+
+      const [offeredItem, requestedItem] = await Promise.all([
+        tx.item.findUnique({ where: { id: offeredItemId as string }, select: { title: true } }),
+        tx.item.findUnique({ where: { id: offer.postId }, select: { title: true } }),
+      ])
+
+      const trade = await tx.tradeRequest.create({
+        data: {
+          senderId: offer.senderId,
+          receiverId: offer.receiverId,
+          offeredItemId: offeredItemId as string,
+          requestedItemId: offer.postId,
+          status: "ACCEPTED",
+          message: offer.message,
+          // Legacy column, never written from here any more: an offer created
+          // after 16 Sep 2026 carries no Leaves. Old ACCEPTED trades keep
+          // theirs and settle on it.
+          offeredLeaves: null,
+          // The fee follows the trade, for the same reason `offeredLeaves`
+          // used to: settlement and cancellation read the trade and must never
+          // re-find the offer. The Leaves are already out of the payer's
+          // balance by now; these two columns record how much and whose.
+          bridgeFeeLeaves: fee > 0 ? fee : null,
+          bridgeFeePaidBySender: fee > 0 ? proposerPays : null,
+        },
+        select: { id: true },
+      })
+
+      return {
+        raced: false as const,
+        trade: {
+          id: trade.id,
+          offeredItemTitle: offeredItem?.title ?? "Item",
+          requestedItemTitle: requestedItem?.title ?? offer.post.title,
+        },
+      }
+      })
+    } catch (e) {
+      if (e instanceof ReceiverShort) {
+        return NextResponse.json(
+          {
+            error: `Accepting this costs ${e.need} Leaves and you have ${e.have}. You need ${e.need - e.have} more.`,
+            code: "INSUFFICIENT_LEAVES",
+            need: e.need,
+            have: e.have,
+            short: e.need - e.have,
+          },
+          { status: 400 },
+        )
+      }
+      throw e
     }
+
+    if (outcome.raced) {
+      return NextResponse.json({ error: "This offer was just resolved" }, { status: 409 })
+    }
+    tradeRecord = outcome.trade
 
     // Notify sender — link uses ?partner= format so NotifPanel opens the chat dock
     await prisma.notification.create({
       data: {
         userId: offer.senderId,
         type: action === "accept" ? "TRADE_ACCEPTED" : "TRADE_REJECTED",
-        message: action === "accept"
-          ? `accepted your offer on "${offer.post.title}"`
-          : `declined your offer on "${offer.post.title}"`,
+        message:
+          action === "accept"
+            ? `accepted your offer on "${offer.post.title}"`
+            : `declined your offer on "${offer.post.title}"` +
+              (fee > 0 && proposerPays
+                ? ` — your ${fee}-Leaf bridging fee is back in your balance`
+                : ""),
         link: `/dashboard/messages?partner=${session.user.id}`,
         actorId: session.user.id,
-        /*
-         * The structured target, which this route was not writing.
-         *
-         * An ACCEPT has a real trade to point at — `tradeRecord` was created a
-         * few lines up — so this writes the FINE-GRAINED ('trade', <tradeId>)
-         * pair rather than the coarse pre-v1 ('trade', null) that every existing
-         * row in this table carries. That is the vocabulary the schema note
-         * describes as "v1 and later", and this is the first route to produce it
-         * for a trade.
-         *
-         * `tradeRecord` is null only if the TradeRequest create threw — the
-         * catch above logs and continues rather than failing the accept. There
-         * is then no trade to open, and the conversation is the truthful target.
-         *
-         * A DECLINE never has one: nothing was created, and the thread is where
-         * the conversation about it continues.
-         */
+        // An ACCEPT has a real trade to point at, so it writes the fine-grained
+        // ('trade', <tradeId>) pair. A DECLINE never has one: nothing was
+        // created, and the thread is where the conversation continues.
         ...(tradeRecord
           ? { entityType: "trade", entityId: tradeRecord.id }
           : { entityType: "conversation", entityId: session.user.id }),
       },
     })
 
-    // Send status update as a follow-up message in their chat
     const actorName = offer.receiver?.name ?? "They"
     const systemMsg = await prisma.message.create({
       data: {
         senderId: session.user.id,
         receiverId: offer.senderId,
-        content: JSON.stringify({
-          type: "offer_update",
-          offerId,
-          status: newStatus,
-          actorName,
-        }),
+        content: JSON.stringify({ type: "offer_update", offerId, status: newStatus, actorName }),
       },
     })
 
-    // Tell the sender their offer was resolved (updates OfferCard + appends system msg)
-    pusher.trigger(`private-user-${offer.senderId}`, "offer-updated", {
-      offerId,
-      status: newStatus,
-      actorName,
-      systemMessage: {
-        id: systemMsg.id,
-        content: systemMsg.content,
-        senderId: systemMsg.senderId,
-        receiverId: systemMsg.receiverId,
-        createdAt: systemMsg.createdAt.toISOString(),
-      },
-      ...(tradeRecord && {
-        tradeId: tradeRecord.id,
-        offeredItemTitle: tradeRecord.offeredItemTitle,
-        requestedItemTitle: tradeRecord.requestedItemTitle,
-        senderName: offer.sender?.name ?? "",
-        receiverName: actorName,
-        receiverId: offer.receiverId,
-      }),
-    }).catch(() => {})
+    pusher
+      .trigger(`private-user-${offer.senderId}`, "offer-updated", {
+        offerId,
+        status: newStatus,
+        actorName,
+        releasedLeaves: action === "decline" && proposerPays ? fee : 0,
+        systemMessage: {
+          id: systemMsg.id,
+          content: systemMsg.content,
+          senderId: systemMsg.senderId,
+          receiverId: systemMsg.receiverId,
+          createdAt: systemMsg.createdAt.toISOString(),
+        },
+        ...(tradeRecord && {
+          tradeId: tradeRecord.id,
+          offeredItemTitle: tradeRecord.offeredItemTitle,
+          requestedItemTitle: tradeRecord.requestedItemTitle,
+          senderName: offer.sender?.name ?? "",
+          receiverName: actorName,
+          receiverId: offer.receiverId,
+        }),
+      })
+      .catch(() => {})
 
     return NextResponse.json({
       status: newStatus,
+      bridgeFeeLeaves: fee > 0 ? fee : null,
+      bridgeFeePaidBySender: fee > 0 ? proposerPays : null,
+      /** What the ACCEPTER was just charged. 0 unless they were the payer. */
+      chargedLeaves: action === "accept" && fee > 0 && !proposerPays ? fee : 0,
+      releasedLeaves: action === "decline" && proposerPays ? fee : 0,
       ...(tradeRecord && {
         tradeId: tradeRecord.id,
         offeredItemTitle: tradeRecord.offeredItemTitle,
@@ -380,7 +404,16 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         receiverName: actorName,
       }),
     })
-  } catch {
+  } catch (e) {
+    console.error("[offers/decide]", e)
     return NextResponse.json({ error: "Internal server error" }, { status: 500 })
+  }
+}
+
+/** Thrown inside the accept transaction so the ACCEPTED status rolls back with the failed hold. */
+class ReceiverShort extends Error {
+  constructor(readonly need: number, readonly have: number) {
+    super("receiver_short")
+    this.name = "ReceiverShort"
   }
 }

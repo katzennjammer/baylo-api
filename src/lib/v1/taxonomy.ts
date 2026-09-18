@@ -85,7 +85,10 @@ export const TASK_LABELS: Record<string, string> = {
   VERIFY_ACCOUNT:   "Verify your account",
   COMPLETE_PROFILE: "Complete your profile",
   FIRST_LISTING:    "Post your first listing",
+  // Legacy rows only; nothing awards it since 16 Sep 2026. Kept so an old
+  // completion still has a name on the checklist instead of a raw enum.
   VERIFIED_SWAP:    "Complete a verified swap",
+  FIRST_TRADE:      "Complete your first trade",
   SAFEZONE_MEETUP:  "Meet at a Safe Zone",
 }
 

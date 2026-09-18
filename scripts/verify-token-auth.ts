@@ -6,6 +6,7 @@
 import prisma from "../src/lib/prisma"
 import { markVerified } from "../src/lib/verification"
 import { SIGNUP_GRANT_LEAVES, TASK_REWARDS } from "../src/lib/task-constants"
+import { requireScratchSchema } from "./lib/live-guard"
 
 const P = "zzverify-"
 let pass = 0, fail = 0
@@ -35,6 +36,7 @@ async function freshUser(tag: string) {
 }
 
 async function main() {
+  requireScratchSchema("scripts/verify-token-auth.ts")
   // ── 1. A single verification ───────────────────────────────────────────────
   console.log("\n[1] verifying a fresh account")
   const u1 = await freshUser("single")

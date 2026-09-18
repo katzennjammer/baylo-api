@@ -212,8 +212,33 @@ npm run seed       # (re)seed the development data — idempotent
 npx tsx --env-file=.env scripts/verify-token-auth.ts
 ```
 
-**They create and delete rows.** Run them against your own Supabase project,
-never against the owner's. Most need a dev server running on `:3100`
+**They create and delete rows, and since 17 Sep 2026 they enforce that
+themselves.** Every script in this repo that writes — the harnesses, the seed,
+the backfills, the demo seeder, the one-shot MySQL move — calls
+`requireScratchSchema()` from `scripts/lib/live-guard.ts` on its first line and
+**refuses to run when `DATABASE_URL` points at `public`**:
+
+```
+  REFUSING TO RUN: scripts/verify-moderation.ts writes rows, and DATABASE_URL
+  points at schema `public`, which is the live database.
+```
+
+Run it on a scratch schema instead — see
+[Scratch schemas](#scratch-schemas-for-harnesses-and-a-second-dev-server) below.
+If you genuinely mean live (a one-off backfill, a production seed), take a
+backup and pass `--live`, which is the only thing that lifts the refusal:
+
+```bash
+npx tsx --env-file=.env scripts/backfill-task-rewards.ts --live
+npm run seed -- --live
+```
+
+The flag is not readable from the environment on purpose. A stale shell, a CI
+runner or a pasted command cannot supply it by accident the way `FORCE=1` can.
+Read-only tools (`check-new-enum-rows`, `pg-backup`, `verify-trust-tier`,
+`analyze-*`) are not guarded — reading live is the correct thing for them to do.
+
+Most need a dev server running on `:3100`
 (`ACCEPT_BASE` overrides it); the two that register accounts
 (`verify-email-verification`, `verify-mobile-auth`) need a *fresh* dev server
 each, because registration is limited to 3 per hour per client and the limiter
@@ -222,15 +247,75 @@ lives in the server's memory.
 > Most `verify-*.ts` failures on a fresh setup are environmental rather than
 > real regressions — usually the register rate limit, a missing SMTP sink, or a
 > harness process from an earlier run still holding port 2525 and its log file.
-> Check those before chasing a failure. Two failures are **known and
-> deliberate** on a seeded database and documented in the scripts themselves:
-> `verify-valuation` section 4 (assumes the band path; the seed provides
-> comparables) and `verify-moderation`'s "no API route writes `User.role`"
-> (tripped by the admin role-management route; pending a decision on which rule
-> wins).
+> Check those before chasing a failure. One failure is **known and deliberate**
+> and documented in the script itself: `verify-moderation`'s "no API route
+> writes `User.role`" (tripped by the admin role-management route; pending a
+> decision on which rule wins). `verify-valuation` section 4 used to be a second
+> one — it asserted the category-band arithmetic on a database whose seed
+> provides comparables — and was fixed on 17 Sep 2026 to assert whichever path
+> the data actually takes. A test that is expected to fail is not a test.
 
 `scripts/migrate-mysql-to-postgres.ts` is the one-shot data move from the old
 MariaDB database. See [Coming from MySQL](#coming-from-mysql-teammates-read-this).
+
+### Scratch schemas, for harnesses and a second dev server
+
+Supabase's free tier is one database, so the scratch unit is a **schema** in
+it: the live `DATABASE_URL` with `?schema=scratch_<name>` appended. The Prisma
+CLI builds the tables there, and since 16 Sep 2026 `src/lib/prisma.ts` hands
+the same parameter to the driver adapter, so the running code reads and writes
+there too. (Before that the runtime silently ignored it and a harness that
+believed it was on scratch was on live.) `scripts/scratch.ps1` does the whole
+dance:
+
+```powershell
+.\scripts\scratch.ps1 -Run scripts\verify-bracket-libs.ts          # push, run, drop
+.\scripts\scratch.ps1 -Push -Name scratch_http                      # a schema to keep
+.\scripts\scratch.ps1 -Seed -Name scratch_http                      # seed it
+.\scripts\scratch.ps1 -Dev  -Name scratch_http -Port 3001           # a dev server on it
+.\scripts\scratch.ps1 -Drop -Name scratch_http
+```
+
+The HTTP harnesses (`verify-*-http`, `verify-v1-endpoints`,
+`verify-bracket-trading`) drive a dev server, so the server has to be the one
+bound to scratch: start it with `-Dev` on `:3001` and point the harness at it
+(`ACCEPT_BASE=http://localhost:3001`).
+
+Two things that cost an hour on 17 Sep 2026, both worth knowing:
+
+* **Next 16 allows one `next dev` per directory.** A second one prints
+  `Another next dev server is already running` and exits, whatever port you
+  gave it. Stop the first (`taskkill /PID <pid> /F`) before starting a scratch
+  one.
+* **Delete `.next` if the API 404s.** After that aborted start, the dev server
+  came up "Ready" and served every `/api/**` route as the not-found page. The
+  route manifest was half-written. `Remove-Item -Recurse -Force .next` fixes it.
+
+**Prove the server is on the schema you think it is** before trusting an HTTP
+harness: create a marker user through the scratch `DATABASE_URL`, sign it a
+token, and call `/api/v1/profile/me`. A 200 with that name means bound; a 401
+means the server is reading somewhere else.
+
+In PowerShell the URL is `"${base}?schema=x"`, **with braces**: `"$base?schema"`
+reads a variable named `base?schema` and hands Prisma an empty string.
+
+`scripts/check-new-enum-rows.ts` counts live rows that use an enum value an
+older client does not know. Run it before pointing a `main` checkout at a
+database a feature branch has migrated — Prisma refuses to read a row whose
+enum column holds a value outside the generated type, so one such row is a
+500 on every query that touches the table.
+
+### TODO: brackets on the wire
+
+Since 16 Sep 2026 every surface in the offer and trade flow shows other
+people's items as **brackets**, never as a Leaves figure — but that is a
+client-side rendering rule. `/api/v1/trades`, `/api/v1/items/[id]`, browse and
+home still send `valueLeaves` for non-owner items, so the number is one proxy
+away. **Next task after bracket trading merges:** send `bracket` instead of
+`valueLeaves` for every item the viewer does not own, on every v1 route, and
+move the client's `bracketOf()` calls to read the field. The grid tiles, the
+feed cards, the offer picker, the trade rows and the notifications all
+consume it, which is why it is its own task.
 
 `scripts/backup-baylo-pg.ps1` backs up the live database and verifies the dump;
 `scripts/pg-backup.ts` is the no-install dumper it falls back to, and also
@@ -270,8 +355,16 @@ Two earlier chains are archived and read by nothing:
 
 ### Adding a migration from here
 
-**Not `prisma migrate dev`.** It needs a shadow database it can create, and the
-Supabase role cannot. Author the SQL from the diff, read it, save it, deploy it:
+**Never `prisma migrate dev` against the shared Supabase URL.** Two reasons,
+and the second is the one that costs data: it needs a shadow database the
+Supabase role cannot create, and when it decides the database has drifted from
+the migration history it offers to RESET it — which on this URL means dropping
+the live tables. `migrate deploy` only ever applies pending migrations forward
+and has no reset path; it is the only migration command that should ever see
+the live URL. For iterating on a schema, push it to a scratch schema instead
+(`.\scripts\scratch.ps1 -Push -Name scratch_x`), which touches nothing live.
+
+So: author the SQL from the diff, read it, save it, deploy it:
 
 ```bash
 # 1. edit prisma/schema.prisma
@@ -285,6 +378,16 @@ npx prisma generate
 
 Enum additions become `ALTER TYPE ... ADD VALUE`, which Postgres 17 runs fine
 inside Prisma's migration transaction. Do not edit the baseline.
+
+**A migration deployed from a branch changes the database for every branch.**
+Prisma refuses to read a row whose enum column holds a value the generated
+client does not model, so a value added on a feature branch and then USED
+turns every `main` checkout into a 500 on that whole table — not on the
+feature, on the table. Land the schema half (enum values and nullable columns,
+no feature code) on `main` first, and run
+`npx tsx --env-file=.env scripts/check-new-enum-rows.ts` before pointing a
+`main` checkout at the live database. This is exactly what happened on
+16 Sep 2026 and how it was closed.
 
 ### Coming from MySQL (teammates, read this)
 

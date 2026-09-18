@@ -37,6 +37,7 @@ import {
   enforcePremiumForListing,
   loadStanding,
 } from "../src/lib/reputation-gate"
+import { requireScratchSchema } from "./lib/live-guard"
 
 const P = "ZZPREMIUM_"
 let pass = 0
@@ -70,6 +71,7 @@ async function cleanup() {
 }
 
 async function main() {
+  requireScratchSchema("scripts/verify-premium-brackets.ts")
   await cleanup()
 
   head("1  the table")

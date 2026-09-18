@@ -15,6 +15,7 @@
 import { PrismaClient } from "../src/generated/prisma/client"
 import { PrismaPg } from "@prisma/adapter-pg"
 import sharp from "sharp"
+import { requireScratchSchema } from "./lib/live-guard"
 
 if (!process.env.DATABASE_URL) {
   console.error("DATABASE_URL is not set. Run with: npx tsx --env-file=.env scripts/rehash-items.ts")
@@ -42,6 +43,7 @@ async function computeDHash(buffer: Buffer): Promise<string> {
 }
 
 async function main() {
+  requireScratchSchema("scripts/rehash-items.ts")
   const items = await prisma.item.findMany({
     where:  { images: { not: "" } },
     select: { id: true, images: true },

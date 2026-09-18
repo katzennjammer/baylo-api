@@ -1858,7 +1858,7 @@ const TASK_UI: Record<TaskKey, { label: string; repeatable: boolean; hint?: stri
   VERIFY_ACCOUNT:   { label: "Verify your account",       repeatable: false, hint: "Link your Google account to verify." },
   COMPLETE_PROFILE: { label: "Complete your profile",     repeatable: false },
   FIRST_LISTING:    { label: "List your first item",      repeatable: false },
-  VERIFIED_SWAP:    { label: "Complete a verified swap",  repeatable: true },
+  FIRST_TRADE:      { label: "Complete your first trade", repeatable: false },
   SAFEZONE_MEETUP:  { label: "Confirm a Safe-Zone meetup", repeatable: true },
 };
 

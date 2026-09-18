@@ -22,7 +22,7 @@ export const dynamic = "force-dynamic"
  * WHAT BLOCKING DOES NOT DO is the interesting part of this endpoint, and the
  * response says so explicitly rather than leaving the user to find out. See the
  * long note above blockConsequences() in @/lib/blocking: an active trade is not
- * cancelled and a Deferred Points Agreement is not voided, because blocking
+ * cancelled and a bridging fee in escrow is not released, because blocking
  * your creditor must not be how you clear a debt.
  */
 
@@ -104,7 +104,7 @@ export async function POST(req: NextRequest) {
       // The one sentence that matters if either list above is non-empty.
       note:
         consequences.activeTrades.length || consequences.openContracts.length
-          ? "Blocking does not cancel a trade in progress or clear a deferred agreement — those stand. You can still cancel a trade yourself from your trades list."
+          ? "Blocking does not cancel a trade in progress — those stand. You can still cancel a trade yourself from your trades list, which returns any bridging fee."
           : null,
     },
   })

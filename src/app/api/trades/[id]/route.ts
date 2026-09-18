@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { resolveSession } from "@/lib/api-auth"
 import prisma from "@/lib/prisma"
+import { releaseTradeFee } from "@/lib/trade-fee-release"
 import pusher from "@/lib/pusher"
 import { parseBody, tradeActionSchema } from "@/lib/validation"
 
@@ -40,8 +41,8 @@ export async function PATCH(
 
     // ── cancel ────────────────────────────────────────────────────────────────
     if (action === "cancel") {
-      const cancellable = ["PENDING", "ACCEPTED", "CONFIRMING"]
-      if (!cancellable.includes(trade.status)) {
+      const cancellable = ["PENDING", "ACCEPTED", "CONFIRMING"] as const
+      if (!(cancellable as readonly string[]).includes(trade.status)) {
         return NextResponse.json({ error: "Trade cannot be cancelled in its current state" }, { status: 400 })
       }
 
@@ -49,14 +50,36 @@ export async function PATCH(
       const otherName = isSender ? trade.receiver.name : trade.sender.name
       const itemIds   = [trade.offeredItemId, trade.requestedItemId]
 
-      await prisma.tradeRequest.update({ where: { id: tradeId }, data: { status: "CANCELLED" } })
+      /*
+       * The status, the items and the BRIDGING FEE, together.
+       *
+       * The fee is the reason this became a transaction. A cancelled trade
+       * whose refund was lost leaves Leaves in escrow that no later path will
+       * ever look for: completion is the only other thing that closes a hold,
+       * and this trade will never complete. The conditional status write also
+       * stops two taps producing two refunds -- though releaseBridgeFee()
+       * refuses a second one anyway.
+       */
+      const refund = await prisma.$transaction(async (tx) => {
+        const moved = await tx.tradeRequest.updateMany({
+          where: { id: tradeId, status: { in: [...cancellable] } },
+          data: { status: "CANCELLED" },
+        })
+        if (moved.count !== 1) return undefined
 
-      // Free items back to AVAILABLE only if they were locked for this trade (IN_TRADE)
-      // Note: only free if neither item has already been marked TRADED by a race
-      await prisma.item.updateMany({
-        where: { id: { in: itemIds }, status: "IN_TRADE" },
-        data: { status: "AVAILABLE" },
+        // Free items back to AVAILABLE only if they were locked for this trade
+        // (IN_TRADE), and only if neither has already been marked TRADED.
+        await tx.item.updateMany({
+          where: { id: { in: itemIds }, status: "IN_TRADE" },
+          data: { status: "AVAILABLE" },
+        })
+
+        return releaseTradeFee(tx, trade, "cancelled")
       })
+
+      if (refund === undefined) {
+        return NextResponse.json({ error: "Trade cannot be cancelled in its current state" }, { status: 409 })
+      }
 
       await prisma.notification.create({
         data: {
@@ -81,7 +104,7 @@ export async function PATCH(
       })
 
       void otherName
-      return NextResponse.json({ ok: true })
+      return NextResponse.json({ ok: true, releasedLeaves: refund?.amount ?? 0 })
     }
 
     // ── hide (soft-remove from current user's view only) ──────────────────────

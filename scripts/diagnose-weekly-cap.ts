@@ -19,6 +19,7 @@
 import prisma from "../src/lib/prisma"
 import { reconcileTasks } from "../src/lib/tasks"
 import { WEEKLY_TASK_LEAF_CAP } from "../src/lib/task-constants"
+import { requireScratchSchema } from "./lib/live-guard"
 
 const P = "ZZCAP_"
 const DAY = 24 * 60 * 60 * 1000
@@ -80,6 +81,7 @@ async function report(userId: string, label: string) {
 }
 
 async function main() {
+  requireScratchSchema("scripts/diagnose-weekly-cap.ts")
   await cleanup()
   console.log(`WEEKLY_TASK_LEAF_CAP = ${WEEKLY_TASK_LEAF_CAP}\n`)
 

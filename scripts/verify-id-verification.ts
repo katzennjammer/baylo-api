@@ -25,6 +25,7 @@ import prisma from "../src/lib/prisma"
 import { signAccessToken } from "../src/lib/auth-tokens"
 import { hashIdNumber } from "../src/lib/id-verification"
 import { idImageExists, uploadIdImage } from "../src/lib/id-verification-image"
+import { requireScratchSchema } from "./lib/live-guard"
 
 const BASE = process.env.ACCEPT_BASE ?? "http://127.0.0.1:3100"
 const P = "zzidv-"
@@ -185,6 +186,7 @@ const NEW_LISTING = {
 }
 
 async function main() {
+  requireScratchSchema("scripts/verify-id-verification.ts")
   console.log(`ID verification acceptance — ${BASE}`)
   await cleanup()
   await invariant("at start")
@@ -269,19 +271,34 @@ async function main() {
     `got ${accept.status} ${JSON.stringify(accept.body)?.slice(0, 140)}`,
   )
 
-  // ── 3 ── proposing a DPA is gated
-  head("3  proposing a DPA is gated (accepting is not)")
-  const propose = await POST<{ error: { code: string }; meta: { rule?: string } }>(
+  // ── 3 ── the DPA gate is gone with DPAs
+  head("3  the deferred-agreement route is withdrawn, not gated")
+  //
+  // This section used to prove that an unverified user could ACCEPT a trade but
+  // not PROPOSE a deferred agreement -- the asymmetry the ID gate is built on.
+  // Deferred agreements ended on 16 Sep 2026 and the route answers 410 for
+  // everyone, verified or not, so what is checked now is that it says so
+  // clearly: a 404 would send a shipped client back to retry a URL that will
+  // never work again.
+  const propose = await POST<{ error: { code: string }; meta: { replacedBy?: string } }>(
     "/api/v1/contracts",
     tUnverified,
     { tradeId: trade.id, amountLeaves: 50, deadline: new Date(Date.now() + 7 * 86400_000).toISOString() },
   )
-  check("POST /api/v1/contracts → 403", propose.status === 403, `got ${propose.status}`)
+  check("POST /api/v1/contracts → 410 GONE", propose.status === 410, `got ${propose.status}`)
+  check("…with the error code GONE", propose.body?.error?.code === "GONE", JSON.stringify(propose.body?.error)?.slice(0, 160))
   check(
-    "…with meta.rule ID_VERIFICATION_REQUIRED",
-    propose.body?.meta?.rule === "ID_VERIFICATION_REQUIRED",
+    "…and names what replaced it",
+    propose.body?.meta?.replacedBy === "bridging-fee",
     JSON.stringify(propose.body?.meta)?.slice(0, 160),
   )
+  // The gate that DOES still exist: posting an item needs a verified ID.
+  const posting = await POST<{ error: { code: string }; meta: { rule?: string } }>(
+    "/api/items",
+    tUnverified,
+    { title: "ZZID gate", description: "d", images: [], category: "OTHER", condition: "GOOD" },
+  )
+  check("POSTING an item while unverified → 403", posting.status === 403, `got ${posting.status}`)
 
   // ── 4 ── one ID, one account
   head("4  the same ID number on a second account is refused")

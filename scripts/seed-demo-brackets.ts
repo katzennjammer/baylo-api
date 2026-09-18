@@ -1,4 +1,4 @@
-// Demo listings for the bracket, premium-lock and DPA surfaces on mobile.
+// Demo listings for the bracket, premium-lock and BRIDGING FEE surfaces.
 //
 //   npx tsx --env-file=.env scripts/seed-demo-brackets.ts            # apply (upsert)
 //   npx tsx --env-file=.env scripts/seed-demo-brackets.ts --remove   # delete them again
@@ -7,21 +7,23 @@
 // `valueLeaves`, and as of 16 Sep 2026 the most valuable AVAILABLE listing on
 // the whole market was 425 Leaves (bracket 3). A viewer whose best shelf item
 // is in bracket 3 reaches bracket 4 (≤900), so nothing on the market could be
-// out of reach, nothing was in a premium bracket (≥7, >2500 Leaves), and no
-// listing was worth more than what that viewer could offer — so the DPA promise
-// row never had a reason to appear. All three features looked broken; the data
-// simply could not exercise them.
+// out of reach, nothing was in a premium bracket (≥7, >2500 Leaves), and every
+// pair of items was in the same bracket — so no bridge was ever priced. All
+// three features looked broken; the data simply could not exercise them.
 //
 // Three listings, each on a SEED account (*@baylo.test), never on a real one:
 //
 //   demo-brk-reach    1200 Leaves  bracket 5   grey tile + "1 bracket above your reach"
 //                                              for a viewer reaching bracket 4
 //   demo-brk-premium  3200 Leaves  bracket 7   the premium lock (PREMIUM_MIN_BRACKET)
-//   demo-brk-dpa       480 Leaves  bracket 3   in reach; offering a ~212-Leaf item
-//                                              against it with a small balance is
-//                                              classifyGap's "large" situation, so
-//                                              the split row with the promise is
-//                                              preselected
+//   demo-brk-bridge    480 Leaves  bracket 3   BOTH directions of a bridge, from
+//                                              one listing. Offer a bracket-2 item
+//                                              (101-250) for it and YOU pay 20;
+//                                              offer a bracket-4 one (501-900) and
+//                                              the OWNER pays 30 to accept. Seed
+//                                              shelves hold items in both, so the
+//                                              picker shows a chargeable row and a
+//                                              free one side by side.
 //
 // Every id starts with `demo-brk-` so --remove can find them by prefix and so a
 // row is recognisable in any table it turns up in. Values are `category_band`
@@ -29,6 +31,7 @@
 // of two literals, and inventing a third is a lie about the schema.
 
 import prisma from "../src/lib/prisma"
+import { requireScratchSchema } from "./lib/live-guard"
 
 const PREFIX = "demo-brk-"
 
@@ -58,16 +61,16 @@ const LISTINGS = [
     wantedItems: "A camera body, or a gaming desktop",
   },
   {
-    id: `${PREFIX}dpa`,
+    id: `${PREFIX}bridge`,
     title: "Nintendo Switch OLED bundle",
     description:
-      "White OLED model with two extra Joy-Con, Pro Controller, and five games (Zelda TOTK, Mario Kart 8, Splatoon 3, Animal Crossing, Metroid Dread). Demo listing for the DPA promise flow.",
+      "White OLED model with two extra Joy-Con, Pro Controller, and five games (Zelda TOTK, Mario Kart 8, Splatoon 3, Animal Crossing, Metroid Dread). Demo listing for the bridging fee, in both directions.",
     image: "https://images.unsplash.com/photo-1578303512597-81e6cc155b3e?w=800&q=75",
     category: "GAMING",
     condition: "GOOD",
     valueLeaves: 480,
     ownerId: "seed-u-maria",
-    wantedItems: "A bag or backpack, plus Leaves for the difference",
+    wantedItems: "A bag, a backpack, or anything within one bracket",
   },
 ] as const
 
@@ -134,6 +137,7 @@ async function remove() {
 }
 
 async function main() {
+  requireScratchSchema("scripts/seed-demo-brackets.ts")
   const removing = process.argv.includes("--remove")
   console.log(removing ? "\nRemoving demo bracket listings" : "\nSeeding demo bracket listings")
   if (removing) await remove()

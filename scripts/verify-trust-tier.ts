@@ -5,8 +5,8 @@
 // stop a trade. Three things are checked, in order of what would hurt most if
 // it were wrong:
 //
-//   1. BATCHED == UNBATCHED. loadEffectiveTiers() answers for a whole page in
-//      three aggregates; loadDebtorStanding() + getEffectiveTier() answers for
+//   1. BATCHED == UNBATCHED. loadTrustTiers() answers for a whole page in
+//      two aggregates; loadStanding() answers for
 //      one user in three queries and is what every gate already trusts. They
 //      are run against EVERY user in the database and compared. This is the
 //      check that matters: the batched version reconstructs "completed trades"
@@ -21,8 +21,9 @@
 //   npx tsx --env-file=.env scripts/verify-trust-tier.ts
 import prisma from "../src/lib/prisma"
 import { signAccessToken } from "../src/lib/auth-tokens"
-import { loadDebtorStanding, loadEffectiveTiers } from "../src/lib/contracts"
-import { getEffectiveTier, getTrustTier } from "../src/lib/reputation"
+import { loadTrustTiers } from "../src/lib/trust-tiers"
+import { loadStanding } from "../src/lib/reputation-gate"
+import { getTrustTier } from "../src/lib/reputation"
 
 const BASE = process.env.ACCEPT_BASE ?? "http://127.0.0.1:3000"
 
@@ -38,6 +39,9 @@ function check(name: string, cond: boolean, detail = "") {
   }
 }
 
+// READ-ONLY, so it does NOT call requireScratchSchema(): it issues GETs and
+// SELECTs and writes nothing, and running it against live is the point --
+// the badges it checks are the ones real users are looking at.
 async function main() {
   const users = await prisma.user.findMany({
     where: { deletedAt: null },
@@ -47,21 +51,20 @@ async function main() {
   console.log(`\n${users.length} users\n`)
 
   // ── 1 ── the batched loader against the one the gates use ──────────────────
-  console.log("1. loadEffectiveTiers() vs loadDebtorStanding() + getEffectiveTier()")
-  const batched = await loadEffectiveTiers(prisma, users)
+  console.log("1. loadTrustTiers() vs loadStanding()")
+  const batched = await loadTrustTiers(prisma, users)
 
+  // `loadStanding()` is what every gate consults, and its `tier` is the
+  // authority. The DPA default penalties that used to sit between the trade
+  // count and the tier are gone (16 Sep 2026), so the two must now agree
+  // exactly rather than agreeing "unless somebody has defaulted".
   for (const u of users) {
-    const standing = await loadDebtorStanding(prisma, u.id)
-    const authoritative = getEffectiveTier(standing.completedTrades, u.rating, {
-      lifetimeDefaults: standing.lifetimeDefaults,
-      hasUnsettledDefault: standing.hasUnsettledDefault,
-    })
+    const standing = await loadStanding(u.id)
     check(
       `${u.name} -> ${batched.get(u.id)}`,
-      batched.get(u.id) === authoritative,
-      `batched=${batched.get(u.id)} authoritative=${authoritative} ` +
-        `(trades=${standing.completedTrades} rating=${u.rating} ` +
-        `defaults=${standing.lifetimeDefaults} unsettled=${standing.hasUnsettledDefault})`,
+      batched.get(u.id) === standing.tier,
+      `batched=${batched.get(u.id)} authoritative=${standing.tier} ` +
+        `(trades=${standing.completedTrades} rating=${u.rating})`,
     )
   }
 

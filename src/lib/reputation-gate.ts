@@ -1,28 +1,16 @@
 import { NextResponse } from "next/server"
 import prisma from "@/lib/prisma"
-import {
-  getTrustTier,
-  getEffectiveTier,
-  getTierLimits,
-  type TrustTier,
-  type TierLimits,
-} from "@/lib/reputation"
-import {
-  expireStaleProposals,
-  loadDebtorStanding,
-  sweepLapsedContracts,
-  type DebtorStanding,
-} from "@/lib/contracts"
-import { BRACKET_COUNT, bracketOf, PREMIUM_MIN_BRACKET, valueNeedsPremium } from "@/lib/brackets"
+import { getTrustTier, getTierLimits, type TrustTier, type TierLimits } from "@/lib/reputation"
+import { bracketOf, bracketRange, PREMIUM_MIN_BRACKET, valueNeedsPremium } from "@/lib/brackets"
 import { isPremium } from "@/lib/premium"
 
 /**
  * Server-side enforcement of the reputation tiers.
  *
- * Until now getTrustTier() was a badge. It coloured a chip on a profile and
- * restricted nothing, which meant every "limit" the product described was
- * really a suggestion that a client could decline to follow. This module is
- * where the tiers stop being decoration.
+ * Until this file existed getTrustTier() was a badge. It coloured a chip on a
+ * profile and restricted nothing, which meant every "limit" the product
+ * described was really a suggestion that a client could decline to follow.
+ * This module is where the tiers stop being decoration.
  *
  * THE RULE THIS FILE EXISTS FOR: a hidden button is not a control. Every check
  * below runs in a route handler, against the database, after the request has
@@ -34,14 +22,26 @@ import { isPremium } from "@/lib/premium"
  * Each `enforce*` returns a ready-to-return NextResponse, or null to proceed —
  * the same shape as enforceRateLimit(), so a handler reads the same way whether
  * it is being limited by rate or by reputation.
+ *
+ * ── WHAT THIS FILE IS NOT, SINCE 16 SEP 2026 ────────────────────────────────
+ *
+ * It is not the bracket rule. "Same bracket, or one below for a fee" is about
+ * the PAIR of items and lives in assessOffer() in @/lib/offer-check; the gates
+ * here are about the PERSON acquiring. Two consequences worth stating:
+ *
+ *   - enforceCanInitiateTrade() is gone with deferred agreements. It blocked a
+ *     defaulter from starting trades, and there are no defaults any more.
+ *   - enforceReachForListing() is gone too. "Within one bracket of your best
+ *     item" was a weaker form of the rule assessOffer() now applies to the
+ *     specific item being offered, and two checks for one rule meant two
+ *     different sentences for the same refusal.
  */
 
-export interface TraderStanding extends DebtorStanding {
+export interface TraderStanding {
   userId: string
   rating: number
-  /** What the trade history alone says. Shown for explanation, never enforced on. */
-  baseTier: TrustTier
-  /** The base tier after DPA defaults are charged against it. THIS is enforced on. */
+  /** COMPLETED TradeRequest rows, counted — never User.totalTrades, which drifts. */
+  completedTrades: number
   tier: TrustTier
   limits: TierLimits
   /** isPremium(User.premiumUntil) at load time. See @/lib/premium. */
@@ -49,30 +49,24 @@ export interface TraderStanding extends DebtorStanding {
 }
 
 /**
- * The caller's full standing, with the lazy deadline sweep run first.
+ * The caller's standing, in two queries.
  *
- * The sweep runs BEFORE the counts are read, and that ordering is the whole
- * point of putting it here: a deadline that lapsed an hour ago must already be
- * a default by the time this function decides whether the user may start a
- * trade. There is no cron, so if the gate did not sweep, a defaulter would keep
- * full privileges for as long as nobody happened to open their contract list.
+ * Deliberately NOT cached and not denormalised onto User. These numbers gate
+ * what a person may acquire, and a stale copy of them is worse than a slow one.
+ *
+ * It used to run two lazy contract sweeps first, because a lapsed deadline had
+ * to become a default before the gate could read it. There are no contracts
+ * now, so there is nothing to sweep and this is a plain read.
  */
 export async function loadStanding(userId: string): Promise<TraderStanding> {
-  await sweepLapsedContracts(prisma, { debtorId: userId })
-  // And the other half of the sweep: a PENDING_ACCEPT proposal past its own
-  // deadline lapses to DECLINED, freeing the slot it was holding. It runs here
-  // for exactly the reason the default sweep does — this function decides
-  // whether the user may propose, and a proposal nobody ever answered must not
-  // still be counted as a commitment by the time it does. See the note on
-  // expireStaleProposals().
-  await expireStaleProposals(prisma, { debtorId: userId })
-
-  const [user, standing] = await Promise.all([
+  const [user, completedTrades] = await Promise.all([
     prisma.user.findUnique({
       where: { id: userId },
       select: { rating: true, premiumUntil: true },
     }),
-    loadDebtorStanding(prisma, userId),
+    prisma.tradeRequest.count({
+      where: { status: "COMPLETED", OR: [{ senderId: userId }, { receiverId: userId }] },
+    }),
   ])
 
   const rating = user?.rating ?? 0
@@ -80,60 +74,14 @@ export async function loadStanding(userId: string): Promise<TraderStanding> {
   // completedTrades, not User.totalTrades. The counter has drifted above the
   // real count on live data (two users sit one and two trades high), and a gate
   // that opens early is not a gate.
-  const baseTier = getTrustTier(standing.completedTrades, rating)
-  const tier = getEffectiveTier(standing.completedTrades, rating, {
-    lifetimeDefaults: standing.lifetimeDefaults,
-    hasUnsettledDefault: standing.hasUnsettledDefault,
-  })
+  const tier = getTrustTier(completedTrades, rating)
 
-  return { ...standing, userId, rating, baseTier, tier, limits: getTierLimits(tier), premium }
+  return { userId, rating, completedTrades, tier, limits: getTierLimits(tier), premium }
 }
 
 /** 403 in the shape the pre-v1 routes use: `{ error }`. */
 function forbidden(message: string, extra: Record<string, unknown> = {}) {
   return NextResponse.json({ error: message, ...extra }, { status: 403 })
-}
-
-// ── The initiating restriction ───────────────────────────────────────────────
-
-/**
- * Blocks a user with a standing default from STARTING a trade.
- *
- * Read the asymmetry carefully, because getting it wrong produces a deadlock
- * that no amount of good behaviour escapes:
- *
- *   BLOCKED   proposing a trade, making an offer — anything where the defaulter
- *             reaches for someone else's item and takes on more exposure.
- *   ALLOWED   accepting a trade or an offer, and listing items.
- *
- * Trading is the only way to earn Leaves in this economy. A blanket ban would
- * mean a defaulter can never earn the Leaves that would clear the default that
- * caused the ban — permanently restricted, with no move available that improves
- * their position. So the accept path is deliberately left open, and listing is
- * left open too, because a defaulter with no listings would have nothing for
- * anyone to make them an offer on and the open accept path would be theatre.
- *
- * The path out is concrete: list, receive an offer, accept it, complete the
- * swap. Both the Leaves received and the VERIFIED_SWAP task reward land in the
- * debtor's balance, applyEarningsToContracts() sweeps them straight to the
- * creditor, and when the last Leaf lands the contract goes FULFILLED and this
- * function stops returning a 403.
- *
- * Note also what the defaulter CANNOT do through the open accept path: spend.
- * On both the offer and the trade paths it is the initiator who pledges Leaves,
- * so a blocked initiator is already a blocked spender, and the accept path can
- * only bring Leaves in.
- */
-export function enforceCanInitiateTrade(standing: TraderStanding): NextResponse | null {
-  if (!standing.hasUnsettledDefault) return null
-  return forbidden(
-    "You have an unfulfilled deferred agreement. You cannot start new trades until it is settled — " +
-      "you can still list items and accept offers, and Leaves you earn go straight to the debt.",
-    {
-      code: "DPA_DEFAULTED",
-      outstandingDebt: standing.outstandingDebt,
-    },
-  )
 }
 
 // ── The premium bracket gate ─────────────────────────────────────────────────
@@ -153,16 +101,16 @@ export function enforceCanInitiateTrade(standing: TraderStanding): NextResponse 
  * propose-only, with the accept side left open as "a toll on selling"; that
  * reading missed that the acceptor is also the one receiving.)
  *
- * Ordered AFTER the default block (where the path has one) and BEFORE the tier
- * cap, deliberately. The lock is a property of the ITEM -- everyone sees the
- * same padlock on the same tile -- while the tier cap is a property of the
- * viewer. If the cap were checked first, the same bracket-8 item would refuse
- * a New Trader with a tier message and a Trusted Trader with a premium one,
- * and the bracket-7 rule would look arbitrary. The client mirrors this order
- * on item detail.
+ * Ordered BEFORE the tier cap, deliberately. The lock is a property of the
+ * ITEM -- everyone sees the same padlock on the same tile -- while the tier cap
+ * is a property of the viewer. If the cap were checked first, the same
+ * bracket-8 item would refuse a New Trader with a tier message and a Trusted
+ * Trader with a premium one, and the bracket-7 rule would look arbitrary. The
+ * client mirrors this order on item detail.
  *
- * An unvalued item passes, for the same reason it passes the tier cap: it has
- * no bracket to be in.
+ * An unvalued item passes here. It cannot reach a trade anyway — assessOffer()
+ * refuses an item with no value on record, because a rule about brackets
+ * cannot judge something that has none.
  *
  * `path` picks the copy. The mobile accept screen shows the message verbatim,
  * and "only proposing on it is locked" on a screen where the person is
@@ -209,116 +157,92 @@ export async function enforcePremiumForListing(
  * capped belongs to the counterparty handing over the item, not to the user
  * handing over their own.
  *
- * Applies on BOTH the initiate and accept paths, unlike the default
- * restriction above. Reaching for a 5,000-Leaf item is the same reach whoever
- * started the conversation, and a cap that only bound initiators would be
- * avoided by asking the other party to send the offer.
+ * Applies on BOTH the initiate and accept paths. Reaching for a 5,000-Leaf
+ * item is the same reach whoever started the conversation, and a cap that only
+ * bound initiators would be avoided by asking the other party to send the
+ * offer.
  *
- * An item with a NULL valueLeaves passes. That is a real hole and worth naming:
- * valueLeaves is optional on Item and one live listing has none, so an unvalued
- * listing is currently uncapped. Refusing every unvalued item instead would
- * block ordinary trading on listings that predate valuation, which is a bigger
- * hole in the other direction. Closing it properly means making valueLeaves
- * required, which is a valuation change and out of scope here.
+ * ── IT COMPARES BRACKETS, NOT LEAVES ────────────────────────────────────────
+ *
+ * The cap was a Leaves figure and was quoted as one: `"Air Max" is valued at
+ * 480 Leaves`. That was the last place in the offer flow that printed another
+ * person's exact value, which is what the bracket presentation exists to
+ * prevent -- but simply rewording it produced a worse sentence, because 600
+ * sits in the middle of bracket 4 and the refusal then read `is in Bracket 4
+ * ... up to Bracket 4`. Two tiles both reading "Bracket 4", one tradeable and
+ * one not, with nothing on screen to tell them apart.
+ *
+ * So the CAP ITSELF is a bracket now -- rounded DOWN, so that rewording a
+ * limit can never loosen it; see TIER_MAX_ITEM_BRACKET -- and this compares
+ * brackets on both sides. The Leaves figure survives in the config as the
+ * thing the bracket is derived from.
+ *
+ * An item with a NULL valueLeaves passes here, and cannot reach a trade
+ * anyway — see the note on the premium gate.
  */
 export async function enforceItemValueCeiling(
   standing: TraderStanding,
   itemIds: string[],
 ): Promise<NextResponse | null> {
-  const cap = standing.limits.maxItemValueLeaves
-  if (cap === null) return null
+  const capBracket = standing.limits.maxItemBracket
+  if (capBracket === null) return null
 
   const ids = itemIds.filter(Boolean)
   if (ids.length === 0) return null
 
+  // The top of the capped bracket, in Leaves, so the comparison stays a single
+  // indexed query rather than a bracket computed per row in JavaScript.
+  const ceiling = bracketRange(capBracket).max
+  if (ceiling === null) return null
+
   const over = await prisma.item.findFirst({
-    where: { id: { in: ids }, valueLeaves: { gt: cap } },
+    where: { id: { in: ids }, valueLeaves: { gt: ceiling } },
     select: { id: true, title: true, valueLeaves: true },
     orderBy: { valueLeaves: "desc" },
   })
   if (!over) return null
 
+  const itemBracket = bracketOf(over.valueLeaves as number)
   return forbidden(
-    `"${over.title}" is valued at ${over.valueLeaves} Leaves. As a ${standing.tier} you can trade for ` +
-      `items up to ${cap} Leaves — complete more trades to raise the limit.`,
+    `"${over.title}" is in Bracket ${itemBracket}. As a ${standing.tier} you can trade for ` +
+      `items up to Bracket ${capBracket} — complete more trades to raise the limit.`,
     {
       code: "TIER_ITEM_VALUE_CAP",
       tier: standing.tier,
-      cap,
-      itemValueLeaves: over.valueLeaves,
+      capBracket,
+      itemBracket,
     },
   )
 }
 
 /**
- * A user may only initiate an offer for a listing within one bracket of their
- * highest AVAILABLE item. This mirrors the marketplace reach treatment; the
- * server must enforce it because offers can also come from deep links or
- * another device.
- */
-export async function enforceReachForListing(
-  userId: string,
-  itemIds: string[],
-): Promise<NextResponse | null> {
-  const ids = itemIds.filter(Boolean)
-  if (ids.length === 0) return null
-
-  const [highest, listing] = await Promise.all([
-    prisma.item.findFirst({
-      where: { userId, status: "AVAILABLE", valueLeaves: { not: null } },
-      select: { valueLeaves: true },
-      orderBy: { valueLeaves: "desc" },
-    }),
-    prisma.item.findFirst({
-      where: { id: { in: ids } },
-      select: { title: true, valueLeaves: true },
-    }),
-  ])
-
-  if (!listing || listing.valueLeaves === null) return null
-
-  const reach = Math.min(BRACKET_COUNT, bracketOf(highest?.valueLeaves ?? 0) + 1)
-  const listingBracket = bracketOf(listing.valueLeaves)
-  if (listingBracket <= reach) return null
-
-  const bracketsAbove = listingBracket - reach
-  return forbidden(
-    `You cannot send an offer for "${listing.title}" yet. This item is ${bracketsAbove} ` +
-      `${bracketsAbove === 1 ? "bracket" : "brackets"} above your current reach. ` +
-      "Trade for items closer to what you own to move your reach higher.",
-    { code: "ITEM_OUT_OF_REACH", reach, listingBracket },
-  )
-}
-
-/**
- * The three gates that every trade-initiating route applies together.
+ * The two gates every trade-initiating route applies together, against the
+ * item the caller would RECEIVE.
  *
- * One call so a new initiating path cannot pick up a third of the protection,
- * which is the realistic way this gets broken later. Order: default block,
- * premium bracket, tier cap -- see enforcePremiumForListing() for why premium
- * sits above the cap.
+ * One call so a new initiating path cannot pick up half of the protection,
+ * which is the realistic way this gets broken later. Order: premium bracket,
+ * then tier cap -- see enforcePremiumForListing() for why premium sits above.
+ *
+ * THE BRACKET RULE IS NOT HERE. A route that takes an offered item must also
+ * call assessOffer() from @/lib/offer-check, which is what judges the pair and
+ * prices the bridge. The two are separate because they answer different
+ * questions and one of them needs both items.
  */
 export async function enforceInitiateTrade(
   userId: string,
   acquiringItemIds: string[],
 ): Promise<{ response: NextResponse } | { response: null; standing: TraderStanding }> {
   const standing = await loadStanding(userId)
-  const blocked = enforceCanInitiateTrade(standing)
-  if (blocked) return { response: blocked }
   const locked = await enforcePremiumForListing(standing, acquiringItemIds)
   if (locked) return { response: locked }
   const capped = await enforceItemValueCeiling(standing, acquiringItemIds)
   if (capped) return { response: capped }
-  const outOfReach = await enforceReachForListing(userId, acquiringItemIds)
-  if (outOfReach) return { response: outOfReach }
   return { response: null, standing }
 }
 
 /**
- * The accept path: premium bracket, then value ceiling -- never the default
- * block. Same order as the initiate path with the first gate removed, so a
- * bracket-7 item answers PREMIUM_REQUIRED to a non-subscriber on either side
- * of the trade.
+ * The accept path: the same two gates, against what the ACCEPTER receives,
+ * with the accept-side copy on the premium one.
  *
  * A separate function rather than a flag on the one above, so that the
  * difference between the two paths is visible at every call site instead of
@@ -343,38 +267,29 @@ export async function enforceAcceptTrade(
  * say why, instead of guessing at the rules or discovering them from a 403.
  * Everything here is advisory: the same numbers are re-derived server-side on
  * every attempt, and nothing the client sends about its own tier is read.
+ *
+ * `maxItemValueBracket` REPLACED `maxItemValueLeaves`. The client used the raw
+ * figure to draw "a New Trader can trade for up to 600" beside a listing whose
+ * exact value it was not supposed to show; the bracket says the same thing in
+ * the vocabulary the rest of the flow speaks. The Leaves figure stays
+ * server-side, in TIER_LIMITS, where the comparison is actually made.
+ *
+ * The `contracts` block and `restrictions.canInitiateTrades` are gone with
+ * deferred agreements. A client reading this payload can no longer be told
+ * there is a debt system, because there is not one.
  */
 export function publicStanding(standing: TraderStanding) {
   return {
     tier: standing.tier,
-    baseTier: standing.baseTier,
     /** isPremium(premiumUntil). Advisory here; enforced by enforcePremiumForListing(). */
     premium: standing.premium,
     completedTrades: standing.completedTrades,
     rating: standing.rating,
     limits: {
-      maxItemValueLeaves: standing.limits.maxItemValueLeaves,
-      mayProposeDpa: standing.limits.mayProposeDpa,
-      maxOutstandingDebtLeaves: standing.limits.maxOutstandingDebtLeaves,
-    },
-    contracts: {
-      outstandingDebt: standing.outstandingDebt,
-      committedDebt: standing.committedDebt,
-      remainingDebtHeadroom: Math.max(
-        0,
-        standing.limits.maxOutstandingDebtLeaves - standing.committedDebt,
-      ),
-      openContracts: standing.openContracts,
-      lifetimeDefaults: standing.lifetimeDefaults,
-      hasUnsettledDefault: standing.hasUnsettledDefault,
-      onTimeRate: standing.onTimeRate,
+      /** null is unlimited (the top tier). The figure the gate enforces. */
+      maxItemBracket: standing.limits.maxItemBracket,
     },
     restrictions: {
-      canInitiateTrades: !standing.hasUnsettledDefault,
-      // Always true. Spelled out rather than omitted, because it is the field
-      // that tells a client the accept path is deliberately open to a
-      // defaulter, and a client author reading only `canInitiateTrades: false`
-      // would reasonably assume everything else is shut too.
       canAcceptTrades: true,
       canListItems: true,
     },

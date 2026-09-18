@@ -9,7 +9,6 @@ import { parseQuery, paginationShape, MAX_LIMIT } from "@/lib/v1/query"
 import { decodeCursor, encodeCursor, paginate, cursorDate } from "@/lib/v1/cursor"
 import { SAFE_ZONE_HUB_SELECT, v1Hub, type SafeZoneHubRow } from "@/lib/safe-zones"
 import { MEETUP_SELECT, v1MeetupPlan } from "@/lib/meetup"
-import { COMMITTING_STATUSES } from "@/lib/contracts"
 
 export const dynamic = "force-dynamic"
 
@@ -133,6 +132,10 @@ export async function GET(req: NextRequest) {
       id: true,
       status: true,
       offeredLeaves: true,
+      // The bridging fee and who paid it, so a trade row can say "your 20
+      // comes back if this is cancelled" without a second request.
+      bridgeFeeLeaves: true,
+      bridgeFeePaidBySender: true,
       // The hub is selected; the legacy `safeZoneMeetup` boolean on the wire is
       // DERIVED from it below. One source of truth, two field names -- a stored
       // boolean beside the key is a second source of truth that can disagree
@@ -178,21 +181,11 @@ export async function GET(req: NextRequest) {
     where: { OR: [{ senderId: viewerId }, { receiverId: viewerId }], status: "PENDING" },
     select: {
       id: true, status: true, offeredItems: true, offeredLeaves: true,
+      bridgeFeeLeaves: true, offeredBracket: true, targetBracket: true,
       message: true, createdAt: true, senderId: true, receiverId: true,
       post: { select: ITEM_BRIEF },
       sender: { select: USER_BRIEF },
       receiver: { select: USER_BRIEF },
-      // A deferred agreement proposed WITH this offer, now that one can be.
-      //
-      // Sent so the offer card can say "and a promise of 100 by 6 Oct" rather
-      // than showing a swap that looks unequal for no reason — and so the
-      // creditor knows to open the preview before accepting. At most one is ever
-      // in a COMMITTING status; the take is belt and braces.
-      contracts: {
-        where: { status: { in: [...COMMITTING_STATUSES] } },
-        select: { id: true, amountLeaves: true, deadline: true, status: true },
-        take: 1,
-      },
     },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take: MAX_LIMIT,
@@ -226,6 +219,8 @@ export async function GET(req: NextRequest) {
       direction: isSender ? "sent" : "received",
       kind,
       offeredLeaves: t.offeredLeaves,
+      bridgeFeeLeaves: t.bridgeFeeLeaves,
+      bridgeFeePaidBySender: t.bridgeFeePaidBySender,
       counterparty,
       /*
        * ── SUPPRESSED ONLY WHEN IT IS ACTUALLY A PLACEHOLDER ────────────────
@@ -358,22 +353,26 @@ export async function GET(req: NextRequest) {
       message: o.message,
       counterparty: isSender ? o.receiver : o.sender,
       /**
-       * Null when this offer carries no promise, which is most of them.
+       * THE BRIDGE, as the trades screen needs it.
        *
-       * `previewPath` is named rather than left for the client to build, for the
-       * same reason POST /api/v1/contracts names it: a client should not be able
-       * to construct an accept flow without having seen the endpoint that
-       * justifies it.
+       * `bridgeFeeLeaves` is the QUOTE either way; `payer` says whose it is,
+       * derived from the two brackets exactly as the routes derive it. A
+       * receiver looking at an incoming offer whose `payer` is "receiver" is
+       * the one who will be charged on accepting, and their sheet needs both
+       * numbers before they tap.
+       *
+       * The `contract` block that used to sit here -- a deferred promise
+       * attached to the offer, with a preview path -- went with DPAs.
        */
-      contract: o.contracts[0]
-        ? {
-            id: o.contracts[0].id,
-            amountLeaves: o.contracts[0].amountLeaves,
-            deadline: o.contracts[0].deadline,
-            status: o.contracts[0].status,
-            previewPath: `/api/v1/contracts/${o.contracts[0].id}/preview`,
-          }
-        : null,
+      offeredBracket: o.offeredBracket,
+      targetBracket: o.targetBracket,
+      bridgeFeeLeaves: o.bridgeFeeLeaves,
+      bridgeFeePayer:
+        o.bridgeFeeLeaves && o.offeredBracket !== null && o.targetBracket !== null
+          ? o.offeredBracket < o.targetBracket
+            ? "proposer"
+            : "receiver"
+          : null,
       createdAt: o.createdAt,
     }
   })

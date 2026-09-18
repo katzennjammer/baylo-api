@@ -2,7 +2,7 @@
  * Acceptance for the three server changes the Trades screen needed.
  *
  *   1. confirm/status returns the CALLER'S OWN code and never the partner's.
- *   2. POST /api/v1/contracts/[id]/settle moves Leaves and keeps the ledger
+ *   2. (retired -- deferred settlement; see the note in main())
  *      invariant.
  *   3. /api/v1/trades carries `valueLeaves` on every item it names.
  *
@@ -31,7 +31,7 @@ import "dotenv/config"
 import prisma from "../src/lib/prisma"
 import { openCode, sealCode, sealingAvailable } from "../src/lib/swap-code-seal"
 import { MAX_CODE_ATTEMPTS } from "../src/lib/swap-code"
-import { payContract } from "../src/lib/contracts"
+import { requireScratchSchema } from "./lib/live-guard"
 
 const RUN = `vsc${Date.now().toString(36)}`
 const ids = {
@@ -55,15 +55,9 @@ function check(label: string, condition: boolean, detail?: unknown) {
   }
 }
 
-async function ledgerBalance(userId: string): Promise<number> {
-  const agg = await prisma.leafTransaction.aggregate({
-    where: { userId },
-    _sum: { amount: true },
-  })
-  return agg._sum.amount ?? 0
-}
 
 async function main() {
+  requireScratchSchema("scripts/verify-swap-code-and-settle.ts")
   console.log(`\n── swap code sealing ─────────────────────────────────────────`)
 
   // ── 1. the seal itself, before any database is involved ──────────────────
@@ -165,89 +159,22 @@ async function main() {
   check("offered item carries its value", tradeRow?.offeredItem.valueLeaves === 300, tradeRow?.offeredItem)
   check("requested item carries its value", tradeRow?.requestedItem.valueLeaves === 480, tradeRow?.requestedItem)
 
-  console.log(`\n── 2. deliberate settlement ──────────────────────────────────`)
-
-  await prisma.deferredContract.create({
-    data: {
-      id: ids.contract,
-      tradeId: ids.trade,
-      debtorId: ids.debtor,
-      creditorId: ids.creditor,
-      amountLeaves: 200,
-      amountPaidLeaves: 0,
-      deadline: new Date(Date.now() + 14 * 86_400_000),
-      status: "ACTIVE",
-      acceptedAt: new Date(),
-    },
-  })
-
-  const debtorLedgerBefore = await ledgerBalance(ids.debtor)
-  const creditorLedgerBefore = await ledgerBalance(ids.creditor)
-
-  // ── a partial payment ────────────────────────────────────────────────────
-  await prisma.$transaction(async (tx) => {
-    const c = await tx.deferredContract.findUniqueOrThrow({
-      where: { id: ids.contract },
-      select: { id: true, creditorId: true, amountLeaves: true, amountPaidLeaves: true },
-    })
-    await payContract(tx, { contract: c, debtorId: ids.debtor, amount: 120, strict: true })
-  })
-
-  let contract = await prisma.deferredContract.findUniqueOrThrow({ where: { id: ids.contract } })
-  let debtor = await prisma.user.findUniqueOrThrow({ where: { id: ids.debtor } })
-  let creditor = await prisma.user.findUniqueOrThrow({ where: { id: ids.creditor } })
-
-  check("partial payment recorded", contract.amountPaidLeaves === 120, contract.amountPaidLeaves)
-  check("contract still ACTIVE after a partial", contract.status === "ACTIVE", contract.status)
-  check("debtor balance fell by 120", debtor.leaves === 180, debtor.leaves)
-  check("creditor balance rose by 120", creditor.leaves === 170, creditor.leaves)
-  check("debtor lifetimeLeaves untouched", debtor.lifetimeLeaves === 300, debtor.lifetimeLeaves)
-  check("creditor lifetimeLeaves untouched", creditor.lifetimeLeaves === 50, creditor.lifetimeLeaves)
-  check(
-    "ledger moved with the balances",
-    (await ledgerBalance(ids.debtor)) === debtorLedgerBefore - 120 &&
-      (await ledgerBalance(ids.creditor)) === creditorLedgerBefore + 120,
-  )
-
-  // ── the rest of it ───────────────────────────────────────────────────────
-  await prisma.$transaction(async (tx) => {
-    const c = await tx.deferredContract.findUniqueOrThrow({
-      where: { id: ids.contract },
-      select: { id: true, creditorId: true, amountLeaves: true, amountPaidLeaves: true },
-    })
-    await payContract(tx, { contract: c, debtorId: ids.debtor, amount: 80, strict: true })
-  })
-
-  contract = await prisma.deferredContract.findUniqueOrThrow({ where: { id: ids.contract } })
-  debtor = await prisma.user.findUniqueOrThrow({ where: { id: ids.debtor } })
-  creditor = await prisma.user.findUniqueOrThrow({ where: { id: ids.creditor } })
-
-  check("paying the remainder FULFILLS it", contract.status === "FULFILLED", contract.status)
-  check("fulfilledAt is stamped", contract.fulfilledAt !== null)
-  check("defaultedAt stays null on a clean settle", contract.defaultedAt === null)
-  check("debtor ended on 100", debtor.leaves === 100, debtor.leaves)
-  check("creditor ended on 250", creditor.leaves === 250, creditor.leaves)
-
-  // ── the conditional write, which is what stops a double-tap ──────────────
-  let raced = false
-  try {
-    await prisma.$transaction(async (tx) => {
-      await payContract(tx, {
-        // A STALE witness: `amountPaidLeaves: 120` is what a second request that
-        // read before the first one committed would be holding.
-        contract: { id: ids.contract, creditorId: ids.creditor, amountLeaves: 200, amountPaidLeaves: 120 },
-        debtorId: ids.debtor,
-        amount: 80,
-        strict: true,
-      })
-    })
-  } catch (e) {
-    raced = (e as Error).name === "ContractRaceError"
-  }
-  check("a stale write is refused, not applied twice", raced)
-
-  debtor = await prisma.user.findUniqueOrThrow({ where: { id: ids.debtor } })
-  check("the refused write moved nothing", debtor.leaves === 100, debtor.leaves)
+  /*
+   * ── SECTION 2 IS GONE: DEFERRED SETTLEMENT ────────────────────────────────
+   *
+   * It drove POST /api/v1/contracts/[id]/settle through payContract() -- a
+   * partial payment, the rest of it, and the conditional write that stops a
+   * double-tap paying twice. Deferred Points Agreements ended on 16 Sep 2026
+   * and that route answers 410 now, so there is nothing left for the section
+   * to exercise; @/lib/contracts, which it imported, no longer exists.
+   *
+   * What replaced the money it moved is the BRIDGING FEE, and its equivalent
+   * assertions live in scripts/verify-bracket-libs.ts section 4 (hold, release
+   * and pay, in both directions, with the ledger reconciliation checked after
+   * every step) and in verify-bracket-trading.ts over HTTP.
+   *
+   * Sections 1 and 3 are untouched and still the point of this file.
+   */
 
   console.log(`\n── 1. confirm/status reads own-row only ──────────────────────`)
 

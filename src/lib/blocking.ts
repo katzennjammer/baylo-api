@@ -162,20 +162,20 @@ export async function enforceNotBlocked(
 // ── What a block deliberately does NOT do ────────────────────────────────────
 
 /**
- * The trades and contracts that survive a block, for the confirmation the
+ * The trades that survive a block, for the confirmation the
  * blocker is shown.
  *
  * BLOCKING MID-TRADE DOES NOT CANCEL THE TRADE, AND BLOCKING A CREDITOR DOES
  * NOT VOID THE DEBT. Both are reversals, and this system does not do reversals:
- * see the note on the DeferredContract model, which cannot even express getting
+ * a swap that has already happened cannot be un-happened; see the note on
  * an item back, because the item changed hands at a meetup and no software here
  * can recover it.
  *
  * The concrete failure being avoided is not hypothetical. If a block cancelled
  * an active trade, then blocking would be a unilateral undo button for a deal
  * the other party has already handed over goods for. If a block voided a
- * Deferred Points Agreement, then BLOCKING YOUR CREDITOR WOULD BE HOW YOU CLEAR
- * A DEBT — one tap, and a contract the tier system, the deadline sweep and the
+ * deferred agreement, blocking your creditor would have been how you cleared
+ * a debt — one tap, and a contract the tier system, the deadline sweep and the
  * default record are all built around evaporates. Every debtor would find that
  * within a week.
  *
@@ -185,7 +185,8 @@ export async function enforceNotBlocked(
  *                           each other's listings — everything that starts
  *                           something.
  *   UNCHANGED after a block the trade's own state machine (accept, confirm,
- *                           complete, cancel), the DPA's balance, deadline,
+ *                           complete, cancel), the bridging fee still in
+ *                           escrow on it,
  *                           extension, sweep, default and auto-payment.
  *
  * Which leaves one honest rough edge, named here rather than discovered later:
@@ -197,7 +198,7 @@ export async function enforceNotBlocked(
  * reopens exactly the channel someone blocked to close.
  *
  * This function exists so the block route can SAY all that at the moment it
- * matters, with the actual trade and contract in front of the user.
+ * matters, with the actual trade in front of the user.
  */
 export async function blockConsequences(viewerId: string, otherId: string) {
   const [trades, contracts] = await Promise.all([

@@ -1,199 +1,36 @@
-import { NextRequest } from "next/server"
-import { z } from "zod"
-import { resolveSession } from "@/lib/api-auth"
-import prisma from "@/lib/prisma"
-import { DPA } from "@/lib/reputation-config"
-import { loadStanding } from "@/lib/reputation-gate"
-import { sweepLapsedContracts, netValueTo, COMMITTING_STATUSES } from "@/lib/contracts"
-import { ok, unauthenticated, notFound, forbidden, conflict, invalid } from "@/lib/v1/envelope"
-import { parseJsonBody } from "@/lib/v1/body"
-import { V1_CONTRACT_SELECT, V1_CONTRACT_PARTIES_SELECT, v1Contract, type V1ContractRow } from "@/lib/v1/contract"
+import { gone } from "@/lib/v1/envelope"
 
 export const dynamic = "force-dynamic"
 
 /**
- * POST /api/v1/contracts/[id]/accept — the creditor consents. Rule 3.
+ * GONE — Deferred Points Agreements ended on 16 Sep 2026.
  *
- * Only the creditor. Only from PENDING_ACCEPT. Until this runs the trade cannot
- * settle at all — the settlement transaction refuses to complete a trade that
- * still carries a PENDING_ACCEPT contract — so "the trade does not finalize
- * until the creditor explicitly accepts" is enforced by the settlement path
- * refusing, not by this endpoint being polite.
+ * A DPA let the party receiving the better item promise the Leaves difference
+ * and pay it off by a deadline. Bracket trading replaced the whole idea: an
+ * offer must now be within one bracket either way, and the one-bracket gap is
+ * settled immediately by a BRIDGING FEE from whoever moves up (see
+ * @/lib/trade-rules). There is no gap left to defer, so there is nothing for
+ * these routes to create, accept, extend or settle.
  *
- * EVERY DEBTOR-SIDE GATE IS RE-CHECKED HERE. The proposal may have been made
- * days ago, and in between the debtor may have taken on another contract or
- * defaulted on an existing one. Checking only at propose time would make the
- * gates a snapshot of a moment the creditor never saw.
+ * ── WHY A 410 AND NOT A DELETED FILE ────────────────────────────────────────
+ *
+ * Shipped APKs still call them. A deleted route answers 404, which a client
+ * reads as "wrong URL" and a person reads as "something is broken" -- both of
+ * which invite a retry that can never work. 410 says the endpoint existed and
+ * has been withdrawn, and the message says what to do instead. The stubs come
+ * out when the last build that calls them is gone.
+ *
+ * The TABLE is untouched. `DeferredContract` keeps its one FULFILLED row and
+ * its CONTRACT_PAY / CONTRACT_COLLECT ledger pair, so the reconciliation and
+ * every backup still round-trip. Nothing writes to it any more.
  */
+const MESSAGE =
+  "Deferred agreements have been replaced by bracket trading. Offers are now within one " +
+  "bracket either way, and a one-bracket difference is settled at once with a bridging fee. " +
+  "Update the app to make an offer."
 
-const bodySchema = z.strictObject({
-  /**
-   * The amount the creditor believes they are agreeing to, echoed back from the
-   * preview. Optional, but a client that sends it gets protected from accepting
-   * a contract that changed under it.
-   */
-  confirmAmountLeaves: z.number().int().min(1).max(1_000_000).optional(),
-})
+const META = { replacedBy: "bridging-fee", since: "2026-09-16" }
 
-export async function POST(
-  req: NextRequest,
-  { params }: { params: Promise<{ id: string }> },
-) {
-  const session = await resolveSession()
-  if (!session?.user?.id) return unauthenticated()
-  const viewerId = session.user.id
-  const { id } = await params
-
-  const parsed = await parseJsonBody(req, bodySchema)
-  if (!parsed.ok) return parsed.response
-
-  await sweepLapsedContracts(prisma, { contractId: id })
-
-  const contract = await prisma.deferredContract.findUnique({
-    where: { id },
-    select: {
-      ...V1_CONTRACT_SELECT,
-      offerId: true,
-      trade: {
-        select: {
-          id: true, status: true, senderId: true, receiverId: true, offeredLeaves: true,
-          offeredItem: { select: { id: true, valueLeaves: true } },
-          requestedItem: { select: { id: true, valueLeaves: true } },
-        },
-      },
-    },
-  })
-  if (!contract) return notFound("Contract not found")
-  // The debtor gets a 404 too. They know the contract exists — they proposed it
-  // — but "not yours to accept" is not a distinction worth a separate code, and
-  // a debtor accepting their own promise is the one thing this endpoint exists
-  // to make impossible.
-  if (contract.creditorId !== viewerId) return notFound("Contract not found")
-
-  if (contract.status !== "PENDING_ACCEPT") {
-    return conflict(`This agreement is already ${contract.status}`, { status: contract.status })
-  }
-  if (
-    parsed.data.confirmAmountLeaves !== undefined &&
-    parsed.data.confirmAmountLeaves !== contract.amountLeaves
-  ) {
-    return conflict(
-      `This agreement is for ${contract.amountLeaves} Leaves, not ${parsed.data.confirmAmountLeaves}. Re-read the preview before accepting.`,
-      { amountLeaves: contract.amountLeaves },
-    )
-  }
-
-  /*
-   * ── AN OFFER-BORNE CONTRACT IS NOT ACCEPTED HERE ──────────────────────────
-   *
-   * It is accepted by ACCEPTING THE OFFER. PATCH /api/offers/[id] with
-   * `action: "accept"` re-runs every check below, creates the TradeRequest,
-   * re-points this contract at it and moves it to ACTIVE — all in one
-   * transaction, because the creditor consenting to the swap and consenting to
-   * the promise are one decision and splitting them produces a window in which
-   * the trade exists and the promise does not.
-   *
-   * Refused rather than quietly redirected: a client that called this would
-   * otherwise get a success for an acceptance that left the offer PENDING, and
-   * the two would disagree about whether a deal had happened. The path to call
-   * instead is named in the response.
-   */
-  if (!contract.tradeId) {
-    // 409 rather than 400: the body is well-formed and the caller is the right
-    // person — it is the state that makes the request wrong, and `meta.rule` is
-    // where every other v1 gate puts the branchable reason.
-    return conflict(
-      "This agreement was proposed with an offer. Accepting the offer accepts it — there is no separate step.",
-      {
-        rule: "DPA_ACCEPTED_WITH_OFFER",
-        offerId: contract.offerId,
-        acceptVia: contract.offerId ? `/api/offers/${contract.offerId}` : null,
-      },
-    )
-  }
-
-  const trade = contract.trade
-  if (!trade) return notFound("Contract not found")
-  if (trade.status !== "ACCEPTED" && trade.status !== "CONFIRMING") {
-    return invalid(
-      `The underlying trade is ${trade.status} and can no longer carry a deferred agreement.`,
-    )
-  }
-
-  // ── Re-check the debtor, as of now ──
-  const debtor = await loadStanding(contract.debtorId)
-
-  if (debtor.completedTrades < DPA.minCompletedTradesToOwe) {
-    return forbidden(
-      `${debtor.completedTrades} completed trades — a debtor needs ${DPA.minCompletedTradesToOwe}.`,
-      { rule: "DPA_MIN_COMPLETED_TRADES", completedTrades: debtor.completedTrades },
-    )
-  }
-  if (!debtor.limits.mayProposeDpa) {
-    return forbidden(`The debtor is now a ${debtor.tier} and can no longer hold an agreement.`, {
-      rule: "TIER_MAY_NOT_PROPOSE",
-      tier: debtor.tier,
-    })
-  }
-
-  // Other open contracts, this one excluded — it is PENDING_ACCEPT and so is
-  // counted in openContracts/committedDebt by loadStanding().
-  const otherOpen = await prisma.deferredContract.count({
-    where: {
-      debtorId: contract.debtorId,
-      status: { in: [...COMMITTING_STATUSES] },
-      id: { not: contract.id },
-    },
-  })
-  if (otherOpen >= DPA.maxConcurrentAsDebtor) {
-    return conflict(
-      "The debtor has taken on another deferred agreement since proposing this one.",
-      { rule: "DPA_ONE_AT_A_TIME", openContracts: otherOpen },
-    )
-  }
-
-  const ceiling = debtor.limits.maxOutstandingDebtLeaves
-  const otherCommitted = Math.max(0, debtor.committedDebt - contract.amountLeaves)
-  if (otherCommitted + contract.amountLeaves > ceiling) {
-    return forbidden(
-      `Accepting would put the debtor at ${otherCommitted + contract.amountLeaves} Leaves owed, over the ${ceiling} their tier allows.`,
-      { rule: "TIER_DEBT_CEILING", tier: debtor.tier, ceiling },
-    )
-  }
-
-  // The value difference is re-derived too: an item's valueLeaves may have been
-  // edited between proposal and acceptance.
-  const net = netValueTo(trade, contract.debtorId)
-  if (net === null || contract.amountLeaves > net) {
-    return invalid(
-      `The value difference is now ${net ?? "undefined"} Leaves, which no longer covers the ${contract.amountLeaves} deferred. Ask for a new proposal.`,
-    )
-  }
-
-  const acceptedAt = new Date()
-  // Conditional on PENDING_ACCEPT, so two taps on Accept produce one ACTIVE
-  // contract and one 409 rather than two acceptances.
-  const moved = await prisma.deferredContract.updateMany({
-    where: { id: contract.id, status: "PENDING_ACCEPT" },
-    data: { status: "ACTIVE", acceptedAt },
-  })
-  if (moved.count !== 1) {
-    return conflict("This agreement was just resolved by another request")
-  }
-
-  const fresh = await prisma.deferredContract.findUnique({
-    where: { id: contract.id },
-    select: { ...V1_CONTRACT_SELECT, ...V1_CONTRACT_PARTIES_SELECT },
-  })
-
-  return ok(
-    { contract: v1Contract(fresh as V1ContractRow, viewerId) },
-    {
-      // Said plainly in the response, not only in the preview: the creditor has
-      // just given up the ability to get the item back, and there was never a
-      // mechanism to give it back in the first place.
-      noItemReturn: true,
-      tradeMayNowComplete: true,
-    },
-  )
+export async function POST() {
+  return gone(MESSAGE, META)
 }

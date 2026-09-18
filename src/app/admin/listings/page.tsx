@@ -1,7 +1,11 @@
 import Link from "next/link"
 import { auth } from "@root/auth"
 import prisma from "@/lib/prisma"
+import { bracketOf } from "@/lib/brackets"
+import { valueCap } from "@/lib/trade-rules"
+import { VALUE_REJECTION_REASONS } from "@/lib/value-rejection"
 import ListingActions from "./ListingActions"
+import { ValueReviewActions } from "./ValueReviewActions"
 
 export const dynamic = "force-dynamic"
 export const revalidate = 0
@@ -10,7 +14,25 @@ interface Props {
   searchParams: Promise<{ q?: string; status?: string }>
 }
 
-const STATUSES = ["available", "in_trade", "traded", "owned", "removed", "hidden"] as const
+const STATUSES = ["available", "pending_review", "value_rejected", "in_trade", "traded", "owned", "removed", "hidden"] as const
+type StatusFilter = (typeof STATUSES)[number]
+type ItemStatus = "AVAILABLE" | "IN_TRADE" | "TRADED" | "OWNED" | "REMOVED" | "PENDING_REVIEW" | "VALUE_REJECTED"
+
+/**
+ * The Moderation column, in words that say who the listing is waiting on.
+ *
+ * "Visible" used to be the answer for anything not hidden, which on a
+ * PENDING_REVIEW row was a lie: nobody but the owner could see it. Hidden
+ * wins over the review states because it is the one an owner cannot undo by
+ * editing.
+ */
+function moderationLabel(status: string, hidden: boolean): { text: string; color: string } {
+  if (hidden) return { text: "Hidden", color: "#b91c1c" }
+  if (status === "PENDING_REVIEW") return { text: "Waiting for review", color: "#b45309" }
+  if (status === "VALUE_REJECTED") return { text: "Value rejected — owner choosing", color: "#7c2d12" }
+  if (status === "AVAILABLE") return { text: "Visible", color: "#15803d" }
+  return { text: "Not listed", color: "#666" }
+}
 
 function chip(active: boolean): React.CSSProperties {
   return {
@@ -24,7 +46,7 @@ export default async function ListingsPage({ searchParams }: Props) {
   const sp = await searchParams
   const q = sp.q?.trim() ?? ""
   const status = (STATUSES as readonly string[]).includes(sp.status ?? "")
-    ? (sp.status as (typeof STATUSES)[number])
+    ? (sp.status as StatusFilter)
     : undefined
   const session = await auth()
   const me = session?.user?.id
@@ -39,13 +61,13 @@ export default async function ListingsPage({ searchParams }: Props) {
         ...(status === "hidden"
           ? [{ moderationHiddenAt: { not: null } }]
           : status
-            ? [{ status: status.toUpperCase() as "AVAILABLE" | "IN_TRADE" | "TRADED" | "OWNED" | "REMOVED" }]
+            ? [{ status: status.toUpperCase() as ItemStatus }]
             : []),
       ],
     },
     select: {
-      id: true, title: true, status: true, moderationHiddenAt: true,
-      createdAt: true, valueLeaves: true,
+      id: true, title: true, status: true, moderationHiddenAt: true, valueRejectionReason: true,
+      createdAt: true, valueLeaves: true, suggestedLeaves: true, valueSetByUser: true,
       user: { select: { id: true, name: true, email: true } },
     },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
@@ -64,7 +86,7 @@ export default async function ListingsPage({ searchParams }: Props) {
       <div>
         <h1 style={{ fontSize: 24, fontWeight: 800 }}>Listings</h1>
         <p style={{ fontSize: 13, color: "#777", marginTop: 4 }}>
-          Search listings and manage moderator takedowns without opening a report.
+          Search listings, decide value reviews, and manage moderator takedowns without opening a report.
         </p>
       </div>
       <form action="/admin/listings" style={{ display: "flex", gap: 8, maxWidth: 620 }}>
@@ -94,11 +116,40 @@ export default async function ListingsPage({ searchParams }: Props) {
             <tbody>
               {listings.map((listing) => {
                 const hidden = listing.moderationHiddenAt !== null
+                const inReview = listing.status === "PENDING_REVIEW"
+                const label = moderationLabel(listing.status, hidden)
+                const requested = listing.valueLeaves
+                const suggested = listing.suggestedLeaves
+                const cap = suggested === null ? null : valueCap(suggested).maxBracketWithoutReview
                 return (
                   <tr key={listing.id} style={{ borderTop: "1px solid rgba(0,0,0,.06)", verticalAlign: "top" }}>
                     <td style={{ padding: "14px" }}>
                       <Link href={`/listings/${listing.id}`} style={{ color: "#21643d", fontWeight: 700 }}>{listing.title}</Link>
-                      <div style={{ color: "#777", marginTop: 4 }}>{listing.valueLeaves ?? "—"} Leaves</div>
+                      {/*
+                        BOTH numbers, always. The one the model suggested and the
+                        one the owner listed at are different facts, and the gap
+                        between them is the only thing that tells a moderator
+                        whether a listing is priced honestly. A listing that went
+                        to review shows it here as well as in the queue.
+                      */}
+                      <div style={{ color: "#777", marginTop: 4 }}>
+                        {requested?.toLocaleString() ?? "—"} Leaves
+                        {requested !== null ? <span style={{ color: "#999" }}> · bracket {bracketOf(requested)}</span> : null}
+                        {listing.valueSetByUser ? (
+                          <span style={{ color: "#b45309", fontWeight: 700 }}> · owner-set</span>
+                        ) : null}
+                      </div>
+                      {suggested !== null && suggested !== requested ? (
+                        <div style={{ color: "#aaa", fontSize: 12, marginTop: 2 }}>
+                          suggested {suggested.toLocaleString()} · bracket {bracketOf(suggested)}
+                          {cap !== null ? ` · live without review up to ${cap}` : ""}
+                        </div>
+                      ) : null}
+                      {listing.status === "VALUE_REJECTED" && listing.valueRejectionReason ? (
+                        <div style={{ color: "#7c2d12", fontSize: 12, marginTop: 2 }}>
+                          rejected: {VALUE_REJECTION_REASONS[listing.valueRejectionReason]?.label ?? listing.valueRejectionReason}
+                        </div>
+                      ) : null}
                     </td>
                     <td style={{ padding: "14px" }}>
                       <strong>{listing.user.name}</strong>
@@ -107,10 +158,28 @@ export default async function ListingsPage({ searchParams }: Props) {
                     <td style={{ padding: "14px" }}>{listing.status}</td>
                     <td style={{ padding: "14px", color: "#666", whiteSpace: "nowrap" }}>{listing.createdAt.toLocaleDateString()}</td>
                     <td style={{ padding: "14px" }}>
-                      <div style={{ color: hidden ? "#b91c1c" : "#15803d", fontWeight: 700, marginBottom: 6 }}>
-                        {hidden ? "Hidden" : "Visible"}
+                      <div style={{ color: label.color, fontWeight: 700, marginBottom: 6 }}>
+                        {label.text}
                       </div>
-                      <ListingActions listingId={listing.id} hidden={hidden} canAct={canAct} />
+                      {/*
+                        On a row waiting for review the VALUE decision is the
+                        action, so it is drawn first and the takedown is folded
+                        behind a secondary toggle -- a takedown is the answer to
+                        "should this exist", not to "is this number right".
+                      */}
+                      {inReview && canAct ? (
+                        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                          <ValueReviewActions itemId={listing.id} />
+                          <details>
+                            <summary style={{ fontSize: 12, color: "#777", cursor: "pointer" }}>Moderation takedown…</summary>
+                            <div style={{ marginTop: 6 }}>
+                              <ListingActions listingId={listing.id} hidden={hidden} canAct={canAct} />
+                            </div>
+                          </details>
+                        </div>
+                      ) : (
+                        <ListingActions listingId={listing.id} hidden={hidden} canAct={canAct} />
+                      )}
                     </td>
                   </tr>
                 )

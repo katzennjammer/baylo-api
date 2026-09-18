@@ -1,6 +1,5 @@
 import type { PrismaClient } from "@/generated/prisma/client"
 import prisma from "@/lib/prisma"
-import { applyEarningsToContracts } from "@/lib/contracts"
 import {
   TASK_REWARDS,
   TASK_ORDER,
@@ -47,8 +46,12 @@ const DAY_MS = 24 * 60 * 60 * 1000
  * Measured before the fix: SAFEZONE_MEETUP had never been awarded on this
  * database, so no Leaves were minted through the gap. See
  * scripts/analyze-safezone-faucet.ts, and note that nothing was clawed back.
+ *
+ * VERIFIED_SWAP left this set on 16 Sep 2026 when it stopped being a task at
+ * all -- the per-trade payout is TRADE_REWARD now, with its own guards in
+ * @/lib/trade-reward. SAFEZONE_MEETUP is the one repeatable task left.
  */
-const PARTNER_GATED: ReadonlySet<TaskKey> = new Set(["VERIFIED_SWAP", "SAFEZONE_MEETUP"])
+const PARTNER_GATED: ReadonlySet<TaskKey> = new Set(["SAFEZONE_MEETUP"])
 
 export interface AwardResult {
   awarded: number
@@ -279,12 +282,9 @@ async function claimCompletion(
  * Fire-and-forget wrapper for award sites that must never affect the response.
  * Runs its own transaction so the award stays atomic.
  *
- * Also sweeps the awarded Leaves into any open Deferred Points Agreement, in
- * the SAME transaction as the award. That is rule 4 -- a debtor settles by
- * earning, and earned Leaves reach the debt before they reach the balance the
- * debtor can spend. The settlement path does its own sweep after its awards
- * instead of relying on this one, because it credits Leaves through the trade
- * as well and wants a single sweep covering both.
+ * Until 16 Sep 2026 this also swept the award into any open Deferred Points
+ * Agreement. DPAs are gone -- the bridging fee covers the whole gap -- so the
+ * award is the whole transaction now.
  */
 export function awardTaskAsync(
   userId: string,
@@ -293,11 +293,7 @@ export function awardTaskAsync(
   opts: { partnerId?: string; tradeId?: string; description?: string; tradeAt?: Date; eventAt?: Date } = {},
 ): void {
   void prisma
-    .$transaction(async (tx) => {
-      const res = await awardTask(tx as TaskDb, userId, task, refId, opts)
-      if (res.awarded > 0) await applyEarningsToContracts(tx, userId)
-      return res
-    })
+    .$transaction((tx) => awardTask(tx as TaskDb, userId, task, refId, opts))
     .catch(() => { /* awards are best-effort; the backfill catches misses */ })
 }
 
@@ -318,11 +314,17 @@ export function awardTaskAsync(
  *                      nothing.
  *   COMPLETE_PROFILE — avatar, bio and location all filled in.
  *   FIRST_LISTING    — has listed at least one item.
- *   VERIFIED_SWAP    — once per COMPLETED trade, new counterparty only.
- *   SAFEZONE_MEETUP  — once per COMPLETED trade naming a safeZoneHubId, and
- *                      like VERIFIED_SWAP, only for a counterparty new inside
- *                      NEW_PARTNER_WINDOW_DAYS. Both repeatable tasks carry the
- *                      same guard; see PARTNER_GATED.
+ *   FIRST_TRADE      — has at least one COMPLETED trade. Once; the event time
+ *                      is the EARLIEST completed trade's, so an account whose
+ *                      first trade predates 16 Sep 2026 is backfilled against
+ *                      that week and not against the week it opened the app.
+ *   SAFEZONE_MEETUP  — once per COMPLETED trade naming a safeZoneHubId, only
+ *                      for a counterparty new inside NEW_PARTNER_WINDOW_DAYS;
+ *                      see PARTNER_GATED.
+ *
+ * VERIFIED_SWAP is deliberately NOT listed. Its rows stay; it is not eligible
+ * for anything any more, so a trade completed after the fold never picks up
+ * the old 20 through the backfill.
  */
 export async function reconcileTasks(userId: string): Promise<TasksStatus | null> {
   const [user, firstItem, completedTrades, existing] = await Promise.all([
@@ -357,13 +359,17 @@ export async function reconcileTasks(userId: string): Promise<TasksStatus | null
   if (googleVerified)   eligible.push({ task: "VERIFY_ACCOUNT",   refId: "", eventAt: user.createdAt })
   if (profileComplete)  eligible.push({ task: "COMPLETE_PROFILE", refId: "", eventAt: user.updatedAt })
   if (firstItem)        eligible.push({ task: "FIRST_LISTING",    refId: "", eventAt: firstItem.createdAt })
+  const firstTrade = completedTrades.reduce<Date | null>(
+    (earliest, t) => (earliest === null || t.updatedAt < earliest ? t.updatedAt : earliest),
+    null,
+  )
+  if (firstTrade)       eligible.push({ task: "FIRST_TRADE",      refId: "", eventAt: firstTrade })
   for (const t of completedTrades) {
     const partnerId = t.senderId === userId ? t.receiverId : t.senderId
-    eligible.push({ task: "VERIFIED_SWAP", refId: t.id, partnerId, eventAt: t.updatedAt })
-    // partnerId on BOTH, for the same reason: both are repeatable and both are
-    // partner-gated. The backfill must apply the identical rule to the live
-    // path or it becomes a way to collect an award the live path refused --
-    // simply by waiting and loading the tasks screen.
+    // partnerId is REQUIRED: the task is partner-gated and the backfill must
+    // apply the identical rule to the live path or it becomes a way to collect
+    // an award the live path refused -- simply by waiting and loading the
+    // tasks screen.
     if (t.safeZoneHubId) eligible.push({ task: "SAFEZONE_MEETUP", refId: t.id, partnerId, eventAt: t.updatedAt })
   }
 

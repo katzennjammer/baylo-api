@@ -24,6 +24,7 @@
 //   9  SUM(User.leaves) == SUM(LeafTransaction.amount) throughout
 
 import prisma from "../src/lib/prisma"
+import { requireScratchSchema } from "./lib/live-guard"
 import { awardTask, reconcileTasks } from "../src/lib/tasks"
 import { TASK_REWARDS, NEW_PARTNER_WINDOW_DAYS } from "../src/lib/task-constants"
 import { resolveMeetupHub } from "../src/lib/safe-zones"
@@ -142,13 +143,10 @@ async function invariant(where: string) {
 const DAY = 24 * 60 * 60 * 1000
 
 async function main() {
-  if (!/faucetcheck|scratch|test/i.test(process.env.DATABASE_URL ?? "")) {
-    console.error(
-      "\n  REFUSING TO RUN: DATABASE_URL does not look like a scratch database.\n" +
-        "  This harness creates and deletes rows. See the header.\n",
-    )
-    process.exit(1)
-  }
+  // This used to sniff the URL for /faucetcheck|scratch|test/, which passed on
+  // a LIVE URL containing the word "test" and failed on a perfectly good
+  // scratch schema that did not. The schema is the fact; the guard reads it.
+  requireScratchSchema("scripts/verify-safezone-faucet.ts")
 
   await cleanup()
 
@@ -227,26 +225,26 @@ async function main() {
     JSON.stringify(a3),
   )
 
-  // ── 4 ── VERIFIED_SWAP unchanged (regression guard)
-  head("4  VERIFIED_SWAP still behaves exactly as before")
-  const v1 = await prisma.$transaction((tx) =>
-    awardTask(tx, bob.id, "VERIFIED_SWAP", t1.id, {
-      partnerId: alice.id,
-      tradeId: t1.id,
-      tradeAt: t1At,
-      eventAt: t1At,
-    }),
-  )
-  const v2 = await prisma.$transaction((tx) =>
-    awardTask(tx, bob.id, "VERIFIED_SWAP", t2.id, {
-      partnerId: alice.id,
-      tradeId: t2.id,
-      tradeAt: t2At,
-      eventAt: t2At,
-    }),
-  )
-  check("VERIFIED_SWAP pays on a new partner", v1.awarded === TASK_REWARDS.VERIFIED_SWAP, JSON.stringify(v1))
-  check("VERIFIED_SWAP refuses a repeat partner", v2.awarded === 0 && v2.reason === "repeat_partner", JSON.stringify(v2))
+  // ── 4 ── VERIFIED_SWAP is gone (16 Sep 2026)
+  head("4  VERIFIED_SWAP is no longer a task the backfill can pay")
+  // It was folded into TRADE_REWARD (@/lib/trade-rules). The TaskKind value
+  // survives for the rows already written; what must not survive is any path
+  // that awards it. reconcileTasks() is that path, so: a completed trade with a
+  // fresh partner, reconciled, must produce no VERIFIED_SWAP row and no 20.
+  const bobBefore = await prisma.user.findUnique({ where: { id: bob.id }, select: { lifetimeLeaves: true } })
+  const bobStatus = await reconcileTasks(bob.id)
+  const swapRows = await prisma.taskCompletion.count({ where: { userId: bob.id, task: "VERIFIED_SWAP" } })
+  check("reconcileTasks writes no VERIFIED_SWAP row", swapRows === 0, `${swapRows}`)
+  check("…and does not list it", !!bobStatus && !bobStatus.tasks.some((t) => (t.task as string) === "VERIFIED_SWAP"))
+  check("…FIRST_TRADE is what a completed trade earns now, once",
+    !!bobStatus && bobStatus.tasks.some((t) => t.task === "FIRST_TRADE" && t.done && t.count === 1),
+    JSON.stringify(bobStatus?.tasks))
+  // Bob has two completed trades by now. One FIRST_TRADE row, worth 20, not two.
+  const firstTradeRows = await prisma.taskCompletion.findMany({ where: { userId: bob.id, task: "FIRST_TRADE" }, select: { leaves: true } })
+  check("…worth FIRST_TRADE's 20 once, not one 20 per trade",
+    firstTradeRows.length === 1 && firstTradeRows[0].leaves === TASK_REWARDS.FIRST_TRADE,
+    JSON.stringify(firstTradeRows))
+  void bobBefore
 
   // ── 5 ── fail closed with no partnerId
   head("5  a partner-gated task with no partnerId fails CLOSED and writes no row")

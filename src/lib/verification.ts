@@ -1,7 +1,6 @@
 import prisma from "@/lib/prisma"
 import { SIGNUP_GRANT_LEAVES } from "@/lib/task-constants"
 import { awardTask } from "@/lib/tasks"
-import { applyEarningsToContracts } from "@/lib/contracts"
 import type { PrismaClient } from "@/generated/prisma/client"
 
 type TaskDb = Pick<PrismaClient, "user" | "taskCompletion" | "leafTransaction" | "tradeRequest">
@@ -77,7 +76,6 @@ export async function markVerified(
       // Earned Leaves go to an open deferred agreement first — rule 4. In the
       // same transaction as the award, so the balance and the debt never
       // disagree between two commits.
-      if (awarded.awarded > 0) await applyEarningsToContracts(tx, userId)
       return awarded
     })
     taskAwarded = res.awarded
@@ -137,7 +135,6 @@ async function claimSignupGrant(userId: string, at: Date): Promise<number> {
     // In practice a brand-new account has no contracts to settle -- a debtor
     // needs three completed trades -- but the rule is "every credit sweeps",
     // and an exception here would be one more place for that to stop being true.
-    await applyEarningsToContracts(tx, userId)
 
     return SIGNUP_GRANT_LEAVES
   })

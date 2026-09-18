@@ -206,6 +206,19 @@ function Test-Dump {
       Ok "ledger invariant in the dump: $fu = $fl"
     } else { Reject "could not read the invariant line in the trailer" }
 
+    # The escrow/issuance line exists in dumps taken after bracket trading
+    # (16 Sep 2026). An older dump simply has none, and that is not a defect
+    # of the file -- it is stated so nobody wonders why the check was skipped.
+    $escLine = ($tail | Where-Object { $_ -match '^-- escrow: ' }) | Select-Object -First 1
+    if ($escLine) {
+      if ($escLine -match 'escrow=(-?\d+) held=(-?\d+) issuance=(-?\d+)') {
+        $fe = [int]$Matches[1]; $fh = [int]$Matches[2]; $fi = [int]$Matches[3]
+        if ($fe -ne $fh) { Reject "escrow does not reconcile in this dump: ledger holds $fe, live offers/trades hold $fh" }
+        if (($fu + $fe) -ne $fi) { Reject "Leaves were minted outside the issuance types in this dump: balances $fu + escrow $fe != issuance $fi" }
+        Ok "escrow reconciles in the dump: $fe held = $fh on rows; $fu + $fe = issuance $fi"
+      } else { Reject "could not read the escrow line in the trailer" }
+    } else { Info "no escrow line (dump predates bracket trading) - reconciliation check skipped" }
+
     # Against the live database, when we have one to ask.
     if ($Url) {
       Info "comparing the trailer against the live database"

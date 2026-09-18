@@ -6,9 +6,15 @@
 //   - a valuation response carries valuationSource, set to one of exactly two
 //     values, and the Item it produces stores that value
 //   - DETERMINISM: identical inputs return byte-identical output, twice
-//   - condition CHANGES the number: same category, two conditions, two values
-//   - a user override outside the allowed band is REJECTED with a 400
-//   - an override inside the band is accepted and both numbers are stored
+//   - condition CHANGES the number: same category, two conditions, two values,
+//     and the arithmetic of whichever path the data takes -- category band on
+//     an empty database, condition-normalised comparables on a seeded one
+//   - a user value BELOW the suggestion is accepted, however far below
+//   - a value up to ONE BRACKET above the suggestion's bracket is accepted and
+//     goes live; both numbers and `valueSetByUser` are stored
+//   - a value further above that is accepted but PARKED: the listing is
+//     created in PENDING_REVIEW, invisible to everyone but its owner, and an
+//     admin decides
 //   - one re-valuation per listing, then 409
 //   - the old /api/ai/value path still answers, from the same model
 //   - a per-path census of every Item in the database
@@ -16,16 +22,21 @@
 // Run (from baylo/, with a dev server on BASE):
 //   npx tsx --env-file=.env scripts/verify-valuation.ts
 import prisma from "../src/lib/prisma"
+import { valueCap } from "../src/lib/trade-rules"
 import { signAccessToken } from "../src/lib/auth-tokens"
 import {
   CONDITION_MULTIPLIERS,
   CATEGORY_BANDS,
+  COMPARABLE_SELECT,
+  MAX_COMPARABLES,
+  comparablesWhere,
   OVERRIDE_BAND_PCT,
   MIN_COMPARABLES,
   MAX_REVALUATIONS,
   valueItem,
   overrideBounds,
 } from "../src/lib/valuation"
+import { requireScratchSchema } from "./lib/live-guard"
 
 const BASE = process.env.ACCEPT_BASE ?? "http://127.0.0.1:3100"
 const P = "zzval-"
@@ -83,6 +94,7 @@ const listing = (over: Record<string, unknown>) => ({
 // ── Main ─────────────────────────────────────────────────────────────────────
 
 async function main() {
+  requireScratchSchema("scripts/verify-valuation.ts")
   console.log(`Driving ${BASE}\n`)
   await cleanup()
 
@@ -153,44 +165,74 @@ async function main() {
 
   // ── 4. Condition changes the value.
   //
-  // KNOWN TO FAIL ON A SEEDED DATABASE, AND LEFT THAT WAY ON PURPOSE (2026-09-15).
+  // THE ARITHMETIC IS RESTATED BY HAND, FOR WHICHEVER PATH THE DATABASE TAKES.
   //
-  // The two "band midpoint × multiplier" checks below assume the CATEGORY-BAND
-  // path, which valueItem() takes only when a category has fewer than
+  // This section used to assert the CATEGORY-BAND arithmetic unconditionally,
+  // and valueItem() only takes that path when a category has fewer than
   // MIN_COMPARABLES settled, priced items. prisma/seed.ts deliberately plants
-  // FOUR settled ELECTRONICS items so that the COMPARABLES path is reachable at
-  // all, so on a seeded database this section gets comparables-derived values
-  // (157 / 51 from the seed data) and the two equality checks fail.
+  // four settled ELECTRONICS rows so the COMPARABLES path is reachable at all,
+  // so the two equality checks failed on every seeded database -- 47 of 49,
+  // with a comment explaining that red meant the seed was present.
   //
-  // The valuation is correct in that case -- recomputed by hand from the seed
-  // rows it matches to the Leaf -- and the determinism checks above are the
-  // ones the "objective and consistent" claim rests on, and they pass.
+  // A test that is expected to fail is not a test. It is also the one shape of
+  // failure that hides a real regression, because the eye learns to skip it.
   //
-  // DO NOT "FIX" THIS BY POINTING IT AT AN EMPTY CATEGORY. That would make it
-  // pass by avoiding the comparables case rather than covering it, and this
-  // project has already had tests that could not fail. The honest fix, when
-  // someone has time, is to assert the RIGHT expectation for whichever path
-  // the database actually takes: read valuationSource from the response and
-  // check band arithmetic for "category_band" or the normalised-mean
-  // arithmetic (see valueItem) for "comparables". Until then, two red lines
-  // here on a seeded database mean the seed is present, not that the code is
-  // wrong -- and two green lines would mean the seed is absent.
+  // So the harness reads `valuationSource` off the response and checks the
+  // arithmetic that source implies:
+  //
+  //   category_band   midpoint of the band x the condition multiplier
+  //   comparables     each settled row normalised by ITS OWN condition
+  //                   multiplier, meaned, x this condition's multiplier
+  //
+  // Both are written out here in full rather than by calling valueItem(),
+  // which would only prove the function equals itself. The comparables are
+  // read with the same where/order/take the server uses -- see
+  // fetchComparables() in @/lib/valuation-server -- because a different
+  // ordering would silently value a different sample.
   console.log("\n4. condition affects value — same category, different condition")
   const mint    = await post("/api/items", token, listing({ title: `${P}mint`, category: "ELECTRONICS", condition: "NEW" }))
   const cracked = await post("/api/items", token, listing({ title: `${P}cracked`, category: "ELECTRONICS", condition: "POOR" }))
   const mintV    = mint.body.valueLeaves as number
   const crackedV = cracked.body.valueLeaves as number
-  console.log(`  NEW  ELECTRONICS -> valueLeaves=${mintV} suggested=${mint.body.suggestedLeaves} source=${mint.body.valuationSource}`)
+  const source   = mint.body.valuationSource as string
+  console.log(`  NEW  ELECTRONICS -> valueLeaves=${mintV} suggested=${mint.body.suggestedLeaves} source=${source}`)
   console.log(`  POOR ELECTRONICS -> valueLeaves=${crackedV} suggested=${cracked.body.suggestedLeaves} source=${cracked.body.valuationSource}`)
   check("both created", mint.status === 201 && cracked.status === 201, `${mint.status}/${cracked.status}`)
   check("the two values differ", mintV !== crackedV, `${mintV} vs ${crackedV}`)
   check("NEW is worth more than POOR", mintV > crackedV, `${mintV} <= ${crackedV}`)
+  check("both items took the SAME path", cracked.body.valuationSource === source,
+    `${source} vs ${cracked.body.valuationSource}`)
 
-  const [lo, hi] = CATEGORY_BANDS.ELECTRONICS
-  const expectNew  = Math.floor(((lo + hi) / 2) * CONDITION_MULTIPLIERS.NEW + 0.5)
-  const expectPoor = Math.floor(((lo + hi) / 2) * CONDITION_MULTIPLIERS.POOR + 0.5)
-  check("NEW matches the band midpoint × its multiplier", mintV === expectNew, `${mintV} != ${expectNew}`)
-  check("POOR matches the band midpoint × its multiplier", crackedV === expectPoor, `${crackedV} != ${expectPoor}`)
+  // valueItem()'s rounding, restated: half-up, floored at 1 Leaf.
+  const round1 = (n: number) => Math.max(1, Math.floor(n + 0.5))
+
+  let base: number
+  if (source === "comparables") {
+    const rows = await prisma.item.findMany({
+      where: comparablesWhere("ELECTRONICS"),
+      select: COMPARABLE_SELECT,
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: MAX_COMPARABLES,
+    })
+    const normalised = rows
+      .filter((r) => (r.valueLeaves ?? 0) > 0)
+      .map((r) => (r.valueLeaves as number) / CONDITION_MULTIPLIERS[r.condition as keyof typeof CONDITION_MULTIPLIERS])
+    base = normalised.reduce((a, b) => a + b, 0) / normalised.length
+    console.log(`  comparables path: ${normalised.length} settled rows, condition-normalised mean ${base.toFixed(3)}`)
+    check(`the sample is at or above MIN_COMPARABLES (${MIN_COMPARABLES})`,
+      normalised.length >= MIN_COMPARABLES, `${normalised.length}`)
+  } else {
+    const [lo, hi] = CATEGORY_BANDS.ELECTRONICS
+    base = (lo + hi) / 2
+    console.log(`  category_band path: band ${lo}-${hi}, midpoint ${base}`)
+  }
+
+  check(`NEW  = base × ${CONDITION_MULTIPLIERS.NEW} (${source})`,
+    mintV === round1(base * CONDITION_MULTIPLIERS.NEW),
+    `${mintV} != ${round1(base * CONDITION_MULTIPLIERS.NEW)}`)
+  check(`POOR = base × ${CONDITION_MULTIPLIERS.POOR} (${source})`,
+    crackedV === round1(base * CONDITION_MULTIPLIERS.POOR),
+    `${crackedV} != ${round1(base * CONDITION_MULTIPLIERS.POOR)}`)
 
   // ── 5. valuationSource is persisted, not just returned.
   console.log("\n5. valuationSource is stored on the Item")
@@ -204,44 +246,120 @@ async function main() {
   check("stored suggestion equals stored value when unoverridden",
     mintRow?.valueLeaves === mintRow?.suggestedLeaves)
 
-  // ── 6. The override band.
-  console.log("\n6. user override")
+  // ── 6. Setting your own value: the bracket cap, and review above it.
+  //
+  // The +/-25% band stopped being a RULE on 16 Sep 2026 -- it is the slider's
+  // range now. What the server enforces is the bracket: lower is always fine,
+  // up to one bracket above the suggestion's bracket goes live, and anything
+  // further is stored as asked and parked in PENDING_REVIEW.
+  console.log("\n6. setting your own value")
   const bandRef = await api("/api/v1/valuation?category=BOOKS&condition=GOOD", token)
   const suggested = (bandRef.body.data as { suggestedLeaves: number }).suggestedLeaves
-  const allowed = overrideBounds(suggested)
-  console.log(`  BOOKS/GOOD suggestion ${suggested}, allowed ${allowed.min}–${allowed.max}`)
+  const cap = valueCap(suggested)
+  const slider = overrideBounds(suggested)
+  console.log(`  BOOKS/GOOD suggestion ${suggested} (bracket ${cap.suggestedBracket}), ` +
+    `live up to bracket ${cap.maxBracketWithoutReview} (${cap.maxValueWithoutReview}), ` +
+    `slider ${slider.min}-${slider.max}`)
 
-  const inBand = Math.round((suggested + allowed.max) / 2)
+  const inBand = Math.round((suggested + slider.max) / 2)
   const okRes = await post("/api/items", token, listing({ title: `${P}inband`, valueLeaves: inBand }))
-  console.log(`  in-band ${inBand} -> ${okRes.status}`)
-  check("an in-band override is accepted", okRes.status === 201, `${okRes.status}`)
-  check("the override is what got stored", okRes.body.valueLeaves === inBand, `${okRes.body.valueLeaves}`)
+  console.log(`  inside the slider band ${inBand} -> ${okRes.status}`)
+  check("a value inside the slider band is accepted", okRes.status === 201, `${okRes.status}`)
+  check("the value is what got stored", okRes.body.valueLeaves === inBand, `${okRes.body.valueLeaves}`)
   check("the suggestion is stored ALONGSIDE it, not overwritten",
     okRes.body.suggestedLeaves === suggested, `${okRes.body.suggestedLeaves} != ${suggested}`)
+  // `valueSetByUser` is read from the ROW, not the response: it is a fact for
+  // the admin Listings page and the census query, and the public item payload
+  // deliberately does not carry it.
+  const inBandRow = await prisma.item.findUnique({
+    where: { id: okRes.body.id as string },
+    select: { valueSetByUser: true, status: true },
+  })
+  check("it is marked as the owner's own value", inBandRow?.valueSetByUser === true, show(inBandRow))
+  check("and it went live", inBandRow?.status === "AVAILABLE", show(inBandRow))
 
-  const tooHigh = allowed.max + 1
-  const highRes = await post("/api/items", token, listing({ title: `${P}toohigh`, valueLeaves: tooHigh }))
-  console.log(`\n  OUT OF BAND (${tooHigh}) -> HTTP ${highRes.status}`)
-  console.log(show(highRes.body))
-  check("an over-band override is rejected with 400", highRes.status === 400, `${highRes.status}`)
-  check("the 400 names the suggestion and the bounds",
-    highRes.body.suggestedLeaves === suggested && !!highRes.body.allowed)
+  // As far below as it gets. Nobody games a bracket downwards.
+  const lowRes = await post("/api/items", token, listing({ title: `${P}low`, valueLeaves: 1 }))
+  check("a value far BELOW the suggestion is accepted", lowRes.status === 201, `${lowRes.status}`)
+  const lowRow = await prisma.item.findUnique({
+    where: { id: lowRes.body.id as string },
+    select: { valueLeaves: true, valueSetByUser: true, status: true },
+  })
+  check("…stored as asked, live, and flagged as the owner's",
+    lowRow?.valueLeaves === 1 && lowRow?.status === "AVAILABLE" && lowRow?.valueSetByUser === true,
+    show(lowRow))
 
-  const tooLow = Math.max(1, allowed.min - 1)
-  const lowRes = await post("/api/items", token, listing({ title: `${P}toolow`, valueLeaves: tooLow }))
-  console.log(`  UNDER BAND (${tooLow}) -> HTTP ${lowRes.status}`)
-  check("an under-band override is rejected with 400", lowRes.status === 400, `${lowRes.status}`)
+  // The top of the one-bracket-up allowance: live.
+  const atCap = cap.maxValueWithoutReview ?? suggested * 10
+  const capRes = await post("/api/items", token, listing({ title: `${P}atcap`, valueLeaves: atCap }))
+  check(`the top of bracket ${cap.maxBracketWithoutReview} (${atCap}) is live`,
+    capRes.status === 201 && capRes.body.status === "AVAILABLE" && capRes.body.valueLeaves === atCap,
+    show(capRes.body))
 
-  check("nothing out of band reached the database",
-    (await prisma.item.count({ where: { userId: user.id, title: { in: [`${P}toohigh`, `${P}toolow`] } } })) === 0)
+  // One Leaf further: the next bracket up, which needs a human.
+  const overRes = await post("/api/items", token, listing({ title: `${P}review`, valueLeaves: atCap + 1 }))
+  console.log(`\n  ABOVE THE CAP (${atCap + 1}) -> HTTP ${overRes.status}`)
+  console.log(show(overRes.body.valueReview))
+  check("a value above the cap is ACCEPTED, not refused", overRes.status === 201, `${overRes.status}`)
+  check("…and parked in PENDING_REVIEW", overRes.body.status === "PENDING_REVIEW", `${overRes.body.status}`)
+  check("…at the value the owner asked for", overRes.body.valueLeaves === atCap + 1, `${overRes.body.valueLeaves}`)
+  check("…with the suggestion kept beside it", overRes.body.suggestedLeaves === suggested)
+  const review = overRes.body.valueReview as { decision?: string; pending?: boolean; notice?: string } | undefined
+  check("…and the response says so before the owner has to ask",
+    review?.decision === "needsReview" && review?.pending === true && typeof review?.notice === "string",
+    show(review))
+
+  // It is invisible to everyone else, which is the whole point of parking it.
+  const stranger = await prisma.user.findFirst({ where: { id: { not: user.id }, deletedAt: null }, select: { id: true } })
+  if (stranger) {
+    const strangerToken = await signAccessToken(stranger.id)
+    const peek = await api(`/api/v1/items/${overRes.body.id}`, strangerToken)
+    check("a listing in review is 404 to anybody but its owner", peek.status === 404, `${peek.status}`)
+  }
+  const browse = await api("/api/v1/browse?limit=50", token)
+  const inBrowse = JSON.stringify(browse.body).includes(`${P}review`)
+  check("…and does not appear in browse", !inBrowse)
 
   // ── 7. Edits are bounded too, and re-price on a condition change.
   console.log("\n7. edit path")
   const editId = okRes.body.id as string
-  const badEdit = await api(`/api/items/${editId}`, token, {
-    method: "PATCH", body: JSON.stringify({ valueLeaves: allowed.max * 4 }),
+  const bigEdit = await api(`/api/items/${editId}`, token, {
+    method: "PATCH", body: JSON.stringify({ valueLeaves: (cap.maxValueWithoutReview ?? suggested) * 4 }),
   })
-  check("PATCH with an out-of-band value is 400", badEdit.status === 400, `${badEdit.status}`)
+  check("PATCH far above the cap is accepted and sent to review",
+    bigEdit.status === 200 && bigEdit.body.status === "PENDING_REVIEW", `${bigEdit.status} ${bigEdit.body.status}`)
+  // ...and bringing it back inside the cap republishes it without an admin.
+  const backEdit = await api(`/api/items/${editId}`, token, {
+    method: "PATCH", body: JSON.stringify({ valueLeaves: inBand }),
+  })
+  check("PATCH back inside the cap goes live again",
+    backEdit.status === 200 && backEdit.body.status === "AVAILABLE", `${backEdit.status} ${backEdit.body.status}`)
+
+  // A value edit is refused outright while an offer on the listing is pending:
+  // the bracket is what that offer was judged on.
+  const other = await prisma.user.findFirst({ where: { id: { not: user.id }, deletedAt: null }, select: { id: true } })
+  if (other) {
+    const theirItem = await prisma.item.findFirst({
+      where: { userId: other.id, status: "AVAILABLE", valueLeaves: { not: null } },
+      select: { id: true, valueLeaves: true },
+    })
+    const mine = await prisma.item.findUnique({ where: { id: editId }, select: { valueLeaves: true } })
+    if (theirItem && mine?.valueLeaves != null && theirItem.valueLeaves != null) {
+      const pending = await prisma.offer.create({
+        data: {
+          postId: editId, senderId: other.id, receiverId: user.id, status: "PENDING",
+          offeredItems: JSON.stringify([{ id: theirItem.id }]),
+        },
+        select: { id: true },
+      })
+      const locked = await api(`/api/items/${editId}`, token, {
+        method: "PATCH", body: JSON.stringify({ valueLeaves: inBand + 1 }),
+      })
+      check("a value edit is refused while an offer is pending",
+        locked.status === 409 && locked.body.code === "VALUE_LOCKED_BY_OFFER", `${locked.status} ${show(locked.body.code)}`)
+      await prisma.offer.delete({ where: { id: pending.id } })
+    }
+  }
 
   const condEdit = await api(`/api/items/${editId}`, token, {
     method: "PATCH", body: JSON.stringify({ condition: "POOR", valueLeaves: null }),

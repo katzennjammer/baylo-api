@@ -67,14 +67,17 @@ export const MIN_COMPARABLES = 3
 export const MAX_COMPARABLES = 100
 
 /**
- * How far a user may move the final value away from the suggestion, either way.
+ * The SLIDER's range around the suggestion, either way. A UI convenience,
+ * NOT THE RULE.
  *
- * The slider is not removed and must not be: in barter the two parties decide
- * what a thing is worth to them, and a platform that fixes the number by fiat
- * is not running a barter market. What the band does is stop the suggestion
- * from being decorative. At 0.25 a 1,000-Leaf suggestion may be listed at
- * anything from 750 to 1,250 — real room to disagree with the model, not enough
- * room for the model to be irrelevant.
+ * Until 16 Sep 2026 this band was enforced: a value outside it was refused
+ * with a 400. It no longer is. The rule the server enforces is the bracket
+ * cap in @/lib/trade-rules -- lower is always allowed, higher is allowed up to
+ * one bracket above the suggestion's bracket, and above that the listing goes
+ * to review -- because the bracket is what trading is judged on, and a
+ * percentage was sometimes no bracket and sometimes two. The slider keeps its
+ * ±25% as the quick-adjust range for people who broadly agree with the model;
+ * "Set my own value" is the path for people who do not. See overrideBounds().
  */
 export const OVERRIDE_BAND_PCT = 0.25
 
@@ -196,13 +199,11 @@ export interface Valuation {
 const round = (n: number): number => Math.floor(n + 0.5)
 
 /**
- * The allowed override band around a suggestion.
- *
- * Exported because three call sites need the identical arithmetic: the endpoint
- * that tells the client what the slider bounds are, the create/update guard
- * that rejects a value outside them, and the harness that checks the two agree.
- * Computing it twice is how a client slider ends up able to select a value the
- * server then refuses.
+ * The slider's stops around a suggestion. Advisory since 16 Sep 2026: the
+ * create/update guard no longer reads it (see decideItemValue), and a value
+ * outside it typed through "Set my own value" is judged by the bracket cap
+ * instead. Still computed server-side so the slider the wizard draws and the
+ * band the endpoint describes come from one function.
  */
 export function overrideBounds(suggestedLeaves: number): { min: number; max: number } {
   return {
@@ -213,7 +214,7 @@ export function overrideBounds(suggestedLeaves: number): { min: number; max: num
   }
 }
 
-/** Is `finalValue` an acceptable user override of `suggestedLeaves`? */
+/** Is `finalValue` inside the slider band? Not a server rule any more; see above. */
 export function isWithinOverrideBand(finalValue: number, suggestedLeaves: number): boolean {
   const { min, max } = overrideBounds(suggestedLeaves)
   return finalValue >= min && finalValue <= max

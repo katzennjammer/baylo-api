@@ -1,111 +1,36 @@
-import { NextRequest } from "next/server"
-import { z } from "zod"
-import { resolveSession } from "@/lib/api-auth"
-import prisma from "@/lib/prisma"
-import { DPA } from "@/lib/reputation-config"
-import { sweepLapsedContracts, extensionBounds } from "@/lib/contracts"
-import { ok, unauthenticated, notFound, conflict, invalid } from "@/lib/v1/envelope"
-import { parseJsonBody, futureInstant } from "@/lib/v1/body"
-import { V1_CONTRACT_SELECT, V1_CONTRACT_PARTIES_SELECT, v1Contract, type V1ContractRow } from "@/lib/v1/contract"
+import { gone } from "@/lib/v1/envelope"
 
 export const dynamic = "force-dynamic"
 
 /**
- * POST /api/v1/contracts/[id]/extension/request — the debtor asks. Rule 5.
+ * GONE — Deferred Points Agreements ended on 16 Sep 2026.
  *
- * Asking does not move the deadline. It records that the debtor asked and what
- * they asked for; only the creditor's grant moves anything, and only once.
+ * A DPA let the party receiving the better item promise the Leaves difference
+ * and pay it off by a deadline. Bracket trading replaced the whole idea: an
+ * offer must now be within one bracket either way, and the one-bracket gap is
+ * settled immediately by a BRIDGING FEE from whoever moves up (see
+ * @/lib/trade-rules). There is no gap left to defer, so there is nothing for
+ * these routes to create, accept, extend or settle.
  *
- * EXACTLY ONE EXTENSION, and `extensionUsed` is the whole enforcement. It is set
- * by the GRANT, never by the request — so a debtor cannot burn their own
- * extension by asking, and cannot obtain a second one by asking again. The
- * refusal below fires on a request as well as on a grant, because a debtor who
- * has already had their extension should be told so at the point they ask
- * rather than after the creditor has considered it.
+ * ── WHY A 410 AND NOT A DELETED FILE ────────────────────────────────────────
+ *
+ * Shipped APKs still call them. A deleted route answers 404, which a client
+ * reads as "wrong URL" and a person reads as "something is broken" -- both of
+ * which invite a retry that can never work. 410 says the endpoint existed and
+ * has been withdrawn, and the message says what to do instead. The stubs come
+ * out when the last build that calls them is gone.
+ *
+ * The TABLE is untouched. `DeferredContract` keeps its one FULFILLED row and
+ * its CONTRACT_PAY / CONTRACT_COLLECT ledger pair, so the reconciliation and
+ * every backup still round-trip. Nothing writes to it any more.
  */
+const MESSAGE =
+  "Deferred agreements have been replaced by bracket trading. Offers are now within one " +
+  "bracket either way, and a one-bracket difference is settled at once with a bridging fee. " +
+  "Update the app to make an offer."
 
-const bodySchema = z.strictObject({
-  /** The new deadline being asked for. Bounded relative to the current one. */
-  deadline: futureInstant,
-  message: z.string().trim().max(500).optional(),
-})
+const META = { replacedBy: "bridging-fee", since: "2026-09-16" }
 
-export async function POST(
-  req: NextRequest,
-  { params }: { params: Promise<{ id: string }> },
-) {
-  const session = await resolveSession()
-  if (!session?.user?.id) return unauthenticated()
-  const viewerId = session.user.id
-  const { id } = await params
-
-  const parsed = await parseJsonBody(req, bodySchema)
-  if (!parsed.ok) return parsed.response
-
-  // Sweep first. A debtor whose deadline lapsed before they got round to asking
-  // is in default, and the state they are asking to extend no longer exists.
-  await sweepLapsedContracts(prisma, { contractId: id })
-
-  const contract = await prisma.deferredContract.findUnique({
-    where: { id },
-    select: V1_CONTRACT_SELECT,
-  })
-  if (!contract) return notFound("Contract not found")
-  if (contract.debtorId !== viewerId) return notFound("Contract not found")
-
-  if (contract.status !== "ACTIVE") {
-    return conflict(
-      contract.status === "DEFAULTED"
-        ? "This agreement has already lapsed. An extension cannot un-default it."
-        : `Only an active agreement can be extended (this one is ${contract.status}).`,
-      { status: contract.status },
-    )
-  }
-
-  // Rule 5, first half. One extension per contract, ever.
-  if (contract.extensionUsed) {
-    return conflict("You have already used the one extension on this agreement.", {
-      rule: "DPA_ONE_EXTENSION",
-      extensionUsed: true,
-      deadline: contract.deadline,
-    })
-  }
-  if (contract.extensionRequestedAt) {
-    return conflict("You already have an extension request awaiting your creditor.", {
-      rule: "DPA_EXTENSION_PENDING",
-      requestedDeadline: contract.extensionRequestedDeadline,
-    })
-  }
-
-  const { earliest, latest } = extensionBounds(contract.deadline)
-  const requested = parsed.data.deadline
-  if (requested < earliest || requested > latest) {
-    return invalid(
-      `An extension must move the deadline forward by between ${DPA.minExtensionDays} and ${DPA.maxExtensionDays} days.`,
-    )
-  }
-
-  // Conditional on there being no request yet, so two taps record one request.
-  const moved = await prisma.deferredContract.updateMany({
-    where: { id: contract.id, status: "ACTIVE", extensionUsed: false, extensionRequestedAt: null },
-    data: { extensionRequestedAt: new Date(), extensionRequestedDeadline: requested },
-  })
-  if (moved.count !== 1) {
-    return conflict("This agreement changed while the request was being recorded")
-  }
-
-  const fresh = await prisma.deferredContract.findUnique({
-    where: { id: contract.id },
-    select: { ...V1_CONTRACT_SELECT, ...V1_CONTRACT_PARTIES_SELECT },
-  })
-
-  return ok(
-    { contract: v1Contract(fresh as V1ContractRow, viewerId) },
-    {
-      // Stated so no client renders this as "extended".
-      deadlineMoved: false,
-      awaitingCreditor: true,
-      message: parsed.data.message ?? null,
-    },
-  )
+export async function POST() {
+  return gone(MESSAGE, META)
 }

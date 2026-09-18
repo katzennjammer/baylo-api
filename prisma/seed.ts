@@ -86,6 +86,7 @@ import { PrismaClient } from "../src/generated/prisma/client"
 import { PrismaPg } from "@prisma/adapter-pg"
 import bcrypt from "bcryptjs"
 import { SAFE_ZONE_HUB_SEED } from "../scripts/safezone-hub-data"
+import { requireScratchSchema, targetSchema } from "../scripts/lib/live-guard"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Client
@@ -104,9 +105,44 @@ if (!process.env.DATABASE_URL) {
   process.exit(1)
 }
 
+/*
+ * ── THE SCHEMA IN THE URL IS HONOURED HERE TOO ──────────────────────────────
+ *
+ * This file builds its own client (see the note above on lifetime), and that
+ * meant it did NOT share the `?schema=` handling in src/lib/prisma.ts: the pg
+ * driver ignores the parameter, so `scratch.ps1 -Seed` -- which sets exactly
+ * that URL -- seeded `public`, the LIVE database, while reporting success.
+ *
+ * Caught on 17 Sep 2026 by a scratch schema that stayed empty after a seed
+ * that said it had written. Nothing was damaged: the seed is idempotent and
+ * live already held those rows, so every table count matched the verified
+ * backup afterwards. That was luck, not design.
+ *
+ * The schema is parsed off the URL and handed to the adapter. It was also
+ * PRINTED, and printing turned out not to be enough: a line of scrollback tells
+ * you which database you overwrote, after you have overwritten it. So the seed
+ * now REFUSES `public` outright unless the operator types --live:
+ *
+ *     npm run seed                  scratch only; refuses live
+ *     npm run seed -- --live        live, after a backup, deliberately
+ *
+ * See scripts/lib/live-guard.ts, which every writing script in this repo now
+ * calls. This is the script that made the case for it.
+ */
+requireScratchSchema("prisma/seed.ts")
+
+const seedUrl = new URL(process.env.DATABASE_URL)
+const seedSchema = targetSchema()
+seedUrl.searchParams.delete("schema")
+
 const prisma = new PrismaClient({
-  adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL, max: 2 }),
+  adapter: new PrismaPg(
+    { connectionString: seedSchema === "public" ? process.env.DATABASE_URL : seedUrl.toString(), max: 2 },
+    seedSchema === "public" ? undefined : { schema: seedSchema },
+  ),
 })
+
+console.log(`  seeding schema: ${seedSchema}${seedSchema === "public" ? "  (LIVE)" : ""}`)
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Constants that must agree with the app

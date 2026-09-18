@@ -4,7 +4,7 @@ import prisma from "@/lib/prisma"
 import { awardTaskAsync } from "@/lib/tasks"
 import { createItemSchema, parseBody, categorySchema } from "@/lib/validation"
 import { imageHashRows, leadImageHash } from "@/lib/image-hashes"
-import { decideItemValue } from "@/lib/valuation-server"
+import { decideItemValue, reviewNotice } from "@/lib/valuation-server"
 import { visibleItemWhere } from "@/lib/blocking"
 import { enforceIdVerifiedLegacy } from "@/lib/id-verification"
 import {
@@ -121,25 +121,17 @@ export async function POST(req: NextRequest) {
     // ── Valuation ───────────────────────────────────────────────────────────
     // The value is not simply whatever the client sent. The server recomputes
     // the suggestion for this (category, condition) from the same deterministic
-    // model the listing wizard was shown, and the submitted number has to fall
-    // inside OVERRIDE_BAND_PCT of it. The client is not trusted to report the
-    // suggestion it was given — it does not need to be, because the model
+    // model the listing wizard was shown, and judges the submitted number
+    // against it by BRACKET: lower is fine, up to one bracket above is fine,
+    // further than that and the listing is created in PENDING_REVIEW rather
+    // than refused (see decideItemValue). The client is not trusted to report
+    // the suggestion it was given — it does not need to be, because the model
     // returns the same number to anyone who asks with the same two labels.
     //
     // A listing with no value takes the suggestion, so `suggestedLeaves` and
     // `valueLeaves` are both populated on every listing created from here and
     // the divergence between them is measurable.
     const valued = await decideItemValue(body.category, body.condition, body.valueLeaves)
-    if (!valued.ok) {
-      return NextResponse.json(
-        {
-          error: valued.message,
-          suggestedLeaves: valued.suggestedLeaves,
-          allowed: valued.allowed,
-        },
-        { status: 400 },
-      )
-    }
 
     // ── Safe-Zone hubs ──────────────────────────────────────────────────────
     // Validated against the table BEFORE the item is created, so a bad hub id
@@ -165,6 +157,9 @@ export async function POST(req: NextRequest) {
         category: body.category,
         condition: body.condition,
         ...valued.data,
+        // Above the cap: the row exists, the owner can see it, nobody else
+        // can, and the admin Anomalies tab lists it. See ItemStatus.
+        ...(valued.needsReview ? { status: "PENDING_REVIEW" as const } : {}),
         wantedItems: body.wantedItems ?? null,
         images: JSON.stringify(body.images ?? []),
         userId: session.user.id,
@@ -212,6 +207,15 @@ export async function POST(req: NextRequest) {
       {
         ...shapeItem(itemRow, session.user.id),
         safeZones: safeZones.map((s) => v1Hub(s.hub as SafeZoneHubRow)),
+        // What happened to the value, so the wizard's posted dialog can say
+        // "live" or "waiting for review" without re-deriving the rule.
+        valueReview: {
+          decision: valued.decision,
+          pending: valued.needsReview,
+          notice: valued.needsReview
+            ? reviewNotice(valued.data.valueLeaves, valued.data.suggestedLeaves)
+            : null,
+        },
       },
       { status: 201 },
     )
