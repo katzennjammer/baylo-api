@@ -4,7 +4,7 @@
 //   1  what can be appealed: a value rejection or a takedown; nothing else;
 //      by the owner only; 1..300 characters
 //   2  one appeal per decision, and filing changes nothing on the listing
-//   3  the listing is locked while the appeal is open (value edit, delete)
+//   3  the value is locked while the appeal is open; delete withdraws it
 //   4  the queue shows the whole case; non-staff cannot read it
 //   5  overturn a value rejection: AVAILABLE at the requested value, audit,
 //      owner told; deciding again is a 409
@@ -150,9 +150,18 @@ async function main() {
   check("PATCH condition → 409 APPEAL_OPEN", lockC.status === 409, `${lockC.status}`)
   const lockT = await PATCH(`/api/items/${r1.id}`, tOwner, { title: `${P}Overturn Me (retitled)` })
   check("PATCH title only → 200 (not a valuation input)", lockT.status === 200, `${lockT.status} ${JSON.stringify(lockT.body)}`)
-  const lockD = await DEL(`/api/items/${r1.id}`, tOwner)
-  check("DELETE → 409 APPEAL_OPEN", lockD.status === 409 && code(lockD) === "APPEAL_OPEN", `${lockD.status}`)
-  check("…and it was not deleted", (await prisma.item.findUnique({ where: { id: r1.id } }))?.status === "VALUE_REJECTED")
+  // DELETE is the one exit that is NOT locked: it is the owner's listing.
+  const r6 = await makeItem(owner.id, `${P}Delete Me`, "PENDING_REVIEW")
+  await reject(r6.id)
+  const a6r = await appeal(r6.id, "I will delete this anyway")
+  const delR = await DEL(`/api/items/${r6.id}`, tOwner)
+  check("DELETE with an open appeal → 200, appealWithdrawn true", delR.status === 200 && delR.body?.appealWithdrawn === true, `${delR.status} ${JSON.stringify(delR.body)}`)
+  const r6After = await prisma.item.findUnique({ where: { id: r6.id } })
+  const ap6 = await prisma.listingAppeal.findUnique({ where: { id: a6r.body?.data?.appeal?.id ?? "" } })
+  check("listing REMOVED; appeal WITHDRAWN, no decider, reason says so; audit row for the rejection still there", r6After?.status === "REMOVED" && ap6?.status === "WITHDRAWN" && ap6.decidedById === null && !!ap6.decidedAt && (ap6.decisionReason ?? "").includes("deleted") && (await rejectedAction(r6.id)) !== null, JSON.stringify(ap6))
+  const decide6 = await POST(`/api/admin/appeals/${ap6?.id}`, tB, { decision: "uphold", reason: "late" })
+  check("deciding a withdrawn appeal → 409 ALREADY_DECIDED", decide6.status === 409 && code(decide6) === "ALREADY_DECIDED", `${decide6.status}`)
+  check("r1's own appeal is still OPEN (a different listing)", (await prisma.listingAppeal.findUnique({ where: { id: row1!.id } }))?.status === "OPEN")
 
   head("4  the queue")
   const q403 = await GET(`/api/admin/appeals`, tOwner)
@@ -256,7 +265,8 @@ async function main() {
   head("10  the decided list")
   const decided = await GET(`/api/admin/appeals?status=decided`, tB)
   const decidedIds = (decided.body?.data?.appeals ?? []).map((a: Body) => a.id)
-  check("decided list has r1 (overturned), r2 (upheld), r3, h1, h2; not the open one", [row1?.id, row2?.id, row3?.id].every((i) => decidedIds.includes(i)) && !decidedIds.includes(fresh.body?.data?.appeal?.id), JSON.stringify(decidedIds))
+  check("decided list has r1 (overturned), r2 (upheld), r3, r6 (withdrawn); not the open one", [row1?.id, row2?.id, row3?.id, ap6?.id].every((i) => decidedIds.includes(i)) && !decidedIds.includes(fresh.body?.data?.appeal?.id), JSON.stringify(decidedIds))
+  check("the withdrawn row reads WITHDRAWN with no decider", (decided.body?.data?.appeals ?? []).some((a: Body) => a.id === ap6?.id && a.status === "WITHDRAWN" && a.decidedBy === null))
   const openNow = await GET(`/api/admin/appeals`, tB)
   check("open list has exactly the fresh takedown appeal from these fixtures", (openNow.body?.data?.appeals ?? []).filter((a: Body) => a.owner.id === owner.id).map((a: Body) => a.id).join() === fresh.body?.data?.appeal?.id)
 

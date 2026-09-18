@@ -53,8 +53,9 @@ export default async function AppealsPage({ searchParams }: Props) {
           Owners appealing a value rejection or a takedown, in their own words. The listing
           stays hidden until this is answered. <strong>Uphold</strong> keeps the decision and
           closes the appeal for good; <strong>Overturn</strong> publishes the listing at the
-          value the owner asked for (or restores a hidden one). Prefer to decide appeals
-          against somebody else&apos;s decision.
+          value the owner asked for (or restores a hidden one). An owner who deletes the
+          listing withdraws their own appeal. Prefer to decide appeals against somebody
+          else&apos;s decision.
         </p>
       </div>
 
@@ -131,7 +132,7 @@ export default async function AppealsPage({ searchParams }: Props) {
                       <AppealActions appealId={a.id} sameReviewer={a.sameReviewer} />
                     ) : (
                       <>
-                        <div style={{ fontWeight: 700, color: a.status === "OVERTURNED" ? "#15803d" : "#7c2d12" }}>{a.status}</div>
+                        <div style={{ fontWeight: 700, color: a.status === "OVERTURNED" ? "#15803d" : a.status === "WITHDRAWN" ? "#6b7280" : "#7c2d12" }}>{a.status}</div>
                         <div style={{ fontSize: 12, color: "#555", marginTop: 3 }}>{a.decisionReason}</div>
                         <div style={{ fontSize: 11, color: "#aaa", marginTop: 4 }}>
                           by {a.decidedBy?.name ?? "—"} · {a.decidedAt ? new Date(a.decidedAt).toLocaleString() : "—"}

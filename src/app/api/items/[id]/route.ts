@@ -353,23 +353,26 @@ export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: str
     if (!item) return NextResponse.json({ error: "Not found" }, { status: 404 })
     if (item.userId !== session.user.id) return NextResponse.json({ error: "Forbidden" }, { status: 403 })
 
-    // Same lock as the value edit above: an appeal is a request about this
-    // listing, and deleting it out from under the queue would leave an OPEN
-    // row pointing at nothing. The decision closes the lock either way.
-    if (await hasOpenAppeal(prisma, id)) {
-      return NextResponse.json(
-        { error: "This listing is under appeal. It can be deleted once the appeal is decided.", code: "APPEAL_OPEN" },
-        { status: 409 },
-      )
-    }
-
     // Soft delete, and the pickup point goes with it — a delisted item has no
     // reason to keep the owner's coordinates on file.
-    await prisma.item.update({
-      where: { id },
-      data: { status: "REMOVED", pickupLat: null, pickupLng: null, pickupAddress: null },
+    //
+    // NOT locked by an open appeal, unlike the value edit: it is the owner's
+    // own listing, and deleting it is one of the three exits they were
+    // offered. The appeal is closed as WITHDRAWN in the same transaction --
+    // no admin decision, nothing deleted, the audit rows it points at
+    // untouched -- so the queue's history still reads.
+    const withdrawn = await prisma.$transaction(async (tx) => {
+      await tx.item.update({
+        where: { id },
+        data: { status: "REMOVED", pickupLat: null, pickupLng: null, pickupAddress: null },
+      })
+      const closed = await tx.listingAppeal.updateMany({
+        where: { itemId: id, status: "OPEN" },
+        data: { status: "WITHDRAWN", decidedAt: new Date(), decisionReason: "Withdrawn: the owner deleted the listing." },
+      })
+      return closed.count
     })
-    return NextResponse.json({ success: true })
+    return NextResponse.json({ success: true, ...(withdrawn ? { appealWithdrawn: true } : {}) })
   } catch {
     return NextResponse.json({ error: "Internal server error" }, { status: 500 })
   }

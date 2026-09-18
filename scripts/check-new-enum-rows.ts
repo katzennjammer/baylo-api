@@ -46,7 +46,7 @@ const CHECKS: { table: string; column: string; values: string[] }[] = [
   { table: "Notification", column: "type", values: ["LISTING_VALUE_APPROVED", "LISTING_VALUE_REJECTED", "LISTING_HIDDEN", "LISTING_APPEAL_UPHELD", "LISTING_APPEAL_OVERTURNED"] },
   // 18 Sep 2026: value rejections and appeals (20260918000000_value_rejection_appeals).
   { table: "Item", column: "valueRejectionReason", values: ["OVERVALUED_FOR_CONDITION", "ABOVE_MARKET", "WRONG_CATEGORY", "PHOTOS_DO_NOT_SUPPORT_VALUE", "OTHER"] },
-  { table: "ListingAppeal", column: "status", values: ["OPEN", "UPHELD", "OVERTURNED"] },
+  { table: "ListingAppeal", column: "status", values: ["OPEN", "UPHELD", "OVERTURNED", "WITHDRAWN"] },
 ]
 
 const COLUMNS: { table: string; column: string }[] = [

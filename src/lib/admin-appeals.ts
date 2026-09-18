@@ -10,7 +10,7 @@ import { VALUE_REJECTION_REASONS } from "@/lib/value-rejection"
 
 export async function loadAppeals(status: "open" | "decided", limit: number) {
   const appeals = await prisma.listingAppeal.findMany({
-    where: status === "open" ? { status: "OPEN" } : { status: { in: ["UPHELD", "OVERTURNED"] } },
+    where: status === "open" ? { status: "OPEN" } : { status: { in: ["UPHELD", "OVERTURNED", "WITHDRAWN"] } },
     select: {
       id: true, kind: true, status: true, message: true, actionId: true, createdAt: true,
       decidedAt: true, decisionReason: true,

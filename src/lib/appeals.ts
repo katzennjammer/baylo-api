@@ -17,11 +17,12 @@ import prisma from "@/lib/prisma"
  *
  * ── THE LISTING IS LOCKED WHILE AN APPEAL IS OPEN ───────────────────────────
  *
- * Editing the value, the category or the condition, or deleting the listing,
- * is refused with 409 APPEAL_OPEN. The appeal is a request to publish THIS
- * listing at THIS value; a value that moved under it would leave the admin
- * deciding about a listing that no longer exists. There is no withdraw --
- * the queue is short and the decision closes the lock either way.
+ * Editing the value, the category or the condition is refused with 409
+ * APPEAL_OPEN. The appeal is a request to publish THIS listing at THIS
+ * value; a value that moved under it would leave the admin deciding about a
+ * listing that no longer exists. DELETING is allowed -- it is the owner's own
+ * listing -- and closes the appeal as WITHDRAWN (see DELETE /api/items/[id]).
+ * There is no other withdraw; the decision closes the lock either way.
  */
 
 export const APPEAL_MESSAGE_MAX = 300
