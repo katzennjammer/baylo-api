@@ -151,11 +151,13 @@ model User {
   suspendedAt    DateTime?
   suspendedUntil DateTime?
 
-  reportsMade     Report[]      @relation("ReportReporter")
-  reportsResolved Report[]      @relation("ReportResolver")
-  blocksMade      Block[]       @relation("Blocker")
-  blocksReceived  Block[]       @relation("Blocked")
-  adminActions    AdminAction[] @relation("AdminActor")
+  reportsMade     Report[]        @relation("ReportReporter")
+  reportsResolved Report[]        @relation("ReportResolver")
+  blocksMade      Block[]         @relation("Blocker")
+  blocksReceived  Block[]         @relation("Blocked")
+  adminActions    AdminAction[]   @relation("AdminActor")
+  appealsMade     ListingAppeal[] @relation("ListingAppealOwner")
+  appealsDecided  ListingAppeal[] @relation("ListingAppealDecider")
 
   // -- Government ID verification ---------------------------------------------
   //
@@ -358,6 +360,14 @@ model Item {
   // filters on `moderationHiddenAt: null` in the WHERE clause, and relist
   // refuses while it is set.
   moderationHiddenAt DateTime?
+
+  // Set when a value review is refused (status VALUE_REJECTED); cleared when
+  // the listing leaves that status. The code, never the moderator's note --
+  // the note lives in the AdminAction row. Nullable so main can read every
+  // row before the feature lands (the schema-first rule, see SETUP.md).
+  valueRejectionReason ValueRejectionReason?
+
+  appeals ListingAppeal[]
 
   /// THE LEAD PHOTO'S dHash, AND ONLY THE LEAD PHOTO'S.
   ///
@@ -833,10 +843,36 @@ enum ItemStatus {
    * `status: AVAILABLE`, so a listing in review is invisible to everyone but
    * its owner and the admin Anomalies tab without a single WHERE clause
    * changing. Approve moves it to AVAILABLE at the requested value. Reject
-   * does NOT publish it: it stays here, the owner is told, and they choose
-   * to relist at the suggestion, edit within the cap, or delete.
+   * does NOT publish it: it moves to VALUE_REJECTED, the owner is told, and
+   * they choose to relist at the suggestion, edit within the cap, or delete.
    */
   PENDING_REVIEW
+  /**
+   * The review said no. A SEPARATE STATUS from PENDING_REVIEW (18 Sep 2026)
+   * so that "waiting for an admin" and "waiting for the owner" can be told
+   * apart by every filter -- the Anomalies queue is the first, the owner's
+   * shelf is the second, and a row that means both is a row nobody owns.
+   * Same visibility as PENDING_REVIEW: nobody but the owner. Leaves it the
+   * same three ways (list at the suggestion, edit within the cap, delete),
+   * or by an overturned appeal, which publishes at the requested value.
+   */
+  VALUE_REJECTED
+}
+
+/**
+ * WHY a value review was refused -- the part of the decision the owner is
+ * shown. A closed list, like IdRejectionReason, so that the sentence the
+ * owner reads is one this codebase wrote and not a moderator's aside; the
+ * moderator's own note goes to the audit row only. Unlike the ID reasons
+ * these are shown DELIBERATELY: a rejected value is something the owner is
+ * being asked to fix, and they cannot fix what they are not told.
+ */
+enum ValueRejectionReason {
+  OVERVALUED_FOR_CONDITION
+  ABOVE_MARKET
+  WRONG_CATEGORY
+  PHOTOS_DO_NOT_SUPPORT_VALUE
+  OTHER
 }
 
 enum TradeStatus {
@@ -896,6 +932,16 @@ enum NotificationType {
    */
   LISTING_VALUE_APPROVED
   LISTING_VALUE_REJECTED
+  /**
+   * A moderator hid the recipient's listing. Until 18 Sep 2026 a takedown
+   * told the owner nothing: the tile stayed on their shelf and opening it
+   * 404ed. Carries no reason and no actor -- the appeal screen says what a
+   * takedown is and how to answer it.
+   */
+  LISTING_HIDDEN
+  /** The outcome of the recipient's appeal. Two types, same reason as above. */
+  LISTING_APPEAL_UPHELD
+  LISTING_APPEAL_OVERTURNED
 }
 
 enum FollowStatus {
@@ -1620,6 +1666,15 @@ enum AdminActionKind {
   TRADE_REWARD_REVERSED
   // An admin cancelled a trade on the parties' behalf (test data, a dispute).
   TRADE_CANCELLED
+  // ── Listing appeals (18 Sep 2026) ──
+  // An owner's appeal against a value rejection or a takedown, decided.
+  // `detail` carries both values, the appealed AdminAction's id, and
+  // `sameReviewer: true` when the decider is the one who rejected it.
+  // OPENING an appeal writes no row here: the actor of an AdminAction is
+  // staff, and the ListingAppeal row itself is the immutable record of the
+  // owner's step.
+  LISTING_APPEAL_UPHELD
+  LISTING_APPEAL_OVERTURNED
 }
 
 enum AdminTargetType {
@@ -1629,6 +1684,7 @@ enum AdminTargetType {
   HUB
   ID_VERIFICATION
   TRADE
+  LISTING_APPEAL
 }
 
 /**
@@ -1693,6 +1749,72 @@ model AdminAction {
 /// document, and for the same reason: a wire value generated from a database
 /// enum name changes the day somebody renames the enum, and a shipped mobile
 /// client has already parsed the old spelling.
+enum ListingAppealKind {
+  /** Against a LISTING_VALUE_REJECTED decision. Overturn publishes at the requested value. */
+  VALUE_REJECTION
+  /** Against a LISTING_HIDDEN takedown. Overturn clears moderationHiddenAt. */
+  MODERATION_HIDE
+}
+
+enum ListingAppealStatus {
+  OPEN
+  UPHELD
+  OVERTURNED
+}
+
+/**
+ * One owner's appeal against one moderation decision on one listing.
+ *
+ * ONE APPEAL PER DECISION, AND THE DECISION IS AN AUDIT ROW. `actionId` is
+ * the id of the AdminAction being appealed (a LISTING_VALUE_REJECTED or a
+ * LISTING_HIDDEN row) and it is UNIQUE here: a rejection can be appealed
+ * once, an upheld appeal cannot be re-opened, and a fresh rejection after the
+ * owner edits is a fresh decision with a fresh right of appeal. A plain
+ * string and not a relation, matching Item -> AdminAction: the audit points
+ * at things, nothing points back at the audit.
+ *
+ * While an appeal is OPEN the listing's visibility does not change -- it is
+ * still VALUE_REJECTED or still hidden. Nothing about filing one is a
+ * publish.
+ *
+ * `message` is the owner's own words, capped at 300 characters. It is never
+ * edited; a second thought is a second appeal, which the unique index refuses.
+ *
+ * `decidedById` is SetNull so a staff account can be removed without losing
+ * the record; the AdminAction written at decision time keeps the name.
+ */
+model ListingAppeal {
+  id String @id @default(cuid())
+
+  itemId String
+  item   Item   @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  ownerId String
+  owner   User   @relation("ListingAppealOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+
+  kind   ListingAppealKind
+  status ListingAppealStatus @default(OPEN)
+
+  message String @db.VarChar(300)
+
+  /** The AdminAction this answers. Unique: one appeal per decision. */
+  actionId String @unique
+
+  decidedById    String?
+  decidedBy      User?     @relation("ListingAppealDecider", fields: [decidedById], references: [id], onDelete: SetNull)
+  decidedAt      DateTime?
+  decisionReason String?   @db.Text
+
+  createdAt DateTime @default(now())
+
+  // Oldest first is the queue's order; the owner's list and the listing's
+  // history are the other two reads.
+  @@index([status, createdAt])
+  @@index([itemId])
+  @@index([ownerId])
+  @@index([decidedById])
+}
+
 enum SafeZoneType {
   MALL
   BARANGAY_HALL
