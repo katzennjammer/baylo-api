@@ -1781,6 +1781,13 @@ enum ListingAppealStatus {
   OPEN
   UPHELD
   OVERTURNED
+  /**
+   * The owner deleted the listing while the appeal was open. Closed without
+   * an admin decision -- it is their own listing -- and kept, not deleted,
+   * so the queue's history and the audit rows it points at still make sense.
+   * `decidedById` is null on these; `decisionReason` says what happened.
+   */
+  WITHDRAWN
 }
 
 /**
@@ -1796,7 +1803,7 @@ enum ListingAppealStatus {
  *
  * While an appeal is OPEN the listing's visibility does not change -- it is
  * still VALUE_REJECTED or still hidden. Nothing about filing one is a
- * publish.
+ * publish. Deleting the listing closes the appeal as WITHDRAWN.
  *
  * `message` is the owner's own words, capped at 300 characters. It is never
  * edited; a second thought is a second appeal, which the unique index refuses.
