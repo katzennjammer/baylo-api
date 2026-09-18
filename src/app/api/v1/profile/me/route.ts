@@ -13,6 +13,7 @@ import { V1_ITEM_SELECT, V1_ITEM_OWNER_SELECT, v1ItemStatsSelect, v1Item, type V
 import { taskLabel } from "@/lib/v1/taxonomy"
 import { loadStanding, publicStanding } from "@/lib/reputation-gate"
 import { loadIdVerificationState, publicIdVerification } from "@/lib/id-verification"
+import { reconcileAchievements } from "@/lib/achievements"
 
 export const dynamic = "force-dynamic"
 
@@ -124,6 +125,9 @@ export async function GET(req: NextRequest) {
     select: { task: true, leaves: true },
   })
 
+  const displayedAchievements = await loadDisplayedAchievements(viewerId)
+  const achievementCount = await prisma.userAchievement.count({ where: { userId: viewerId } })
+
   // ── 7 ── the viewer's trust tier and what it permits.
   //
   // Served so the client can grey out what is locked AND SAY WHY, rather than
@@ -210,6 +214,13 @@ export async function GET(req: NextRequest) {
           }
         }),
       },
+      displayedAchievements: displayedAchievements.map((row) => ({
+        id: row.achievement.id,
+        name: row.achievement.name,
+        icon: row.achievement.icon,
+        displayOrder: row.displayOrder,
+      })),
+      achievementCount,
       // The tier, its limits, and the DPA state the limits govern.
       reputation: publicStanding(standing),
       // Whether this account may post and propose, and what to do if not.
@@ -229,4 +240,33 @@ export async function GET(req: NextRequest) {
     },
     { nextCursor },
   )
+}
+
+async function loadDisplayedAchievements(userId: string) {
+  try {
+    // Keep the original profile response independent from the optional badge
+    // shelf. A missing or unapplied badge table must never erase bio, posts,
+    // or counts from the profile screen.
+    await reconcileAchievements(userId)
+    const selected = await prisma.userAchievement.findMany({
+      where: { userId, displayOrder: { not: null } },
+      orderBy: { displayOrder: "asc" },
+      select: {
+        displayOrder: true,
+        achievement: { select: { id: true, name: true, icon: true } },
+      },
+    })
+    if (selected.length > 0) return selected
+    return prisma.userAchievement.findMany({
+      where: { userId },
+      orderBy: { unlockedAt: "asc" },
+      take: 3,
+      select: {
+        displayOrder: true,
+        achievement: { select: { id: true, name: true, icon: true } },
+      },
+    })
+  } catch {
+    return []
+  }
 }

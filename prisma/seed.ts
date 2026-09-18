@@ -83,7 +83,7 @@
 import "dotenv/config"
 
 import { PrismaClient } from "../src/generated/prisma/client"
-import { PrismaMariaDb } from "@prisma/adapter-mariadb"
+import { PrismaPg } from "@prisma/adapter-pg"
 import bcrypt from "bcryptjs"
 import { SAFE_ZONE_HUB_SEED } from "../scripts/safezone-hub-data"
 
@@ -96,17 +96,6 @@ import { SAFE_ZONE_HUB_SEED } from "../scripts/safezone-hub-data"
 // has to exit. Same adapter, same URL, explicit lifetime.
 // ─────────────────────────────────────────────────────────────────────────────
 
-function parseDbUrl(url: string) {
-  const u = new URL(url)
-  return {
-    host: u.hostname,
-    port: u.port ? parseInt(u.port) : 3306,
-    user: u.username || undefined,
-    password: u.password || undefined,
-    database: u.pathname.slice(1) || undefined,
-  }
-}
-
 if (!process.env.DATABASE_URL) {
   console.error(
     "\n  DATABASE_URL is not set.\n" +
@@ -116,7 +105,7 @@ if (!process.env.DATABASE_URL) {
 }
 
 const prisma = new PrismaClient({
-  adapter: new PrismaMariaDb(parseDbUrl(process.env.DATABASE_URL)),
+  adapter: new PrismaPg({ connectionString: process.env.DATABASE_URL }),
 })
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -686,6 +675,19 @@ async function checkLeafInvariant() {
   return { balanceTotal, ledgerTotal }
 }
 
+async function seedAchievements() {
+  const defaults = [
+    { key: "VERIFIED_ACCOUNT", name: "Verified", description: "Verify your Baylo account.", icon: "check", criterion: "VERIFIED_ACCOUNT" as const, threshold: 1 },
+    { key: "ID_VERIFIED", name: "Identity Confirmed", description: "Complete government ID verification.", icon: "id", criterion: "ID_VERIFIED" as const, threshold: 1 },
+    { key: "FIRST_LISTING", name: "First Offering", description: "List your first item.", icon: "list", criterion: "FIRST_LISTING" as const, threshold: 1 },
+    { key: "COMPLETED_TRADES", name: "Trusted Trader", description: "Complete verified trades with the community.", icon: "swap", criterion: "COMPLETED_TRADES" as const, threshold: 3 },
+  ]
+  for (const achievement of defaults) {
+    await prisma.achievement.upsert({ where: { key: achievement.key }, update: achievement, create: achievement })
+  }
+  return defaults.length
+}
+
 async function main() {
   const db = new URL(process.env.DATABASE_URL!).pathname.slice(1)
 
@@ -695,6 +697,8 @@ async function main() {
 
   const hubs = await seedHubs()
   console.log(`  hubs      ${hubs.seeded} Safe-Zone Hubs${hubs.held ? ` (${hubs.held} held back: no verified coordinate)` : ""}`)
+
+  console.log(`  achievements ${await seedAchievements()} catalog entries`)
 
   await seedUsers(passwordHash)
   console.log(`  users     ${USERS.length}, all verified and grandfathered past ID verification`)

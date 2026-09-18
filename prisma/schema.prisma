@@ -4,7 +4,7 @@ generator client {
 }
 
 datasource db {
-  provider = "mysql"
+  provider = "postgresql"
 }
 
 model User {
@@ -102,6 +102,7 @@ model User {
   leafTransactions        LeafTransaction[]
   swapConfirmationCodes   SwapConfirmationCode[]
   taskCompletions         TaskCompletion[]
+  achievements            UserAchievement[]
   refreshTokens           RefreshToken[]
   emailVerificationTokens EmailVerificationToken[]
 
@@ -639,6 +640,43 @@ model TaskCompletion {
 
   @@unique([userId, task, refId])
   @@index([userId])
+}
+
+model Achievement {
+  id          String              @id @default(cuid())
+  key         String              @unique
+  name        String
+  description String
+  icon        String              @default("trophy")
+  criterion   AchievementCriterion
+  threshold   Int                 @default(1)
+  isActive    Boolean             @default(true)
+  createdAt   DateTime            @default(now())
+  updatedAt   DateTime            @updatedAt
+
+  unlocks UserAchievement[]
+}
+
+model UserAchievement {
+  id              String      @id @default(cuid())
+  unlockedAt      DateTime    @default(now())
+  displayOrder    Int?
+  homeDisplayOrder Int?
+  userId          String
+  user            User        @relation(fields: [userId], references: [id], onDelete: Cascade)
+  achievementId   String
+  achievement     Achievement @relation(fields: [achievementId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, achievementId])
+  @@index([userId])
+  @@index([achievementId])
+}
+
+enum AchievementCriterion {
+  VERIFIED_ACCOUNT
+  ID_VERIFIED
+  FIRST_LISTING
+  COMPLETED_TRADES
 }
 
 enum TaskKind {
@@ -1383,6 +1421,10 @@ enum AdminActionKind {
   ID_VERIFICATION_APPROVED
   ID_VERIFICATION_REJECTED
   ROLE_CHANGED
+  LISTING_VALUE_APPROVED
+  LISTING_VALUE_REJECTED
+  TRADE_REWARD_REVERSED
+  TRADE_CANCELLED
   /**
    * An offer of the recipient's own aged out unanswered. Sent to the SENDER
    * only — the receiver is the one who did not reply, and telling them so is a
@@ -1398,6 +1440,7 @@ enum AdminTargetType {
   USER
   HUB
   ID_VERIFICATION
+  TRADE
 }
 
 /**

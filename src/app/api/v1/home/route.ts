@@ -118,6 +118,28 @@ export async function GET(req: NextRequest) {
     page.map((r) => ({ id: r.user.id, rating: r.user.rating })),
   )
 
+  const featuredBadges = await prisma.userAchievement.findMany({
+    where: {
+      userId: { in: page.map((r) => r.user.id) },
+      homeDisplayOrder: { not: null },
+    },
+    orderBy: [{ homeDisplayOrder: "asc" }, { unlockedAt: "asc" }],
+    select: {
+      userId: true,
+      achievement: { select: { id: true, name: true, icon: true } },
+    },
+  })
+  const featuredBadgesByUser = new Map<string, { id: string; name: string; icon: string } | null>(
+    page.map((r) => [r.user.id, null]),
+  )
+  for (const row of featuredBadges) {
+    featuredBadgesByUser.set(row.userId, {
+      id: row.achievement.id,
+      name: row.achievement.name,
+      icon: row.achievement.icon,
+    })
+  }
+
   // ── 5 ── trending: the 7-day category groupBy that four web pages inline.
   // Blocked owners and moderator-hidden listings are excluded here too. A
   // trending chip is a count of things you can then go and look at; counting
@@ -207,7 +229,7 @@ export async function GET(req: NextRequest) {
         notifications: unreadNotifications,
         followRequests,
       },
-      feed: page.map((r) => v1Item(r as unknown as V1ItemRow, viewerId, access, tiers)),
+      feed: page.map((r) => v1Item(r as unknown as V1ItemRow, viewerId, access, tiers, featuredBadgesByUser)),
       trending: trendingRows.map((r) => ({
         category: r.category,
         label: categoryLabel(r.category),

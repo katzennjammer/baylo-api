@@ -13,6 +13,8 @@ const querySchema = z.strictObject({
   limit: z.coerce.number().int().min(1).max(100).default(50),
 })
 
+const VALID_ITEM_STATUSES = new Set(["AVAILABLE", "IN_TRADE", "TRADED", "OWNED", "REMOVED"])
+
 export async function GET(req: NextRequest) {
   const gate = await requireRole("MODERATOR")
   if (gate.response) return gate.response
@@ -21,14 +23,18 @@ export async function GET(req: NextRequest) {
   if (!parsed.ok) return parsed.response
   const { q, status, limit } = parsed.data
 
+  const itemStatus = status && VALID_ITEM_STATUSES.has(status.toUpperCase())
+    ? (status.toUpperCase() as "AVAILABLE" | "IN_TRADE" | "TRADED" | "OWNED" | "REMOVED")
+    : undefined
+
   const items = await prisma.item.findMany({
     where: {
       AND: [
         ...(q ? [{ OR: [{ title: { contains: q } }, { user: { name: { contains: q } } }, { user: { email: { contains: q } } }] }] : []),
         ...(status === "hidden"
           ? [{ moderationHiddenAt: { not: null } }]
-          : status
-            ? [{ status: status.toUpperCase() as "AVAILABLE" | "IN_TRADE" | "TRADED" | "OWNED" | "REMOVED" }]
+          : itemStatus
+            ? [{ status: itemStatus }]
             : []),
       ],
     },

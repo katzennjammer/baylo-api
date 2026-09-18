@@ -74,6 +74,7 @@ export default async function AdminLayout({ children }: { children: ReactNode })
           {me.role !== "MODERATOR" && <AdminLink href="/admin/users" label="Users" />}
           <AdminLink href="/admin/listings" label="Listings" />
           <AdminLink href="/admin/hubs" label="Hubs" />
+          <AdminLink href="/admin/achievements" label="Achievements" />
           <AdminLink href="/admin/audit" label="Audit log" />
           {me.role === "SUPER_ADMIN" && <AdminLink href="/admin/access" label="Access" />}
         </nav>

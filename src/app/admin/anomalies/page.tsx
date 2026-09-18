@@ -63,17 +63,17 @@ export default async function AnomaliesPage() {
     // expression. Fully parameterised.
     prisma.$queryRaw<PairRow[]>`
       SELECT
-        tc.userId AS userId,
-        CASE WHEN tr.senderId = tc.userId THEN tr.receiverId ELSE tr.senderId END AS partnerId,
-        COUNT(*)          AS zeroSwaps,
-        MAX(tc.createdAt) AS lastAt
-      FROM TaskCompletion tc
-      JOIN TradeRequest tr ON tr.id = tc.refId
-      WHERE tc.task = 'VERIFIED_SWAP'
-        AND tc.leaves = 0
-      GROUP BY userId, partnerId
+        tc."userId" AS "userId",
+        CASE WHEN tr."senderId" = tc."userId" THEN tr."receiverId" ELSE tr."senderId" END AS "partnerId",
+        COUNT(*)             AS "zeroSwaps",
+        MAX(tc."createdAt")  AS "lastAt"
+      FROM "TaskCompletion" tc
+      JOIN "TradeRequest" tr ON tr."id" = tc."refId"
+      WHERE tc."task" = 'VERIFIED_SWAP'
+        AND tc."leaves" = 0
+      GROUP BY "userId", "partnerId"
       HAVING COUNT(*) >= ${MIN_REPEATS}
-      ORDER BY zeroSwaps DESC, lastAt DESC
+      ORDER BY "zeroSwaps" DESC, "lastAt" DESC
       LIMIT 100
     `,
   ])

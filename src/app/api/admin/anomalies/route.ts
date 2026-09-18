@@ -94,17 +94,17 @@ export async function GET(req: NextRequest) {
   // got zero, and the trade records who they got zero with.
   const pairs = await prisma.$queryRaw<PairRow[]>`
     SELECT
-      tc.userId AS userId,
-      CASE WHEN tr.senderId = tc.userId THEN tr.receiverId ELSE tr.senderId END AS partnerId,
-      COUNT(*)          AS zeroSwaps,
-      MAX(tc.createdAt) AS lastAt
-    FROM TaskCompletion tc
-    JOIN TradeRequest tr ON tr.id = tc.refId
-    WHERE tc.task = 'VERIFIED_SWAP'
-      AND tc.leaves = 0
-    GROUP BY userId, partnerId
+      tc."userId" AS "userId",
+      CASE WHEN tr."senderId" = tc."userId" THEN tr."receiverId" ELSE tr."senderId" END AS "partnerId",
+      COUNT(*)             AS "zeroSwaps",
+      MAX(tc."createdAt")  AS "lastAt"
+    FROM "TaskCompletion" tc
+    JOIN "TradeRequest" tr ON tr."id" = tc."refId"
+    WHERE tc."task" = 'VERIFIED_SWAP'
+      AND tc."leaves" = 0
+    GROUP BY "userId", "partnerId"
     HAVING COUNT(*) >= ${minRepeats}
-    ORDER BY zeroSwaps DESC, lastAt DESC
+    ORDER BY "zeroSwaps" DESC, "lastAt" DESC
     LIMIT ${limit}
   `
 

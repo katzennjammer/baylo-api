@@ -11,6 +11,13 @@ interface Props {
 }
 
 const STATUSES = ["available", "in_trade", "traded", "owned", "removed", "hidden"] as const
+const VALID_ITEM_STATUSES = new Set(["AVAILABLE", "IN_TRADE", "TRADED", "OWNED", "REMOVED"])
+
+function normalizeStatus(raw?: string): (typeof STATUSES)[number] | undefined {
+  if (!raw) return undefined
+  const value = raw.trim().toLowerCase()
+  return (STATUSES as readonly string[]).includes(value) ? (value as (typeof STATUSES)[number]) : undefined
+}
 
 function chip(active: boolean): React.CSSProperties {
   return {
@@ -23,9 +30,7 @@ function chip(active: boolean): React.CSSProperties {
 export default async function ListingsPage({ searchParams }: Props) {
   const sp = await searchParams
   const q = sp.q?.trim() ?? ""
-  const status = (STATUSES as readonly string[]).includes(sp.status ?? "")
-    ? (sp.status as (typeof STATUSES)[number])
-    : undefined
+  const status = normalizeStatus(sp.status)
   const session = await auth()
   const me = session?.user?.id
     ? await prisma.user.findUnique({ where: { id: session.user.id }, select: { role: true } })
@@ -38,7 +43,7 @@ export default async function ListingsPage({ searchParams }: Props) {
         ...(q ? [{ OR: [{ title: { contains: q } }, { user: { name: { contains: q } } }, { user: { email: { contains: q } } }] }] : []),
         ...(status === "hidden"
           ? [{ moderationHiddenAt: { not: null } }]
-          : status
+          : status && VALID_ITEM_STATUSES.has(status.toUpperCase())
             ? [{ status: status.toUpperCase() as "AVAILABLE" | "IN_TRADE" | "TRADED" | "OWNED" | "REMOVED" }]
             : []),
       ],
