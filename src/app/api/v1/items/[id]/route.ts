@@ -2,6 +2,7 @@ import { NextRequest } from "next/server"
 import { bracketOf, valueNeedsPremium } from "@/lib/brackets"
 import { valueCap } from "@/lib/trade-rules"
 import { valueRejectionSentence } from "@/lib/value-rejection"
+import { ownerAppealState } from "@/lib/appeals"
 import { isPremium } from "@/lib/premium"
 import { z } from "zod"
 import { resolveSession } from "@/lib/api-auth"
@@ -71,11 +72,12 @@ const querySchema = z.strictObject({})
  * cap is expressed in. `capBracket` is the highest bracket that goes live
  * without a review, straight from valueCap().
  *
- * `appeal` is filled in by part C; until then it says an appeal is possible
- * and names nothing, and the client treats a null `appeal.id` as "not yet
- * filed".
+ * `appeal` is the appeal against the decision currently in force, if any --
+ * see ownerAppealState(). `canAppeal` is the only field a client needs to
+ * draw or hide the button; `status` is why.
  */
-function ownerReview(item: {
+async function ownerReview(item: {
+  id: string
   status: string
   moderationHiddenAt: Date | null
   valueLeaves: number | null
@@ -102,7 +104,7 @@ function ownerReview(item: {
     capBracket: suggested === null ? null : valueCap(suggested).maxBracketWithoutReview,
     reasonCode: state === "rejected" ? item.valueRejectionReason : null,
     reason: state === "rejected" ? valueRejectionSentence(item.valueRejectionReason) : null,
-    appeal: { id: null as string | null, status: null as string | null, canAppeal: state !== "waiting" },
+    appeal: await ownerAppealState(prisma, item),
   }
 }
 
@@ -232,7 +234,7 @@ export async function GET(
     // can edit back inside, the reason, and whether an appeal is possible --
     // so that the explanation for "why can nobody see my listing" is one
     // request and not three.
-    review: isOwner ? ownerReview(item) : null,
+    review: isOwner ? await ownerReview(item) : null,
     viewer: {
       isOwner,
       // An owner cannot offer on their own listing, and neither can anyone once

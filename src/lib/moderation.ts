@@ -224,8 +224,13 @@ export type AdminActionKind =
   | "LISTING_VALUE_REJECTED"
   | "TRADE_REWARD_REVERSED"
   | "TRADE_CANCELLED"
+  // Listing appeals (18 Sep 2026). A decision about a DECISION: the target is
+  // the appeal, and `detail` names the audit row it was against, both values,
+  // and `sameReviewer` when the decider is the one being appealed.
+  | "LISTING_APPEAL_UPHELD"
+  | "LISTING_APPEAL_OVERTURNED"
 
-export type AdminTargetType = "REPORT" | "LISTING" | "USER" | "HUB" | "ID_VERIFICATION" | "TRADE"
+export type AdminTargetType = "REPORT" | "LISTING" | "USER" | "HUB" | "ID_VERIFICATION" | "TRADE" | "LISTING_APPEAL"
 
 /** A Prisma client or a transaction client. */
 type Db = PrismaClient | Prisma.TransactionClient

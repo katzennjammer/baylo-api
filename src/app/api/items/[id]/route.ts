@@ -18,6 +18,7 @@ import {
   v1Hub,
   type SafeZoneHubRow,
 } from "@/lib/safe-zones"
+import { hasOpenAppeal } from "@/lib/appeals"
 
 /**
  * The item plus its hub associations, shaped for the wire.
@@ -153,6 +154,17 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
       // any PENDING offer names this listing, or the listing is locked in a
       // trade, the three valuation inputs are read-only. Title, photos and
       // the rest still edit.
+      // ── LOCKED WHILE AN APPEAL IS OPEN ────────────────────────────────────
+      // The appeal asks an admin to publish THIS listing at THIS value. A
+      // value that moved underneath it would have them deciding about a
+      // listing that no longer exists. Title, photos and the rest still edit;
+      // see @/lib/appeals.
+      if (await hasOpenAppeal(prisma, id)) {
+        return NextResponse.json(
+          { error: "This listing is under appeal. Its value can be changed once the appeal is decided.", code: "APPEAL_OPEN" },
+          { status: 409 },
+        )
+      }
       if (item.status === "IN_TRADE") {
         return NextResponse.json(
           { error: "This listing is in an active trade. Its value can be changed once the trade ends.", code: "VALUE_LOCKED_IN_TRADE" },
@@ -340,6 +352,16 @@ export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: str
     const item = await prisma.item.findUnique({ where: { id }, select: { userId: true } })
     if (!item) return NextResponse.json({ error: "Not found" }, { status: 404 })
     if (item.userId !== session.user.id) return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+
+    // Same lock as the value edit above: an appeal is a request about this
+    // listing, and deleting it out from under the queue would leave an OPEN
+    // row pointing at nothing. The decision closes the lock either way.
+    if (await hasOpenAppeal(prisma, id)) {
+      return NextResponse.json(
+        { error: "This listing is under appeal. It can be deleted once the appeal is decided.", code: "APPEAL_OPEN" },
+        { status: 409 },
+      )
+    }
 
     // Soft delete, and the pickup point goes with it — a delisted item has no
     // reason to keep the owner's coordinates on file.
