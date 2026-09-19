@@ -33,7 +33,7 @@ interface NominatimResult {
 }
 
 export async function GET(req: NextRequest) {
-  const gate = await requireRole("MODERATOR")
+  const gate = await requireRole("ADMIN")
   if (gate.response) return gate.response
 
   const limited = enforceRateLimit("hubGeocode", gate.actor.id)

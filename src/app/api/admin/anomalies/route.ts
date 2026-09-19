@@ -61,7 +61,7 @@ interface PairRow {
 }
 
 export async function GET(req: NextRequest) {
-  const gate = await requireRole("MODERATOR")
+  const gate = await requireRole("ADMIN")
   if (gate.response) return gate.response
 
   const parsed = parseQuery(req, querySchema)

@@ -183,6 +183,7 @@ export interface V1Owner {
    * ladder is a claim about someone and absence is not.
    */
   trustTier: TrustTier | null
+  featuredAchievement: { id: string; name: string; icon: string } | null
 }
 
 export interface V1Item {
@@ -297,6 +298,7 @@ export function v1Item(
   viewerId: string | null,
   tradeAccessIds?: Set<string>,
   tiers?: ReadonlyMap<string, TrustTier>,
+  featuredAchievements?: ReadonlyMap<string, { id: string; name: string; icon: string }>,
 ): V1Item {
   return {
     id: row.id,
@@ -330,6 +332,7 @@ export function v1Item(
       // ?? null, not ?? a default tier. A caller that forgot the map
       // under-claims rather than inventing a rung for someone.
       trustTier: tiers?.get(row.user.id) ?? null,
+      featuredAchievement: featuredAchievements?.get(row.user.id) ?? null,
     },
     stats: v1Stats(row),
     createdAt: row.createdAt,

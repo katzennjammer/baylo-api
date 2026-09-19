@@ -40,7 +40,7 @@ export default async function AdminLayout({ children }: { children: ReactNode })
   })
 
   if (!me || me.deletedAt || suspensionState(me).suspended) redirect("/auth/login")
-  if (me.role !== "MODERATOR" && me.role !== "ADMIN" && me.role !== "SUPER_ADMIN") redirect("/dashboard")
+  if (me.role !== "ADMIN") redirect("/dashboard")
 
   return (
     <div style={{ minHeight: "100vh", background: "#f4f6f5", color: "#17201b", fontFamily: "var(--ff-body)" }}>
@@ -72,11 +72,12 @@ export default async function AdminLayout({ children }: { children: ReactNode })
           <AdminLink href="/admin/id-verification" label="ID checks" />
           <AdminLink href="/admin/review-queue" label="Review queue" />
           <AdminLink href="/admin/appeals" label="Appeals" />
-          {me.role !== "MODERATOR" && <AdminLink href="/admin/users" label="Users" />}
+          <AdminLink href="/admin/users" label="Users" />
           <AdminLink href="/admin/listings" label="Listings" />
           <AdminLink href="/admin/hubs" label="Hubs" />
+          <AdminLink href="/admin/achievements" label="Achievements" />
           <AdminLink href="/admin/audit" label="Audit log" />
-          {me.role === "SUPER_ADMIN" && <AdminLink href="/admin/access" label="Access" />}
+          <AdminLink href="/admin/access" label="Access" />
         </nav>
         <AccountMenu name={me.name} role={me.role} />
       </header>

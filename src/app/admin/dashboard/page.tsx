@@ -12,7 +12,7 @@ const cardStyle: React.CSSProperties = {
 }
 
 export default async function AdminDashboardPage() {
-  const [reportCounts, pendingIds, suspendedUsers, hiddenListings, inactiveHubs, defaults, openAppeals, recentAudit] =
+  const [reportCounts, pendingIds, suspendedUsers, hiddenListings, inactiveHubs, defaults, openAppeals, activeAchievements, recentAudit] =
     await Promise.all([
       prisma.report.groupBy({ by: ["status"], _count: { id: true } }),
       prisma.idVerification.count({ where: { status: "PENDING" } }),
@@ -27,6 +27,7 @@ export default async function AdminDashboardPage() {
       prisma.safeZoneHub.count({ where: { isActive: false } }),
       prisma.item.count({ where: { status: "PENDING_REVIEW" } }),
       prisma.listingAppeal.count({ where: { status: "OPEN" } }),
+      prisma.achievement.count({ where: { isActive: true }}),
       prisma.adminAction.findMany({
         take: 8,
         orderBy: [{ createdAt: "desc" }, { id: "desc" }],
@@ -46,6 +47,7 @@ export default async function AdminDashboardPage() {
     { label: "Inactive hubs", value: inactiveHubs, href: "/admin/hubs?status=inactive" },
     { label: "Values in review", value: defaults, href: "/admin/review-queue" },
     { label: "Open appeals", value: openAppeals, href: "/admin/appeals" },
+    { label: "Achievements", value: activeAchievements, href: "/admin/achievements" },
   ]
 
   return (

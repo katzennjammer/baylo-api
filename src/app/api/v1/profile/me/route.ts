@@ -140,6 +140,36 @@ export async function GET(req: NextRequest) {
     select: { task: true, leaves: true },
   })
 
+  const displayedAchievements = await prisma.$queryRaw<Array<{
+    id: string
+    name: string
+    icon: string
+    imageUrl: string | null
+    displayOrder: number | null
+  }>>`
+    SELECT ua."achievementId" AS id,
+           a."name",
+           a."icon",
+           a."imageUrl",
+           ua."displayOrder"
+    FROM "UserAchievement" ua
+    JOIN "Achievement" a ON a.id = ua."achievementId"
+    WHERE ua."userId" = ${viewerId}
+      AND ua."displayOrder" IS NOT NULL
+    ORDER BY ua."displayOrder" ASC, ua."unlockedAt" DESC
+  `
+
+  const achievementCount = Number(
+    (
+      await prisma.$queryRaw<Array<{ count: bigint }>>`
+        SELECT COUNT(*)::int AS count
+        FROM "UserAchievement"
+        WHERE "userId" = ${viewerId}
+          AND "displayOrder" IS NOT NULL
+      `
+    )[0]?.count ?? 0,
+  )
+
   // ── 7 ── the viewer's trust tier and what it permits.
   //
   // Served so the client can grey out what is locked AND SAY WHY, rather than
@@ -213,6 +243,14 @@ export async function GET(req: NextRequest) {
         following: user._count.following,
       },
       items: page.map((r) => v1Item(r as unknown as V1ItemRow, viewerId)),
+      displayedAchievements: displayedAchievements.map((badge) => ({
+        id: badge.id,
+        name: badge.name,
+        icon: badge.icon,
+        imageUrl: badge.imageUrl,
+        displayOrder: badge.displayOrder,
+      })),
+      achievementCount,
       reviews,
       tasks: {
         leaves: user.leaves,

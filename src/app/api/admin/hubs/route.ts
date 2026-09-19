@@ -45,7 +45,7 @@ const querySchema = z.strictObject({
 })
 
 export async function GET(req: NextRequest) {
-  const gate = await requireRole("MODERATOR")
+  const gate = await requireRole("ADMIN")
   if (gate.response) return gate.response
 
   const parsed = parseQuery(req, querySchema)
@@ -120,7 +120,7 @@ const createSchema = z.strictObject({
 })
 
 export async function POST(req: NextRequest) {
-  const gate = await requireRole("MODERATOR")
+  const gate = await requireRole("ADMIN")
   if (gate.response) return gate.response
   const actor = gate.actor
 

@@ -1,0 +1,80 @@
+
+@startuml use-case-admin
+' ============================================================================
+'  Baylo - Admin Console: ADMIN use cases
+'  ADMIN inherits every Moderator use case and adds account controls.
+'  The Users page is hidden from MODERATOR in layout.tsx, and the suspend
+'  route is gated by requireRole("ADMIN").
+' ============================================================================
+
+left to right direction
+skinparam actorStyle awesome
+skinparam shadowing false
+skinparam dpi 150
+skinparam defaultFontName "Segoe UI"
+skinparam nodesep 12
+skinparam ranksep 55
+skinparam ArrowThickness 1
+skinparam usecase {
+  BackgroundColor #F7F9F7
+  BorderColor #1f6b43
+  ArrowColor #536159
+  FontColor #17201b
+}
+skinparam actor {
+  BackgroundColor #1d4ed8
+  BorderColor #17201b
+  FontColor #17201b
+}
+skinparam packageStyle rectangle
+skinparam rectangle {
+  BackgroundColor #FDFEFD
+  BorderColor #1f6b43
+  FontColor #17201b
+}
+
+title Baylo Admin Console - ADMIN
+
+actor "Moderator" as MOD
+actor "Admin" as ADM
+MOD <|-- ADM
+
+rectangle "Baylo Admin Console" {
+  package "Accounts (Admin only)" {
+    usecase "Search / inspect users\n(activity, state, ID status)" as UC_USERS
+    usecase "Suspend / unsuspend account\n(timed or indefinite)" as UC_SUSPEND
+  }
+  package "Shared staff console (inherited from Moderator)" {
+    usecase "Moderate reports\n(queue, inspect, action/dismiss)" as UC_MOD
+    usecase "Manage listings\n(hide / restore)" as UC_LIST
+    usecase "Review ID checks\n(approve / reject)" as UC_ID
+    usecase "Handle value anomalies\n(approve / reject value)" as UC_VAL
+    usecase "Decide appeals\n(uphold / overturn)" as UC_APPEAL
+    usecase "Manage Safe-Zone hubs" as UC_HUB
+    usecase "Reverse trade reward" as UC_REV
+    usecase "Read audit log & dashboard" as UC_AUD
+  }
+}
+
+' Admin only
+ADM --> UC_USERS
+ADM --> UC_SUSPEND
+
+' Inherited from Moderator
+ADM --> UC_MOD
+ADM --> UC_LIST
+ADM --> UC_ID
+ADM --> UC_VAL
+ADM --> UC_APPEAL
+ADM --> UC_HUB
+ADM --> UC_REV
+ADM --> UC_AUD
+
+legend bottom right
+  ADMIN adds to Moderator:
+  - search & inspect users
+  - suspend / unsuspend accounts
+  ADMIN cannot: change staff roles (Super Admin only).
+endlegend
+
+@enduml
