@@ -229,8 +229,23 @@ export type AdminActionKind =
   // and `sameReviewer` when the decider is the one being appealed.
   | "LISTING_APPEAL_UPHELD"
   | "LISTING_APPEAL_OVERTURNED"
+  // Achievements (admin surface). The target is the Achievement DEFINITION,
+  // not a user's earned copy -- creating and editing a badge is a decision
+  // about what can be earned, and `detail` carries the prior/new field values.
+  | "ACHIEVEMENT_CREATED"
+  | "ACHIEVEMENT_UPDATED"
+  | "ACHIEVEMENT_DEACTIVATED"
+  | "ACHIEVEMENT_REACTIVATED"
 
-export type AdminTargetType = "REPORT" | "LISTING" | "USER" | "HUB" | "ID_VERIFICATION" | "TRADE" | "LISTING_APPEAL"
+export type AdminTargetType =
+  | "REPORT"
+  | "LISTING"
+  | "USER"
+  | "HUB"
+  | "ID_VERIFICATION"
+  | "TRADE"
+  | "LISTING_APPEAL"
+  | "ACHIEVEMENT"
 
 /** A Prisma client or a transaction client. */
 type Db = PrismaClient | Prisma.TransactionClient

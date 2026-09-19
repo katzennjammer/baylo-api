@@ -115,7 +115,7 @@ export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
-  const gate = await requireRole("MODERATOR")
+  const gate = await requireRole("ADMIN")
   if (gate.response) return gate.response
 
   const { id } = await params

@@ -14,7 +14,7 @@ export async function UserAreaGuard({ children }: { children: ReactNode }) {
   })
 
   if (!user || user.deletedAt || suspensionState(user).suspended) redirect("/auth/login")
-  if (user.role === "ADMIN" || user.role === "MODERATOR") redirect("/admin/dashboard")
+  if (user.role === "ADMIN") redirect("/admin/dashboard")
 
   return children
 }

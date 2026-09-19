@@ -8,7 +8,7 @@ export default function AccountMenu({
   role,
 }: {
   name: string | null
-  role: "MODERATOR" | "ADMIN" | "SUPER_ADMIN"
+  role: "ADMIN"
 }) {
   const [open, setOpen] = useState(false)
   const displayName = name?.trim() || "Account"

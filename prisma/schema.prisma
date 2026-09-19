@@ -159,6 +159,11 @@ model User {
   appealsMade     ListingAppeal[] @relation("ListingAppealOwner")
   appealsDecided  ListingAppeal[] @relation("ListingAppealDecider")
 
+  // Earned achievements. See the Achievement/UserAchievement models at the
+  // bottom of this file for the whole story -- this relation existed only as a
+  // raw table in live until it was finally modelled here.
+  achievements    UserAchievement[]
+
   // -- Government ID verification ---------------------------------------------
   //
   // NOT `isVerified`, AND THE TWO MUST NOT BE CONFLATED. `isVerified` above
@@ -1306,17 +1311,11 @@ enum ContractStatus {
 // rather than later. It is not why they are shaped the way they are.
 
 /**
- * Privilege. See the long note on User.role: nothing in the API writes it.
- * MODERATOR and ADMIN are distinct even though every route below currently
- * accepts either. The split costs one enum value today and is the difference
- * between "revoke this person's moderation rights" and "there is one kind of
- * staff account" the first time somebody needs the former.
+ * Privilege. Only the admin tier remains in this build.
  */
 enum Role {
   USER
-  MODERATOR
   ADMIN
-  SUPER_ADMIN
 }
 
 enum ReportTargetType {
@@ -1675,6 +1674,15 @@ enum AdminActionKind {
   // owner's step.
   LISTING_APPEAL_UPHELD
   LISTING_APPEAL_OVERTURNED
+  // ── Achievements (admin surface) ──
+  // An admin created, edited, activated or deactivated an achievement
+  // definition. `detail` carries the prior/new field values. Deactivating
+  // rather than deleting is the rule: a UserAchievement row points at this
+  // definition, and deleting it would take every earned copy with it.
+  ACHIEVEMENT_CREATED
+  ACHIEVEMENT_UPDATED
+  ACHIEVEMENT_DEACTIVATED
+  ACHIEVEMENT_REACTIVATED
 }
 
 enum AdminTargetType {
@@ -1685,6 +1693,7 @@ enum AdminTargetType {
   ID_VERIFICATION
   TRADE
   LISTING_APPEAL
+  ACHIEVEMENT
 }
 
 /**
@@ -1750,24 +1759,28 @@ model AdminAction {
 /// enum name changes the day somebody renames the enum, and a shipped mobile
 /// client has already parsed the old spelling.
 // ─────────────────────────────────────────────────────────────────────────────
-// NOT MODELLED HERE, BUT PRESENT IN THE LIVE DATABASE (noticed 18 Sep 2026):
+// ─────────────────────────────
+// ACHIEVEMENTS -- MODELLED HERE AS OF 18 Sep 2026.
 //
-//   table "Achievement"        (id, key, name, description, icon, criterion,
-//                              threshold, isActive, createdAt, updatedAt)
-//   table "UserAchievement"    (id, unlockedAt, userId, achievementId, displayOrder)
-//   enum  "AchievementCriterion"
+// These were pushed straight to the live database by an earlier pass (they had
+// rows and appeared in no migration in this repository). They are modelled here
+// now so `prisma migrate diff --from-config-datasource` stops proposing to DROP
+// them every time it runs -- which it did, and which every hand-authored
+// migration.sql had to strip out (20260918000000_value_rejection_appeals did).
+// The models below match the live tables, plus THREE ADDITIONS this feature
+// needs and the live tables did not have:
 //
-// They hold rows and appear in no migration in this repository and no commit
-// on any branch -- somebody pushed them to live directly. Until they are
-// modelled, `prisma migrate diff --from-config-datasource` will propose
-// DROPPING all three every time it runs. DO NOT LET THAT INTO A MIGRATION:
-// every migration.sql authored from that diff has to have the drops removed by
-// hand (20260918000000_value_rejection_appeals did). `migrate deploy` never
-// touches them on its own -- it only applies files in prisma/migrations.
+//   imageUrl         the uploaded badge art. `icon` stays as an emoji/text
+//                    FALLBACK so badges created before an image was uploaded
+//                    still render; a badge with an imageUrl shows the image.
+//   homeDisplayOrder the single "featured" slot on the home feed. The display
+//                    route already probes information_schema for this column,
+//                    so the code was written half-expecting it; it is real now.
+//   sortOrder        admin-controlled ordering for the achievements shelf.
 //
-// Ownership is being confirmed with the teammate who built the feature; the
-// right fix is to model them here (schema half on main, as usual) so the diff
-// goes quiet.
+// The accompanying migration is written to be ADDITIVE: it creates the tables
+// if absent and adds the new columns if absent, and NEVER drops anything. See
+// the header of that migration.sql for why that is the only safe shape here.
 // ─────────────────────────────────────────────────────────────────────────────
 
 enum ListingAppealKind {
@@ -1954,4 +1967,140 @@ model ItemSafeZone {
   /// "which listings are offered at this hub" -- GET /api/v1/hubs/[id]/items.
   /// The PK's leading column already serves the other direction.
   @@index([hubId])
+}
+// ── Achievements ─────────────────────────────
+//
+// A badge an admin defines, and the copy a user earns. The admin surface
+// (src/app/admin/achievements) creates and edits the DEFINITION; the criteria
+// engine in @/lib/achievements creates the EARNED row automatically when a
+// user's activity matches.
+//
+// ── WHY A CLOSED CRITERION AND NOT A FREE-TEXT RULE ─────────────────────────
+//
+// `criterion` is an enum, not a script and not a sentence. "Grays out unless
+// achieved" is only real if the SYSTEM decides, and the system can only decide
+// what it can evaluate -- so the set of things a badge can be earned for is a
+// closed list the code knows how to check, exactly like the ID-rejection reason
+// list and for the same reason. An admin picks a criterion and a threshold;
+// they never type a rule.
+//
+// `threshold` is read by criterion. For the boolean criteria (VERIFIED,
+// PROFILE_COMPLETE, ID_VERIFIED) it is ignored and stored as 1; for the counted
+// ones (LISTINGS, TRADES, LIFETIME_LEAVES, SAFEZONE_MEETUPS, REPORTS_FILED) it
+// is the number that must be reached. One column for both because a NULL-able
+// "threshold that means nothing for this criterion" is a column somebody reads
+// and misinterprets.
+
+enum AchievementCriterion {
+  // ── THE LIVE VALUES, WHICH ARE THE SOURCE OF TRUTH ─────────────────────────
+  //
+  // These four are what the live "AchievementCriterion" enum already contained
+  // when this surface was built, and there are real Achievement rows using
+  // them. The enum here must match the database EXACTLY: Prisma sends these
+  // names verbatim, so a value the schema has and the DB lacks fails at runtime
+  // with "Value 'X' not found in enum" -- which is precisely the crash that
+  // prompted this reconciliation. Do not re-spell them.
+  //
+  // VERIFIED_ACCOUNT is the mailbox check (User.isVerified), NOT the government
+  // ID -- that is ID_VERIFIED, below, and the two are deliberately apart.
+  VERIFIED_ACCOUNT
+  /// An APPROVED IdVerification (or the grandfather stamp).
+  ID_VERIFIED
+  /// Items ever posted. Counted.
+  FIRST_LISTING
+  /// COMPLETED trades, either side. Counted.
+  COMPLETED_TRADES
+  // ── ADDED BY THIS FEATURE (18 Sep 2026) ─────────────────────
+  //
+  // Appended to the live enum by 20260919000001_achievement_criterion_values.
+  // They extend the closed set @/lib/achievements can evaluate without
+  // disturbing the four above.
+  /// avatar, bio and location all filled in.
+  PROFILE_COMPLETE
+  /// User.lifetimeLeaves. Counted.
+  LIFETIME_LEAVES
+  /// COMPLETED trades that named a SafeZoneHub. Counted.
+  SAFEZONE_MEETUPS
+  /// Reports filed (a good-citizen badge, not a misconduct one). Counted.
+  REPORTS_FILED
+}
+
+model Achievement {
+  id String @id @default(cuid())
+
+  /// Stable machine key ("verified", "first_trade"). Unique, because it is what
+  /// code and seed scripts refer to a badge by when the cuid would change
+  /// between environments.
+  key  String @unique
+  name String
+  description String @db.Text
+
+  /// Emoji or short text, shown when imageUrl is null. Kept so every badge that
+  /// existed before uploaded art still renders.
+  icon String @default("🏆")
+
+  /// Uploaded badge art (a public Cloudinary URL from /api/upload). Null falls
+  /// back to `icon`.
+  imageUrl String?
+
+  criterion AchievementCriterion
+  /// The number the criterion must reach. Ignored (stored 1) for booleans.
+  threshold Int @default(1)
+
+  /// Admin ordering for the shelf; ties broken by name.
+  sortOrder Int @default(0)
+
+  /// DEACTIVATE, NEVER DELETE. A UserAchievement row points here, and deleting
+  /// the definition would cascade away every copy a user earned. Inactive
+  /// badges stop being listed and stop being awarded, but the earned rows --
+  /// and the users wearing them -- survive.
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  unlocks UserAchievement[]
+
+  @@index([isActive, sortOrder])
+}
+
+/// One user's earned copy of one badge.
+///
+/// CASCADE from both sides is correct here, unlike Item -> hub: this row is
+/// meaningless without both the user and the definition, and there is nothing
+/// to audit about it going away (the AdminAction log is about decisions, not
+/// about a badge row a user never sees created).
+///
+/// `displayOrder` is the PROFILE shelf slot (1..4, capped in the route). NULL
+/// means "earned but not shown". `homeDisplayOrder` is the single featured slot
+/// on the home feed; also NULL when unused. Both live on this row rather than as
+/// a list on User because the row is the join, and the join is where the
+/// per-achievement display choice belongs.
+model UserAchievement {
+  id String @id @default(cuid())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  achievementId String
+  achievement   Achievement @relation(fields: [achievementId], references: [id], onDelete: Cascade)
+
+  /// When the criteria engine granted it. Non-null by definition -- a row only
+  /// exists once earned -- so this is not the "is it unlocked" flag; the row's
+  /// existence is. Kept because the badge shows "Earned <date>".
+  unlockedAt DateTime @default(now())
+
+  /// Profile shelf slot, 1-based. NULL = not displayed. Capped at 4 in
+  /// PATCH /api/v1/achievements/display.
+  displayOrder Int?
+
+  /// The one home-feed slot. NULL = not featured. At most one non-null per user.
+  homeDisplayOrder Int?
+
+  /// ONE EARNED COPY PER (user, achievement). The criteria engine inserts with
+  /// skipDuplicates against this constraint, the same claim pattern as
+  /// TaskCompletion -- a concurrent award must not write the row twice.
+  @@unique([userId, achievementId])
+  @@index([userId, displayOrder])
+  @@index([achievementId])
 }

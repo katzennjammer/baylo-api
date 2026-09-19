@@ -12,7 +12,7 @@ interface Props {
 }
 
 const STATUSES = ["active", "suspended", "deleted"] as const
-const ROLES = ["USER", "MODERATOR", "ADMIN"] as const
+const ROLES = ["USER", "ADMIN"] as const
 
 function chip(active: boolean): React.CSSProperties {
   return {

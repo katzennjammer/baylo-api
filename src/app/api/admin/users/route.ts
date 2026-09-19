@@ -10,13 +10,13 @@ export const dynamic = "force-dynamic"
 const querySchema = z.strictObject({
   q: z.string().trim().max(120).optional(),
   status: z.enum(["active", "suspended", "deleted"]).optional(),
-  role: z.enum(["USER", "MODERATOR", "ADMIN"]).optional(),
+  role: z.enum(["USER", "ADMIN"]).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
   page: z.coerce.number().int().min(1).default(1),
 })
 
 export async function GET(req: NextRequest) {
-  const gate = await requireRole("MODERATOR")
+  const gate = await requireRole("ADMIN")
   if (gate.response) return gate.response
 
   const parsed = parseQuery(req, querySchema)

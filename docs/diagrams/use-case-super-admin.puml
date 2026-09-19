@@ -1,0 +1,88 @@
+@startuml use-case-super-admin
+' ============================================================================
+'  Baylo - Admin Console: SUPER_ADMIN use cases
+'  Inherits Admin (and therefore Moderator) and adds the one thing nobody else
+'  can do: change another account's staff role.
+'  Source: src/app/admin/access/page.tsx + /api/admin/access requireRole("SUPER_ADMIN")
+' ============================================================================
+
+left to right direction
+skinparam actorStyle awesome
+skinparam shadowing false
+skinparam dpi 150
+skinparam defaultFontName "Segoe UI"
+skinparam nodesep 12
+skinparam ranksep 55
+skinparam ArrowThickness 1
+skinparam usecase {
+  BackgroundColor #F7F9F7
+  BorderColor #1f6b43
+  ArrowColor #536159
+  FontColor #17201b
+}
+skinparam actor {
+  BackgroundColor #7c2d12
+  BorderColor #17201b
+  FontColor #17201b
+}
+skinparam packageStyle rectangle
+skinparam rectangle {
+  BackgroundColor #FDFEFD
+  BorderColor #1f6b43
+  FontColor #17201b
+}
+
+title Baylo Admin Console - SUPER ADMIN
+
+actor "Moderator" as MOD
+actor "Admin" as ADM
+actor "Super Admin" as SADM
+MOD <|-- ADM
+ADM <|-- SADM
+
+rectangle "Baylo Admin Console" {
+  package "Access (Super Admin only)" {
+    usecase "View all users & roles" as UC_ACCESS_VIEW
+    usecase "Change staff role\n(USER / MODERATOR / ADMIN / SUPER_ADMIN)" as UC_ROLE
+  }
+  package "Accounts (Admin and above)" {
+    usecase "Search / inspect users" as UC_USERS
+    usecase "Suspend / unsuspend account\n(timed or indefinite)" as UC_SUSPEND
+  }
+  package "Shared staff console (Moderator and above)" {
+    usecase "Moderate reports\n(queue, inspect, action/dismiss)" as UC_MOD
+    usecase "Manage listings\n(hide / restore)" as UC_LIST
+    usecase "Review ID checks\n(approve / reject)" as UC_ID
+    usecase "Handle value anomalies\n(approve / reject value)" as UC_VAL
+    usecase "Decide appeals\n(uphold / overturn)" as UC_APPEAL
+    usecase "Manage Safe-Zone hubs" as UC_HUB
+    usecase "Reverse trade reward" as UC_REV
+    usecase "Read audit log & dashboard" as UC_AUD
+  }
+}
+
+' Super Admin only
+SADM --> UC_ACCESS_VIEW
+SADM --> UC_ROLE
+
+' Inherited from Admin
+SADM --> UC_USERS
+SADM --> UC_SUSPEND
+
+' Inherited from Moderator
+SADM --> UC_MOD
+SADM --> UC_LIST
+SADM --> UC_ID
+SADM --> UC_VAL
+SADM --> UC_APPEAL
+SADM --> UC_HUB
+SADM --> UC_REV
+SADM --> UC_AUD
+
+legend bottom right
+  SUPER ADMIN holds the whole console.
+  Unique to it: assigning staff roles (Access page).
+  Role changes are audit-logged and require a reason.
+endlegend
+
+@enduml

@@ -124,17 +124,12 @@ export async function resolveSession(): Promise<AuthSession | null> {
 
 // ── Privilege ────────────────────────────────────────────────────────────────
 
-export type Role = "USER" | "MODERATOR" | "ADMIN" | "SUPER_ADMIN"
+export type Role = "USER" | "ADMIN"
 
 /**
  * Rank, for comparison. Higher wins; a route asks for a MINIMUM.
- *
- * A numeric ladder rather than a set membership test, so requireRole("MODERATOR")
- * admits an ADMIN without every call site having to remember to list both. The
- * failure mode of the set version is an admin locked out of a moderator route,
- * discovered by an admin at 2am.
  */
-const ROLE_RANK: Record<Role, number> = { USER: 0, MODERATOR: 1, ADMIN: 2, SUPER_ADMIN: 3 }
+const ROLE_RANK: Record<Role, number> = { USER: 0, ADMIN: 1 }
 
 export interface AdminActor {
   id: string
@@ -173,7 +168,7 @@ export interface AdminActor {
  * ADMIN is a privilege-escalation target and there is no reason for one to exist.
  */
 export async function requireRole(
-  minimum: Role = "MODERATOR",
+  minimum: Role = "ADMIN",
 ): Promise<{ response: NextResponse } | { response: null; actor: AdminActor }> {
   const session = await resolveSession()
   if (!session?.user?.id) {

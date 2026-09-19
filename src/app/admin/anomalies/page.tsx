@@ -3,6 +3,7 @@ import { NEW_PARTNER_WINDOW_DAYS } from "@/lib/task-constants"
 import { suspensionState } from "@/lib/moderation"
 import { bracketOf } from "@/lib/brackets"
 import { valueCap } from "@/lib/trade-rules"
+import { AdminListingImage } from "@/components/AdminListingImage"
 import { ValueReviewActions } from "../listings/ValueReviewActions"
 
 export const dynamic = "force-dynamic"
@@ -50,6 +51,18 @@ const card: React.CSSProperties = {
 const th: React.CSSProperties = { padding: "10px 12px", textAlign: "left", color: "#888", fontSize: 12 }
 const td: React.CSSProperties = { padding: "10px 12px", fontSize: 13 }
 
+function parseFirstImage(raw: string | null | undefined): string | null {
+  if (!raw) return null
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return null
+    const first = parsed.find((value): value is string => typeof value === "string" && value.trim().length > 0)
+    return first ?? null
+  } catch {
+    return null
+  }
+}
+
 export default async function AnomaliesPage() {
   const [reviews, pairs] = await Promise.all([
     // Oldest first: a queue somebody is waiting in, unlike every other admin
@@ -57,7 +70,7 @@ export default async function AnomaliesPage() {
     prisma.item.findMany({
       where: { status: "PENDING_REVIEW" },
       select: {
-        id: true, title: true, category: true, condition: true,
+        id: true, title: true, category: true, condition: true, images: true,
         valueLeaves: true, suggestedLeaves: true, valuationSource: true, updatedAt: true,
         user: { select: { id: true, name: true, email: true, suspendedAt: true, suspendedUntil: true } },
       },
@@ -141,10 +154,13 @@ export default async function AnomaliesPage() {
                   const cap = suggested === null ? null : valueCap(suggested)
                   return (
                     <tr key={i.id} style={{ borderTop: "1px solid rgba(0,0,0,.06)" }}>
-                      <td style={td}>
-                        {i.title}
-                        <div style={{ fontSize: 11, color: "#aaa" }}>
-                          {i.category} · {i.condition} · {i.valuationSource ?? "no source"}
+                      <td style={{ ...td, display: "flex", alignItems: "center", gap: 10 }}>
+                        <AdminListingImage src={parseFirstImage(i.images)} alt={i.title} size={52} />
+                        <div>
+                          {i.title}
+                          <div style={{ fontSize: 11, color: "#aaa" }}>
+                            {i.category} · {i.condition} · {i.valuationSource ?? "no source"}
+                          </div>
                         </div>
                       </td>
                       <td style={td}>

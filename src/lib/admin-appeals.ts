@@ -8,6 +8,18 @@ import { VALUE_REJECTION_REASONS } from "@/lib/value-rejection"
  * A route file may export only handlers, which is why this is not in one.
  */
 
+function parseFirstImage(raw: string | null | undefined): string | null {
+  if (!raw) return null
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return null
+    const first = parsed.find((value): value is string => typeof value === "string" && value.trim().length > 0)
+    return first ?? null
+  } catch {
+    return null
+  }
+}
+
 export async function loadAppeals(status: "open" | "decided", limit: number) {
   const appeals = await prisma.listingAppeal.findMany({
     where: status === "open" ? { status: "OPEN" } : { status: { in: ["UPHELD", "OVERTURNED", "WITHDRAWN"] } },
@@ -18,7 +30,7 @@ export async function loadAppeals(status: "open" | "decided", limit: number) {
       owner: { select: { id: true, name: true, email: true } },
       item: {
         select: {
-          id: true, title: true, status: true, category: true, condition: true,
+          id: true, title: true, status: true, category: true, condition: true, images: true,
           valueLeaves: true, suggestedLeaves: true, moderationHiddenAt: true, valueRejectionReason: true,
         },
       },
@@ -58,6 +70,7 @@ export function shapeAppeal(a: AppealRow, viewerId: string) {
       status: a.item.status,
       category: a.item.category,
       condition: a.item.condition,
+      imageUrl: parseFirstImage(a.item.images),
       hidden: a.item.moderationHiddenAt !== null,
       requestedLeaves: a.item.valueLeaves,
       suggestedLeaves: a.item.suggestedLeaves,

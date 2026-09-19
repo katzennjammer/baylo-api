@@ -1,6 +1,7 @@
 import Link from "next/link"
 import { auth } from "@root/auth"
 import { loadAppeals, shapeAppeal } from "@/lib/admin-appeals"
+import { AdminListingImage } from "@/components/AdminListingImage"
 import { AppealActions } from "./AppealActions"
 
 export const dynamic = "force-dynamic"
@@ -84,22 +85,27 @@ export default async function AppealsPage({ searchParams }: Props) {
               {rows.map((a) => (
                 <tr key={a.id} style={{ borderTop: "1px solid rgba(0,0,0,.06)", background: a.sameReviewer && status === "open" ? "#fffbeb" : undefined }}>
                   <td style={td}>
-                    <Link href={`/admin/listings?q=${encodeURIComponent(a.listing.title)}`} style={{ color: "#21643d", fontWeight: 700 }}>
-                      {a.listing.title}
-                    </Link>
-                    <div style={{ fontSize: 11, color: "#aaa", marginTop: 2 }}>
-                      {a.kind === "VALUE_REJECTION" ? "Value rejection" : "Takedown"} · {a.listing.category} · {a.listing.condition}
-                    </div>
-                    <div style={{ marginTop: 6, color: "#555" }}>
-                      asked <strong>{a.listing.requestedLeaves?.toLocaleString() ?? "—"}</strong>
-                      {a.listing.requestedBracket !== null ? ` (bracket ${a.listing.requestedBracket})` : ""}
-                    </div>
-                    <div style={{ color: "#888", fontSize: 12 }}>
-                      suggested {a.listing.suggestedLeaves?.toLocaleString() ?? "—"}
-                      {a.listing.suggestedBracket !== null ? ` (bracket ${a.listing.suggestedBracket})` : ""}
-                    </div>
-                    <div style={{ fontSize: 11, color: "#aaa", marginTop: 4 }}>
-                      now: {a.listing.status}{a.listing.hidden ? " · hidden" : ""}
+                    <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                      <AdminListingImage src={a.listing.imageUrl} alt={a.listing.title} size={52} />
+                      <div>
+                        <Link href={`/admin/listings?q=${encodeURIComponent(a.listing.title)}`} style={{ color: "#21643d", fontWeight: 700 }}>
+                          {a.listing.title}
+                        </Link>
+                        <div style={{ fontSize: 11, color: "#aaa", marginTop: 2 }}>
+                          {a.kind === "VALUE_REJECTION" ? "Value rejection" : "Takedown"} · {a.listing.category} · {a.listing.condition}
+                        </div>
+                        <div style={{ marginTop: 6, color: "#555" }}>
+                          asked <strong>{a.listing.requestedLeaves?.toLocaleString() ?? "—"}</strong>
+                          {a.listing.requestedBracket !== null ? ` (bracket ${a.listing.requestedBracket})` : ""}
+                        </div>
+                        <div style={{ color: "#888", fontSize: 12 }}>
+                          suggested {a.listing.suggestedLeaves?.toLocaleString() ?? "—"}
+                          {a.listing.suggestedBracket !== null ? ` (bracket ${a.listing.suggestedBracket})` : ""}
+                        </div>
+                        <div style={{ fontSize: 11, color: "#aaa", marginTop: 4 }}>
+                          now: {a.listing.status}{a.listing.hidden ? " · hidden" : ""}
+                        </div>
+                      </div>
                     </div>
                   </td>
                   <td style={td}>
