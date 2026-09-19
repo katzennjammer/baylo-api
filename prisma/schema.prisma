@@ -1311,11 +1311,17 @@ enum ContractStatus {
 // rather than later. It is not why they are shaped the way they are.
 
 /**
- * Privilege. Only the admin tier remains in this build.
+ * Privilege. See the long note on User.role: nothing in the API writes it.
+ * MODERATOR and ADMIN are distinct even though every route below currently
+ * accepts either. The split costs one enum value today and is the difference
+ * between "revoke this person's moderation rights" and "there is one kind of
+ * staff account" the first time somebody needs the former.
  */
 enum Role {
   USER
+  MODERATOR
   ADMIN
+  SUPER_ADMIN
 }
 
 enum ReportTargetType {
