@@ -5,7 +5,6 @@ import { bracketOf } from "@/lib/brackets"
 import { valueCap } from "@/lib/trade-rules"
 import { VALUE_REJECTION_REASONS } from "@/lib/value-rejection"
 import ListingActions from "./ListingActions"
-import { ValueReviewActions } from "./ValueReviewActions"
 
 export const dynamic = "force-dynamic"
 export const revalidate = 0
@@ -167,15 +166,19 @@ export default async function ListingsPage({ searchParams }: Props) {
                         behind a secondary toggle -- a takedown is the answer to
                         "should this exist", not to "is this number right".
                       */}
-                      {inReview && canAct ? (
+                      {inReview ? (
                         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                          <ValueReviewActions itemId={listing.id} />
-                          <details>
-                            <summary style={{ fontSize: 12, color: "#777", cursor: "pointer" }}>Moderation takedown…</summary>
-                            <div style={{ marginTop: 6 }}>
-                              <ListingActions listingId={listing.id} hidden={hidden} canAct={canAct} />
-                            </div>
-                          </details>
+                          <Link href="/admin/review-queue" style={{ color: "#21643d", fontWeight: 700 }}>
+                            Review value in queue →
+                          </Link>
+                          {canAct ? (
+                            <details>
+                              <summary style={{ fontSize: 12, color: "#777", cursor: "pointer" }}>Moderation takedown…</summary>
+                              <div style={{ marginTop: 6 }}>
+                                <ListingActions listingId={listing.id} hidden={hidden} canAct={canAct} />
+                              </div>
+                            </details>
+                          ) : null}
                         </div>
                       ) : (
                         <ListingActions listingId={listing.id} hidden={hidden} canAct={canAct} />

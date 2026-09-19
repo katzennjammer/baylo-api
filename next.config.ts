@@ -36,6 +36,10 @@ const SECURITY_HEADERS = [
 ];
 
 const nextConfig: NextConfig = {
+  async redirects() {
+    return [{ source: "/admin/anomalies", destination: "/admin/review-queue", permanent: true }];
+  },
+
   images: {
     remotePatterns: [
       {

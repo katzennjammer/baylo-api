@@ -44,7 +44,7 @@ export default async function AdminDashboardPage() {
     { label: "Suspended users", value: suspendedUsers, href: "/admin/users?status=suspended" },
     { label: "Hidden listings", value: hiddenListings, href: "/admin/listings?status=hidden" },
     { label: "Inactive hubs", value: inactiveHubs, href: "/admin/hubs?status=inactive" },
-    { label: "Values in review", value: defaults, href: "/admin/anomalies" },
+    { label: "Values in review", value: defaults, href: "/admin/review-queue" },
     { label: "Open appeals", value: openAppeals, href: "/admin/appeals" },
   ]
 

@@ -158,7 +158,7 @@ export async function POST(req: NextRequest) {
         condition: body.condition,
         ...valued.data,
         // Above the cap: the row exists, the owner can see it, nobody else
-        // can, and the admin Anomalies tab lists it. See ItemStatus.
+        // can, and the admin Review queue lists it. See ItemStatus.
         ...(valued.needsReview ? { status: "PENDING_REVIEW" as const } : {}),
         wantedItems: body.wantedItems ?? null,
         images: JSON.stringify(body.images ?? []),

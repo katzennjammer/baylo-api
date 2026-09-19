@@ -9,7 +9,7 @@ export const dynamic = "force-dynamic"
 export const revalidate = 0
 
 /**
- * /admin/anomalies — the signals this system records that need a human eye.
+ * /admin/review-queue — the signals this system records that need a human eye.
  *
  *   VALUE REVIEWS      Listings whose owner asked for a value more than one
  *                      bracket above the server's own suggestion. The value
@@ -50,7 +50,7 @@ const card: React.CSSProperties = {
 const th: React.CSSProperties = { padding: "10px 12px", textAlign: "left", color: "#888", fontSize: 12 }
 const td: React.CSSProperties = { padding: "10px 12px", fontSize: 13 }
 
-export default async function AnomaliesPage() {
+export default async function ReviewQueuePage() {
   const [reviews, pairs] = await Promise.all([
     // Oldest first: a queue somebody is waiting in, unlike every other admin
     // list here. Their listing shows to nobody until this is answered.
@@ -97,7 +97,7 @@ export default async function AnomaliesPage() {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
       <div>
-        <h1 style={{ fontSize: 24, fontWeight: 800, letterSpacing: "-.02em" }}>Anomalies</h1>
+        <h1 style={{ fontSize: 24, fontWeight: 800, letterSpacing: "-.02em" }}>Review queue</h1>
         <p style={{ fontSize: 13, color: "#777", marginTop: 4, maxWidth: "70ch", lineHeight: 1.6 }}>
           Signals the system already records. Neither is misconduct on its own — both are
           worth a human&apos;s eye. Acting on one means opening the relevant report or user,

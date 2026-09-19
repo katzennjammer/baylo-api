@@ -5,7 +5,7 @@ import { useState } from "react"
 import { VALUE_REJECTION_REASONS, VALUE_REJECTION_NOTE_MAX } from "@/lib/value-rejection"
 
 /**
- * Approve or reject one value review. Shared by the Anomalies queue and the
+ * Approve or reject one value review. Shared by the Review queue and the
  * Listings page, so the two cannot drift: same endpoint, same reason rules,
  * same words.
  *
