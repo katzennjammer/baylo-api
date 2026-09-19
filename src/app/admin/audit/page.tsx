@@ -85,7 +85,7 @@ export default async function AuditPage({ searchParams }: Props) {
       take: 100,
     }),
     prisma.user.findMany({
-      where: { role: { in: ["ADMIN", "MODERATOR"] }, deletedAt: null },
+      where: { role: "ADMIN", deletedAt: null },
       select: { id: true, name: true, email: true },
       orderBy: [{ name: "asc" }, { email: "asc" }],
     }),

@@ -15,9 +15,7 @@ const { auth } = NextAuth(authConfig)
  * live proxy prints `proxy.ts: Nms` on every matched request line.
  *
  * THE WEB APP IS RETIRED FOR USERS (11 Sep 2026). Baylo is the Android app;
- * the pages under these prefixes are kept on disk and reachable by STAFF only
- * -- ADMIN and MODERATOR, the same pair /admin admits -- so a moderator can
- * still open a listing or a profile the way the moderation queue links to it.
+ * the pages under these prefixes are kept on disk and reachable by ADMIN only.
  * Everyone else lands on /android, one line, no shell.
  *
  * Prefix-matched, so /listings/new and /post/[id] are covered without listing
@@ -38,7 +36,7 @@ export default auth(function proxy(req) {
   // before the claim existed, which reads as "not staff" until the session
   // refresh backfills it; the safe direction to be wrong in.
   const role = (req.auth?.user as { role?: string } | undefined)?.role
-  const isStaff = role === "ADMIN" || role === "MODERATOR" || role === "SUPER_ADMIN"
+  const isStaff = role === "ADMIN"
   const home = isStaff ? "/dashboard" : "/android"
 
   if (isLoggedIn && (pathname === "/" || pathname.startsWith("/auth/"))) {

@@ -21,7 +21,7 @@ export default async function LoadingScreenPage({
   const requested = params.next?.startsWith("/") && !params.next.startsWith("//")
     ? params.next
     : "/dashboard"
-  const destination = user?.role === "ADMIN" || user?.role === "MODERATOR"
+  const destination = user?.role === "ADMIN"
     ? "/admin/dashboard"
     : requested
 
