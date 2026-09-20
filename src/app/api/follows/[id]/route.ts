@@ -43,3 +43,21 @@ export async function PATCH(
 
   return NextResponse.json(updated)
 }
+
+// DELETE /api/follows/[id] — remove the current user's relationship with a user
+export async function DELETE(
+  _req: NextRequest,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  const session = await resolveSession()
+  if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+
+  const { id: followeeId } = await params
+  const follow = await prisma.follow.findUnique({
+    where: { followerId_followeeId: { followerId: session.user.id, followeeId } },
+  })
+  if (!follow) return NextResponse.json({ error: "Not found" }, { status: 404 })
+
+  await prisma.follow.delete({ where: { id: follow.id } })
+  return NextResponse.json({ status: "unfollowed" })
+}

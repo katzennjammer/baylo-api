@@ -259,8 +259,9 @@ export async function PATCH(req: NextRequest) {
       const gate = await enforceAcceptTrade(myId, [trade.offeredItemId])
       if (gate.response) return gate.response
 
-      // Server-side guard: items must not be TRADED before we commit them
-      if (trade.offeredItem.status === "TRADED" || trade.requestedItem.status === "TRADED") {
+      // An accepted trade owns both items exclusively. Do not allow this path
+      // to overwrite an item already locked by another accepted trade.
+      if (trade.offeredItem.status !== "AVAILABLE" || trade.requestedItem.status !== "AVAILABLE") {
         return NextResponse.json({ error: "Item is no longer available" }, { status: 409 })
       }
 
@@ -270,11 +271,17 @@ export async function PATCH(req: NextRequest) {
       await prisma.$transaction(async (tx) => {
         // Double-check inside transaction
         const freshItems = await tx.item.findMany({ where: { id: { in: itemIds } }, select: { id: true, status: true } })
-        if (freshItems.some((i) => i.status === "TRADED")) throw new Error("item_traded")
+        if (freshItems.length !== itemIds.length || freshItems.some((i) => i.status !== "AVAILABLE")) {
+          throw new Error("item_unavailable")
+        }
 
         // Accept this trade and lock items
         await tx.tradeRequest.update({ where: { id: tradeId }, data: { status: "ACCEPTED" } })
-        await tx.item.updateMany({ where: { id: { in: itemIds } }, data: { status: "IN_TRADE" } })
+        const locked = await tx.item.updateMany({
+          where: { id: { in: itemIds }, status: "AVAILABLE" },
+          data: { status: "IN_TRADE" },
+        })
+        if (locked.count !== itemIds.length) throw new Error("item_unavailable")
 
         // Find all other PENDING trades that involve either of these items
         const rivals = await tx.tradeRequest.findMany({
@@ -396,7 +403,7 @@ export async function PATCH(req: NextRequest) {
 
     return NextResponse.json({ error: "Invalid status" }, { status: 400 })
   } catch (err) {
-    if (err instanceof Error && err.message === "item_traded") {
+    if (err instanceof Error && (err.message === "item_traded" || err.message === "item_unavailable")) {
       return NextResponse.json({ error: "Item is no longer available" }, { status: 409 })
     }
     return NextResponse.json({ error: "Internal server error" }, { status: 500 })

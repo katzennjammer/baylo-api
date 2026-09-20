@@ -5,6 +5,7 @@ import prisma from "@/lib/prisma"
 import { preciseAccessItemIds } from "@/lib/item-visibility"
 import { blockDirection } from "@/lib/blocking"
 import { getLeafRank } from "@/lib/task-constants"
+import { loadTrustTiers } from "@/lib/trust-tiers"
 import { ok, unauthenticated, invalid, notFound } from "@/lib/v1/envelope"
 import { parseQuery, paginationShape } from "@/lib/v1/query"
 import { decodeCursor, encodeCursor, olderThan, paginate } from "@/lib/v1/cursor"
@@ -88,6 +89,28 @@ export async function GET(
   // 404 here matches resolveSession(), which refuses to authenticate one.
   if (!user || user.deletedAt) return notFound("Profile not found")
 
+  const [tiers, displayedAchievements] = await Promise.all([
+    loadTrustTiers(prisma, [{ id: user.id, rating: user.rating }]),
+    prisma.$queryRaw<Array<{
+      id: string
+      name: string
+      icon: string
+      imageUrl: string | null
+      displayOrder: number | null
+    }>>`
+      SELECT ua."achievementId" AS id,
+             a."name",
+             a."icon",
+             a."imageUrl",
+             ua."displayOrder"
+      FROM "UserAchievement" ua
+      JOIN "Achievement" a ON a.id = ua."achievementId"
+      WHERE ua."userId" = ${user.id}
+        AND ua."displayOrder" IS NOT NULL
+      ORDER BY ua."displayOrder" ASC, ua."unlockedAt" DESC
+    `,
+  ])
+
   // ── 2 ── the follow edge in both directions, in one query.
   const edges = await prisma.follow.findMany({
     where: {
@@ -146,6 +169,7 @@ export async function GET(
         totalTrades: user.totalTrades,
         lifetimeLeaves: user.lifetimeLeaves,
         rank: { label: getLeafRank(user.lifetimeLeaves).label },
+        trustTier: tiers.get(user.id) ?? null,
         isVerified: user.isVerified,
         createdAt: user.createdAt,
         // NOT returned, and deliberately: email, leaves, tasks, impact.
@@ -165,6 +189,7 @@ export async function GET(
       },
       items: page.map((r) => v1Item(r as unknown as V1ItemRow, viewerId, access)),
       reviews,
+      displayedAchievements,
     },
     { nextCursor },
   )

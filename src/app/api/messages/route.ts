@@ -37,6 +37,12 @@ export async function GET(req: NextRequest) {
       )
     }
 
+    const hidden = await prisma.conversationHide.findUnique({
+      where: { viewerId_partnerId: { viewerId: session.user.id, partnerId } },
+      select: { id: true },
+    })
+    if (hidden) return NextResponse.json([])
+
     const messages = await prisma.message.findMany({
       where: {
         OR: [
@@ -53,6 +59,31 @@ export async function GET(req: NextRequest) {
     })
 
     return NextResponse.json(messages)
+  } catch {
+    return NextResponse.json({ error: "Internal server error" }, { status: 500 })
+  }
+}
+
+export async function DELETE(req: NextRequest) {
+  try {
+    const session = await resolveSession()
+    if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+
+    const partnerId = new URL(req.url).searchParams.get("partnerId")
+    if (!partnerId) return NextResponse.json({ error: "partnerId required" }, { status: 400 })
+
+    const hidden = await prisma.conversationHide.upsert({
+      where: { viewerId_partnerId: { viewerId: session.user.id, partnerId } },
+      create: { viewerId: session.user.id, partnerId },
+      update: { hiddenAt: new Date() },
+      select: { hiddenAt: true },
+    })
+
+    await prisma.notification.deleteMany({
+      where: { userId: session.user.id, actorId: partnerId, type: "NEW_MESSAGE" },
+    })
+
+    return NextResponse.json({ ok: true, hiddenAt: hidden.hiddenAt.toISOString() })
   } catch {
     return NextResponse.json({ error: "Internal server error" }, { status: 500 })
   }
@@ -76,13 +107,26 @@ export async function POST(req: NextRequest) {
     const blocked = await enforceNotBlocked(session.user.id, receiverId, "message this person")
     if (blocked) return blocked
 
-    const message = await prisma.message.create({
-      data: {
-        senderId: session.user.id,
-        receiverId,
-        content,
-        tradeId: tradeId || null,
-      },
+    const message = await prisma.$transaction(async (tx) => {
+      // A new message reopens the conversation for both people, including the
+      // recipient who hid it earlier. Message rows themselves are immutable
+      // history and are never deleted by the hide action.
+      await tx.conversationHide.deleteMany({
+        where: {
+          OR: [
+            { viewerId: session.user.id, partnerId: receiverId },
+            { viewerId: receiverId, partnerId: session.user.id },
+          ],
+        },
+      })
+      return tx.message.create({
+        data: {
+          senderId: session.user.id,
+          receiverId,
+          content,
+          tradeId: tradeId || null,
+        },
+      })
     })
 
     await prisma.notification.deleteMany({

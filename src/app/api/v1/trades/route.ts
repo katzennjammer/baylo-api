@@ -163,6 +163,7 @@ export async function GET(req: NextRequest) {
       requestedItemId: true,
       offeredItem: { select: ITEM_BRIEF },
       requestedItem: { select: ITEM_BRIEF },
+      reviews: { where: { reviewerId: viewerId }, select: { rating: true } },
       // Code state, so canConfirm is a real answer rather than a guess from
       // status alone. At most two rows per trade.
       swapConfirmationCodes: { select: { userId: true, used: true, expiresAt: true } },
@@ -222,6 +223,7 @@ export async function GET(req: NextRequest) {
       bridgeFeeLeaves: t.bridgeFeeLeaves,
       bridgeFeePaidBySender: t.bridgeFeePaidBySender,
       counterparty,
+      myReview: t.reviews[0] ? { rating: t.reviews[0].rating } : null,
       /*
        * ── SUPPRESSED ONLY WHEN IT IS ACTUALLY A PLACEHOLDER ────────────────
        *

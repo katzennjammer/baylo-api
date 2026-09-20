@@ -16,7 +16,14 @@ import { loadStanding, publicStanding } from "@/lib/reputation-gate"
 import { loadIdVerificationState, publicIdVerification } from "@/lib/id-verification"
 
 /** What the owner's own shelf lists. See the note at step 2. */
-const SHELF_STATUSES: ItemStatus[] = ["AVAILABLE", "OWNED", "PENDING_REVIEW", "VALUE_REJECTED"]
+const SHELF_STATUSES: ItemStatus[] = [
+  "AVAILABLE",
+  "IN_TRADE",
+  "TRADED",
+  "OWNED",
+  "PENDING_REVIEW",
+  "VALUE_REJECTED",
+]
 
 export const dynamic = "force-dynamic"
 
@@ -78,14 +85,12 @@ export async function GET(req: NextRequest) {
 
   // ── 2 ── both shelf tabs in one pass.
   //
-  // THE SHELF SHOWS EVERYTHING THE OWNER STILL HAS A DECISION ON. Until
-  // 18 Sep 2026 it showed AVAILABLE and OWNED only, so a listing parked for a
-  // value review, or rejected by one, was on nobody's screen at all -- the
-  // notification about it could not be opened and the shelf did not list it.
-  // PENDING_REVIEW and VALUE_REJECTED now come through with their status, and
+  // THE SHELF SHOWS EVERYTHING THE OWNER NEEDS TO SEE. In addition to live
+  // listings, traded rows stay visible so the profile remains a post history.
+  // PENDING_REVIEW and VALUE_REJECTED also come through with their status, and
   // a moderator-hidden listing (still AVAILABLE, with moderationHiddenAt set)
   // comes through as it always did but now SAYS SO: see `hiddenByModerator`
-  // on the item shape. The client labels the tile from those two fields.
+  // on the item shape. The client labels the tile from these fields.
   //
   // `listed` still counts AVAILABLE only. A listing waiting on a review is not
   // listed, and the number in the tab header should not claim it is.

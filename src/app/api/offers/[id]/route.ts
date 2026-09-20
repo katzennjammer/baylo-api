@@ -76,7 +76,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     const offer = await prisma.offer.findUnique({
       where: { id: offerId },
       include: {
-        post: { select: { id: true, title: true, valueLeaves: true } },
+        post: { select: { id: true, title: true, images: true, valueLeaves: true } },
         sender: { select: { id: true, name: true } },
         receiver: { select: { id: true, name: true } },
       },
@@ -275,9 +275,22 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       }
 
       const [offeredItem, requestedItem] = await Promise.all([
-        tx.item.findUnique({ where: { id: offeredItemId as string }, select: { title: true } }),
-        tx.item.findUnique({ where: { id: offer.postId }, select: { title: true } }),
+        tx.item.findUnique({ where: { id: offeredItemId as string }, select: { title: true, status: true } }),
+        tx.item.findUnique({ where: { id: offer.postId }, select: { title: true, status: true } }),
       ])
+
+      if (offeredItem?.status !== "AVAILABLE" || requestedItem?.status !== "AVAILABLE") {
+        throw new Error("item_unavailable")
+      }
+
+      const locked = await tx.item.updateMany({
+        where: {
+          id: { in: [offeredItemId as string, offer.postId] },
+          status: "AVAILABLE",
+        },
+        data: { status: "IN_TRADE" },
+      })
+      if (locked.count !== 2) throw new Error("item_unavailable")
 
       const trade = await tx.tradeRequest.create({
         data: {
@@ -301,6 +314,42 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         select: { id: true },
       })
 
+      const rivals = await tx.offer.findMany({
+        where: {
+          id: { not: offerId },
+          status: "PENDING",
+          OR: [
+            { postId: { in: [offeredItemId as string, offer.postId] } },
+            { offeredItems: { contains: offeredItemId as string } },
+          ],
+        },
+        select: {
+          id: true,
+          senderId: true,
+          offeredBracket: true,
+          targetBracket: true,
+          bridgeFeeLeaves: true,
+        },
+      })
+
+      if (rivals.length > 0) {
+        await tx.offer.updateMany({
+          where: { id: { in: rivals.map((rival) => rival.id) }, status: "PENDING" },
+          data: { status: "DECLINED" },
+        })
+        for (const rival of rivals) {
+          const proposerPaid = rival.offeredBracket !== null && rival.targetBracket !== null && rival.offeredBracket < rival.targetBracket
+          if (proposerPaid && rival.bridgeFeeLeaves) {
+            await releaseBridgeFee(tx, {
+              userId: rival.senderId,
+              offerId: rival.id,
+              amount: rival.bridgeFeeLeaves,
+              reason: "rejected",
+            })
+          }
+        }
+      }
+
       return {
         raced: false as const,
         trade: {
@@ -311,6 +360,9 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       }
       })
     } catch (e) {
+      if (e instanceof Error && e.message === "item_unavailable") {
+        return NextResponse.json({ error: "An item in this offer is no longer available" }, { status: 409 })
+      }
       if (e instanceof ReceiverShort) {
         return NextResponse.json(
           {
@@ -330,6 +382,22 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       return NextResponse.json({ error: "This offer was just resolved" }, { status: 409 })
     }
     tradeRecord = outcome.trade
+
+    const offeredItemForCard = tradeRecord
+      ? await prisma.item.findUnique({
+          where: { id: offeredItemId as string },
+          select: { title: true, images: true },
+        })
+      : null
+    const firstImage = (raw: string | null | undefined) => {
+      if (!raw) return null
+      try {
+        const images = JSON.parse(raw)
+        return Array.isArray(images) && typeof images[0] === "string" ? images[0] : null
+      } catch {
+        return null
+      }
+    }
 
     // Notify sender — link uses ?partner= format so NotifPanel opens the chat dock
     await prisma.notification.create({
@@ -353,15 +421,57 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
           : { entityType: "conversation", entityId: session.user.id }),
       },
     })
+    pusher
+      .trigger(`private-user-${offer.senderId}`, "notification-created", {
+        type: action === "accept" ? "TRADE_ACCEPTED" : "TRADE_REJECTED",
+      })
+      .catch(() => {})
 
     const actorName = offer.receiver?.name ?? "They"
+    const updatePayload = {
+      type: "offer_update",
+      offerId,
+      tradeId: tradeRecord?.id ?? null,
+      status: newStatus,
+      actorName,
+      offeredItemTitle: offeredItemForCard?.title ?? tradeRecord?.offeredItemTitle ?? "Item",
+      requestedItemTitle: offer.post.title,
+      offeredItemImage: firstImage(offeredItemForCard?.images),
+      requestedItemImage: firstImage(offer.post.images),
+    }
+    const senderSystemContent = JSON.stringify({ ...updatePayload, partnerName: actorName })
+    const receiverSystemContent = JSON.stringify({ ...updatePayload, partnerName: offer.sender?.name ?? "They" })
     const systemMsg = await prisma.message.create({
       data: {
         senderId: session.user.id,
         receiverId: offer.senderId,
-        content: JSON.stringify({ type: "offer_update", offerId, status: newStatus, actorName }),
+        content: senderSystemContent,
       },
     })
+    const counterpartMsg = action === "accept"
+      ? await prisma.message.create({
+          data: {
+            senderId: offer.senderId,
+            receiverId: offer.receiverId,
+            content: receiverSystemContent,
+          },
+        })
+      : null
+
+    const senderSystemPayload = {
+      id: systemMsg.id,
+      content: systemMsg.content,
+      senderId: systemMsg.senderId,
+      receiverId: systemMsg.receiverId,
+      createdAt: systemMsg.createdAt.toISOString(),
+    }
+    const receiverSystemPayload = counterpartMsg ? {
+      id: counterpartMsg.id,
+      content: counterpartMsg.content,
+      senderId: counterpartMsg.senderId,
+      receiverId: counterpartMsg.receiverId,
+      createdAt: counterpartMsg.createdAt.toISOString(),
+    } : null
 
     pusher
       .trigger(`private-user-${offer.senderId}`, "offer-updated", {
@@ -385,6 +495,28 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
           receiverId: offer.receiverId,
         }),
       })
+      .then(() => Promise.all([
+        pusher.trigger(`private-user-${offer.senderId}`, "new-message", senderSystemPayload),
+        ...(action === "accept" && receiverSystemPayload ? [
+          pusher.trigger(`private-user-${offer.receiverId}`, "new-message", receiverSystemPayload),
+        ] : []),
+        ...(action === "accept" ? [
+          pusher.trigger(`private-user-${offer.receiverId}`, "offer-updated", {
+            offerId,
+            status: newStatus,
+            actorName,
+            systemMessage: receiverSystemPayload ?? undefined,
+            ...(tradeRecord && {
+              tradeId: tradeRecord.id,
+              offeredItemTitle: tradeRecord.offeredItemTitle,
+              requestedItemTitle: tradeRecord.requestedItemTitle,
+              senderName: offer.sender?.name ?? "",
+              receiverName: actorName,
+              receiverId: offer.receiverId,
+            }),
+          }),
+        ] : []),
+      ]))
       .catch(() => {})
 
     return NextResponse.json({

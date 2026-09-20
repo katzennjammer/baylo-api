@@ -182,6 +182,11 @@ export async function GET(req: NextRequest) {
   const unreadMessages = await prisma.message.count({
     where: { receiverId: viewerId, read: false },
   })
+  const unreadMessageConversations = await prisma.message.findMany({
+    where: { receiverId: viewerId, read: false },
+    distinct: ["senderId"],
+    select: { senderId: true },
+  })
   const unreadNotifications = await prisma.notification.count({
     where: { userId: viewerId, read: false },
   })
@@ -224,6 +229,7 @@ export async function GET(req: NextRequest) {
       },
       unread: {
         messages: unreadMessages,
+        messageConversations: unreadMessageConversations.length,
         notifications: unreadNotifications,
         followRequests,
       },

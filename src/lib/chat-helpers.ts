@@ -10,7 +10,7 @@ export interface OfferPayload {
 }
 
 export interface OfferUpdatePayload {
-  type: "offer_update"; offerId: string; status: string; actorName: string
+  type: "offer_update"; offerId: string; tradeId?: string | null; status: string; actorName: string
 }
 
 export interface SharedPostPayload {

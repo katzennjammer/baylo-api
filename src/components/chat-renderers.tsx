@@ -84,6 +84,28 @@ export function OfferCard({ payload, myId, partnerId: _partnerId, isSender, onAc
   )
 }
 
+export function TradeStatusCard({ update }: { update: OfferUpdatePayload }) {
+  const accepted = update.status === "ACCEPTED"
+  const label = accepted
+    ? `${update.actorName} accepted the offer`
+    : update.status === "WITHDRAWN"
+      ? `${update.actorName} withdrew the offer`
+      : update.status === "EXPIRED"
+        ? "The offer expired"
+        : `${update.actorName} declined the offer`
+
+  return (
+    <a
+      href={accepted && update.tradeId ? "/dashboard/trades" : undefined}
+      className={"chat-status-card" + (accepted && update.tradeId ? " actionable" : "")}
+      aria-label={accepted && update.tradeId ? "Open accepted trade in Trades" : undefined}
+    >
+      <span className="chat-status-card-title">{label}</span>
+      {accepted && update.tradeId ? <span className="chat-status-card-hint">Open Trades to arrange the meetup</span> : null}
+    </a>
+  )
+}
+
 // ── SharedPostCard ────────────────────────────────────────────────────────
 export function SharedPostCard({ sp, mine }: { sp: SharedPostPayload; mine: boolean }) {
   return (

@@ -86,6 +86,8 @@ model User {
   receivedRequests        TradeRequest[]           @relation("ReceivedRequests")
   sentMessages            Message[]                @relation("SentMessages")
   receivedMessages        Message[]                @relation("ReceivedMessages")
+  conversationHides       ConversationHide[]        @relation("ConversationHidesByViewer")
+  hiddenFromConversations  ConversationHide[]        @relation("ConversationHidesByPartner")
   notifications           Notification[]           @relation("NotificationRecipient")
   triggeredNotifications  Notification[]           @relation("NotificationActor")
   reviewsGiven            Review[]                 @relation("ReviewsGiven")
@@ -632,6 +634,26 @@ model Message {
   @@index([senderId])
   @@index([receiverId])
   @@index([tradeId])
+}
+
+/**
+ * Hides one conversation for one viewer without touching its messages.
+ *
+ * The direction is intentional: A can hide A/B while B still sees the same
+ * history. A new message clears the sender's hide row and makes the thread
+ * visible again to that sender; the recipient's hide row is cleared when they
+ * send their next message.
+ */
+model ConversationHide {
+  id        String   @id @default(cuid())
+  viewerId  String
+  viewer    User     @relation("ConversationHidesByViewer", fields: [viewerId], references: [id], onDelete: Cascade)
+  partnerId String
+  partner   User     @relation("ConversationHidesByPartner", fields: [partnerId], references: [id], onDelete: Cascade)
+  hiddenAt  DateTime @default(now())
+
+  @@unique([viewerId, partnerId])
+  @@index([partnerId])
 }
 
 model Notification {

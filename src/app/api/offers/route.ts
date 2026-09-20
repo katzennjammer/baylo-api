@@ -4,6 +4,16 @@ import prisma from "@/lib/prisma"
 import pusher from "@/lib/pusher"
 import { createOfferSchema, parseBody } from "@/lib/validation"
 import { enforceInitiateTrade } from "@/lib/reputation-gate"
+
+function firstImage(raw: string | null | undefined): string | null {
+  if (!raw) return null
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    return Array.isArray(parsed) && typeof parsed[0] === "string" ? parsed[0] : null
+  } catch {
+    return null
+  }
+}
 import { enforceNotBlocked } from "@/lib/blocking"
 import { assessOffer, refusalStatus } from "@/lib/offer-check"
 import { holdBridgeFee } from "@/lib/bridge-fee"
@@ -83,7 +93,7 @@ export async function POST(req: NextRequest) {
 
     const post = await prisma.item.findUniqueOrThrow({
       where: { id: postId },
-      select: { id: true, title: true, userId: true, user: { select: { id: true, name: true } } },
+      select: { id: true, title: true, images: true, userId: true, user: { select: { id: true, name: true } } },
     })
 
     // An offer is a trade initiation and creates a chat message as a side
@@ -110,6 +120,21 @@ export async function POST(req: NextRequest) {
     if (standing) {
       return NextResponse.json(
         { error: "You already have an offer waiting on this listing.", code: "OFFER_ALREADY_PENDING", offerId: standing.id },
+        { status: 409 },
+      )
+    }
+
+    const duplicateOfferedItem = await prisma.offer.findFirst({
+      where: {
+        senderId,
+        status: "PENDING",
+        offeredItems: { contains: offeredItemId },
+      },
+      select: { id: true },
+    })
+    if (duplicateOfferedItem) {
+      return NextResponse.json(
+        { error: "You already have a pending offer using that item.", code: "OFFERED_ITEM_ALREADY_PENDING", offerId: duplicateOfferedItem.id },
         { status: 409 },
       )
     }
@@ -152,6 +177,16 @@ export async function POST(req: NextRequest) {
     let offer: { id: string }
     try {
       offer = await prisma.$transaction(async (tx) => {
+        const duplicate = await tx.offer.findFirst({
+          where: {
+            senderId,
+            status: "PENDING",
+            offeredItems: { contains: offeredItemId },
+          },
+          select: { id: true },
+        })
+        if (duplicate) throw new DuplicateOfferedItem()
+
         const created = await tx.offer.create({
           data: {
             postId,
@@ -205,6 +240,12 @@ export async function POST(req: NextRequest) {
           { status: 400 },
         )
       }
+      if (e instanceof DuplicateOfferedItem) {
+        return NextResponse.json(
+          { error: "You already have a pending offer using that item.", code: "OFFERED_ITEM_ALREADY_PENDING" },
+          { status: 409 },
+        )
+      }
       throw e
     }
 
@@ -221,8 +262,8 @@ export async function POST(req: NextRequest) {
       type: "offer",
       offerId: offer.id,
       postId,
-      postItem: { title: post.title },
-      offeredItems: [{ id: assessed.offered.id, title: assessed.offered.title }],
+      offeredItems: [{ id: assessed.offered.id, title: assessed.offered.title, imageUrl: firstImage(assessed.offered.images) }],
+      postItem: { title: post.title, imageUrl: firstImage(post.images) },
       offeredLeaves: null,
       offeredBracket: assessed.offeredBracket,
       targetBracket: assessed.targetBracket,
@@ -307,5 +348,12 @@ class InsufficientLeaves extends Error {
   constructor(readonly need: number, readonly have: number) {
     super("insufficient_leaves")
     this.name = "InsufficientLeaves"
+  }
+}
+
+class DuplicateOfferedItem extends Error {
+  constructor() {
+    super("offered_item_already_pending")
+    this.name = "DuplicateOfferedItem"
   }
 }

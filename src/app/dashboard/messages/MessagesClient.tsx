@@ -7,7 +7,7 @@ import { subscribeChannel, unsubscribeChannel } from "@/lib/pusher-client"
 import AvatarImage from "@/components/AvatarImage"
 import { Icon } from "@/app/dashboard/_shell/TopNav"
 import ReportBlockMenu from "@/components/ReportBlockMenu"
-import { OfferCard, SharedPostCard, VoicePlayer, ChatImageBubble } from "@/components/chat-renderers"
+import { OfferCard, SharedPostCard, TradeStatusCard, VoicePlayer, ChatImageBubble } from "@/components/chat-renderers"
 import {
   tryParseMsg, uploadChatImage,
   type OfferPayload, type OfferUpdatePayload,
@@ -348,26 +348,7 @@ export default function MessagesClient({
 
                   if (parsed?.type === "offer_update") {
                     const up = parsed as OfferUpdatePayload
-                    return (
-                      <div key={msg.id} className="chat-system-msg">
-                        {/*
-                          Four states, not two. `OfferStatus` gained WITHDRAWN
-                          and EXPIRED, and the old binary here reported both as
-                          "declined" — which would tell somebody they had been
-                          refused by a person who never opened the message, or
-                          who had in fact retracted their own offer. Neither
-                          path writes one of these messages today; this is the
-                          reading that stays true when one does.
-                        */}
-                        {up.status === "ACCEPTED"
-                          ? `${up.actorName} accepted the offer`
-                          : up.status === "WITHDRAWN"
-                            ? `${up.actorName} withdrew the offer`
-                            : up.status === "EXPIRED"
-                              ? "The offer expired"
-                              : `${up.actorName} declined the offer`}
-                      </div>
-                    )
+                    return <TradeStatusCard key={msg.id} update={up} />
                   }
 
                   if (parsed?.type === "shared_post") {

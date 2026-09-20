@@ -30,18 +30,27 @@ export default async function MessagesPage({
 
   const userId = session.user.id
 
-  const conversations = await prisma.message.findMany({
-    where: { OR: [{ senderId: userId }, { receiverId: userId }] },
-    include: {
-      sender: { select: { id: true, name: true, avatar: true } },
-      receiver: { select: { id: true, name: true, avatar: true } },
-    },
-    orderBy: { createdAt: "desc" },
-  })
+  const [conversations, hiddenRows] = await Promise.all([
+    prisma.message.findMany({
+      where: { OR: [{ senderId: userId }, { receiverId: userId }] },
+      include: {
+        sender: { select: { id: true, name: true, avatar: true } },
+        receiver: { select: { id: true, name: true, avatar: true } },
+      },
+      orderBy: { createdAt: "desc" },
+    }),
+    prisma.conversationHide.findMany({
+      where: { viewerId: userId },
+      select: { partnerId: true },
+    }),
+  ])
+
+  const hiddenPartners = new Set(hiddenRows.map((row) => row.partnerId))
 
   const seen = new Set<string>()
   const uniqueConversations = conversations.filter((msg) => {
     const partnerId = msg.senderId === userId ? msg.receiverId : msg.senderId
+    if (hiddenPartners.has(partnerId)) return false
     if (seen.has(partnerId)) return false
     seen.add(partnerId)
     return true

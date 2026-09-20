@@ -17,7 +17,7 @@ export async function GET() {
   return NextResponse.json(requests)
 }
 
-// POST /api/follows — send a follow request
+// POST /api/follows — follow a user immediately
 export async function POST(req: NextRequest) {
   const session = await resolveSession()
   if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
@@ -34,7 +34,7 @@ export async function POST(req: NextRequest) {
 
   const [follow, follower] = await Promise.all([
     prisma.follow.create({
-      data: { followerId: session.user.id, followeeId, status: "PENDING" },
+      data: { followerId: session.user.id, followeeId, status: "ACCEPTED" },
     }),
     prisma.user.findUnique({ where: { id: session.user.id }, select: { name: true } }),
   ])
@@ -43,7 +43,7 @@ export async function POST(req: NextRequest) {
     data: {
       userId: followeeId,
       type: "FOLLOW_REQUEST",
-      message: "requested to follow you",
+      message: `${follower?.name ?? "Someone"} started following you`,
       link: "/dashboard/friends",
       actorId: session.user.id,
     },

@@ -87,6 +87,12 @@ export async function GET(req: NextRequest) {
         WHERE (b."blockerId" = ${viewerId} AND b."blockedId" = p."partnerId")
            OR (b."blockedId" = ${viewerId} AND b."blockerId" = p."partnerId")
       )
+      AND NOT EXISTS (
+        SELECT 1
+        FROM "ConversationHide" h
+        WHERE h."viewerId" = ${viewerId}
+          AND h."partnerId" = p."partnerId"
+      )
       GROUP BY p."partnerId"
     ) t
     WHERE ${

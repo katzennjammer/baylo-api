@@ -237,6 +237,14 @@ export async function GET(
     review: isOwner ? await ownerReview(item) : null,
     viewer: {
       isOwner,
+      state: item.status,
+      action: isOwner
+        ? "EDIT"
+        : item.status === "IN_TRADE"
+          ? "IN_TRADE"
+          : item.status === "TRADED"
+            ? "TRADED"
+            : "SEND_OFFER",
       // An owner cannot offer on their own listing, and neither can anyone once
       // it has left AVAILABLE.
       canOffer: !isOwner && item.status === "AVAILABLE",

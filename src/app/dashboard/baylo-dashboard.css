@@ -1187,10 +1187,16 @@ img.photo-fill, .photo-img { object-fit: cover; display: block; border: 0; }
 .offer-card-status.accepted { color: #3C7143; }
 .offer-card-status.declined { color: #f0506e; }
 
-.chat-system-msg {
-  align-self: center; font-size: 12px; color: var(--muted); font-style: italic;
-  padding: 4px 8px; background: var(--surface-2); border-radius: 999px;
+.chat-status-card {
+  align-self: center; display: flex; flex-direction: column; gap: 3px;
+  max-width: 280px; padding: 10px 14px; border: 1px solid var(--border);
+  border-radius: var(--r-md); background: var(--surface-2); color: var(--text);
+  text-decoration: none; text-align: center;
 }
+.chat-status-card.actionable { border-color: color-mix(in oklab, var(--accent) 45%, transparent); cursor: pointer; }
+.chat-status-card.actionable:hover { background: color-mix(in oklab, var(--accent) 8%, var(--surface-2)); }
+.chat-status-card-title { font-size: 12.5px; font-weight: 700; }
+.chat-status-card-hint { font-size: 11px; color: var(--text-dim); }
 /* attachment buttons */
 .chat-attach-btn {
   width: 30px; height: 30px; border-radius: 50%; border: 0; flex-shrink: 0;

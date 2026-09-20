@@ -49,8 +49,8 @@ export type OfferAssessment =
       fee: number
       /** Who owes `fee`. null when there is none. See @/lib/trade-rules. */
       payer: FeePayer | null
-      offered: { id: string; title: string; userId: string }
-      target: { id: string; title: string; userId: string }
+      offered: { id: string; title: string; userId: string; images: string | null }
+      target: { id: string; title: string; userId: string; images: string | null }
     }
   | {
       ok: false
@@ -87,7 +87,7 @@ export async function assessOffer(
   const rows = await db.item.findMany({
     where: { id: { in: [offeredItemId, targetItemId] } },
     select: {
-      id: true, title: true, userId: true, status: true, valueLeaves: true, moderationHiddenAt: true,
+      id: true, title: true, userId: true, images: true, status: true, valueLeaves: true, moderationHiddenAt: true,
     },
   })
   const offered = rows.find((r) => r.id === offeredItemId)
@@ -146,8 +146,8 @@ export async function assessOffer(
     legality: terms.legality,
     fee: terms.fee,
     payer: terms.payer,
-    offered: { id: offered.id, title: offered.title, userId: offered.userId },
-    target: { id: target.id, title: target.title, userId: target.userId },
+    offered: { id: offered.id, title: offered.title, userId: offered.userId, images: offered.images },
+    target: { id: target.id, title: target.title, userId: target.userId, images: target.images },
   }
 }
 
