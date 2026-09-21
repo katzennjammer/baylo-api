@@ -82,6 +82,12 @@ interface CommentRow {
   createdAt: Date
   user: { id: string; name: string; avatar: string | null }
   _count?: { replies: number }
+  replies?: Array<{
+    id: string
+    content: string
+    createdAt: Date
+    user: { id: string; name: string; avatar: string | null }
+  }>
 }
 
 function wireComment(row: CommentRow) {
@@ -91,6 +97,13 @@ function wireComment(row: CommentRow) {
     createdAt: row.createdAt,
     user: row.user,
     replyCount: row._count?.replies ?? 0,
+    replies: row.replies?.map((reply) => ({
+      id: reply.id,
+      content: reply.content,
+      createdAt: reply.createdAt,
+      user: reply.user,
+      replyCount: 0,
+    })) ?? [],
   }
 }
 
@@ -143,6 +156,10 @@ export async function GET(
       createdAt: true,
       user: { select: COMMENT_AUTHOR_SELECT },
       _count: { select: { replies: true } },
+      replies: {
+        select: { id: true, content: true, createdAt: true, user: { select: COMMENT_AUTHOR_SELECT } },
+        orderBy: { createdAt: "asc" },
+      },
     },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take: limit + 1,
@@ -195,6 +212,21 @@ export async function POST(
       _count: { select: { replies: true } },
     },
   })
+
+  const owner = await prisma.item.findUnique({ where: { id: itemId }, select: { userId: true, title: true } })
+  if (owner && owner.userId !== viewerId) {
+    await prisma.notification.create({
+      data: {
+        userId: owner.userId,
+        type: "NEW_MESSAGE",
+        message: `commented on your listing "${owner.title}"`,
+        link: `/dashboard/tradeplace?item=${itemId}`,
+        actorId: viewerId,
+        entityType: "item",
+        entityId: itemId,
+      },
+    })
+  }
 
   // The card's whole stats block, for the same reason the like route sends it:
   // the client has a comment count on screen and this is the number that

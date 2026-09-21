@@ -4,6 +4,7 @@ import prisma from "@/lib/prisma"
 import TradeplaceClient from "./TradeplaceClient"
 import type { SerializedItem } from "./TradeplaceClient"
 import { preciseAccessItemIds, resolvePickup } from "@/lib/item-visibility"
+import { describeMessage } from "@/lib/chat-helpers"
 
 export const dynamic = "force-dynamic"
 export const revalidate = 0
@@ -163,17 +164,7 @@ export default async function TradeplacePage({
     .slice(0, 5)
     .map((m) => ({
       name: m.sender.name,
-      preview: (() => {
-        try {
-          const p = JSON.parse(m.content)
-          if (p.type === "offer") return "Sent a trade offer"
-          if (p.type === "offer_update") return `Offer ${String(p.status ?? "updated").toLowerCase()}`
-          if (p.type === "shared_post") return `Shared: ${p.postItem}`
-          if (p.type === "image") return "Sent an image"
-          if (p.type === "voice") return "Sent a voice message"
-        } catch { /* plain text */ }
-        return m.content.length > 60 ? m.content.slice(0, 60) + "…" : m.content
-      })(),
+      preview: describeMessage(m.content),
       time: timeAgo(m.createdAt),
       unread: !m.read,
       partnerId: m.senderId,

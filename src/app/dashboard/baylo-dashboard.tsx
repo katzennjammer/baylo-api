@@ -4,6 +4,7 @@
 // No hardcoded user data — new accounts start at zero everywhere.
 
 import React from "react";
+import { describeMessage } from "@/lib/chat-helpers"
 import { useRouter, usePathname } from "next/navigation";
 import { signOut } from "next-auth/react";
 import dynamic from "next/dynamic";
@@ -1141,10 +1142,12 @@ function CommentBubble({ c, postId, onReply, isReply = false }: {
 
   return (
     <div className={"comment-item" + (isReply ? " reply" : "")}>
-      <Avatar name={c.user.name} size={isReply ? 28 : 34} />
+      <button className="comment-author-link" onClick={() => { window.location.href = `/user?id=${encodeURIComponent(c.user.id)}` }} aria-label={`Open ${c.user.name}'s profile`}>
+        <Avatar name={c.user.name} size={isReply ? 28 : 34} />
+      </button>
       <div className="comment-body">
         <div className="comment-bubble">
-          <span className="comment-author">{c.user.name}</span>
+          <button className="comment-author comment-author-link" onClick={() => { window.location.href = `/user?id=${encodeURIComponent(c.user.id)}` }}>{c.user.name}</button>
           <span className="comment-text">{c.content}</span>
         </div>
         <div className="comment-meta">
@@ -2194,17 +2197,7 @@ export default function BayloDashboard({
       window.dispatchEvent(new CustomEvent("baylo:msg", { detail: data }));
       setLiveMsgs((prev) => {
         const partnerId = data.senderId;
-        const preview = (() => {
-          try {
-            const p = JSON.parse(data.content);
-            if (p.type === "offer") return "Sent a trade offer";
-            if (p.type === "offer_update") return "Updated offer status";
-            if (p.type === "shared_post") return `Shared: ${p.postItem}`;
-            if (p.type === "image") return "Sent an image";
-            if (p.type === "voice") return "Sent a voice message";
-          } catch { /* plain text */ }
-          return data.content.slice(0, 60);
-        })();
+        const preview = describeMessage(data.content);
         const idx = prev.findIndex((m) => m.partnerId === partnerId);
         if (idx !== -1) {
           const updated = [...prev];

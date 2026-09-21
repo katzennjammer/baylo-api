@@ -68,6 +68,12 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     if (!parsed.ok) return parsed.response
     const { content, parentId } = parsed.data
 
+    const post = await prisma.item.findUnique({
+      where: { id: postId },
+      select: { userId: true, title: true },
+    })
+    if (!post) return NextResponse.json({ error: "Listing not found" }, { status: 404 })
+
     const comment = await prisma.postComment.create({
       data: {
         postId,
@@ -86,6 +92,20 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         },
       },
     })
+
+    if (post.userId !== session.user.id) {
+      await prisma.notification.create({
+        data: {
+          userId: post.userId,
+          type: "NEW_MESSAGE",
+          message: `commented on your listing "${post.title}"`,
+          link: `/dashboard/tradeplace?item=${postId}`,
+          actorId: session.user.id,
+          entityType: "item",
+          entityId: postId,
+        },
+      })
+    }
 
     return NextResponse.json({
       id: comment.id,

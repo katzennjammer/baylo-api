@@ -17,6 +17,7 @@ import type { ChatWindow, ConfirmableTrade } from "../_shell/ChatDock";
 
 import { getPusherClient } from "@/lib/pusher-client";
 import { factorForCategory, computeGreenScore } from "@/lib/impact-constants";
+import { describeMessage } from "@/lib/chat-helpers";
 
 const ListingsMap      = dynamic(() => import("./ListingsMap"),              { ssr: false });
 const PickupMiniMap    = dynamic(() => import("./PickupMiniMap"),            { ssr: false });
@@ -885,17 +886,7 @@ export default function TradeplaceClient({ items: initialItems, me, followReqCou
     channel.bind("new-message", (data: { content: string; senderId: string; senderName: string; id: string; createdAt: string }) => {
       window.dispatchEvent(new CustomEvent("baylo:msg", { detail: data }));
       setLiveMsgs((prev) => {
-        const preview = (() => {
-          try {
-            const p = JSON.parse(data.content);
-            if (p.type === "offer") return "Sent a trade offer";
-            if (p.type === "offer_update") return "Updated offer status";
-            if (p.type === "shared_post") return `Shared: ${p.postItem}`;
-            if (p.type === "image") return "Sent an image";
-            if (p.type === "voice") return "Sent a voice message";
-          } catch { /* plain text */ }
-          return data.content.slice(0, 60);
-        })();
+        const preview = describeMessage(data.content);
         const idx = prev.findIndex((m) => m.partnerId === data.senderId);
         if (idx !== -1) {
           const updated = [...prev];

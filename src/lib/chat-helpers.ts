@@ -31,6 +31,26 @@ export function tryParseMsg(content: string): AnyMsgPayload | null {
   return null
 }
 
+export function describeMessage(content: string): string {
+  const payload = tryParseMsg(content)
+  if (!payload) {
+    const flat = content.replace(/\s+/g, " ").trim()
+    return flat.length > 60 ? `${flat.slice(0, 60)}…` : flat
+  }
+  switch (payload.type) {
+    case "offer": return "Sent a trade offer"
+    case "offer_update": {
+      const status = typeof (payload as { status?: unknown }).status === "string" ? (payload as { status: string }).status.toLowerCase() : "updated"
+      return status === "accepted" ? "Offer accepted" : status === "declined" ? "Offer declined" : "Offer updated"
+    }
+    case "trade_completed": return "Trade completed"
+    case "image": return "Sent an image"
+    case "voice": return "Sent a voice message"
+    case "shared_post": return "Shared a listing"
+    default: return "Sent a message"
+  }
+}
+
 export function classifyUploadError(status: number, serverMsg?: string): string {
   if (status === 413) return serverMsg || "File too large"
   if (status === 415) return "Unsupported file format"

@@ -84,15 +84,18 @@ export function OfferCard({ payload, myId, partnerId: _partnerId, isSender, onAc
   )
 }
 
-export function TradeStatusCard({ update }: { update: OfferUpdatePayload }) {
+export function TradeStatusCard({ update, viewerId }: { update: OfferUpdatePayload; viewerId: string }) {
   const accepted = update.status === "ACCEPTED"
+  const actorId = (update as OfferUpdatePayload & { accepterId?: string }).accepterId
+  const actorName = (update as OfferUpdatePayload & { accepterName?: string }).accepterName ?? update.actorName
+  const proposerName = (update as OfferUpdatePayload & { proposerName?: string }).proposerName ?? "your partner"
   const label = accepted
-    ? `${update.actorName} accepted the offer`
+    ? actorId === viewerId ? `You accepted ${proposerName}'s offer` : `${actorName} accepted your offer`
     : update.status === "WITHDRAWN"
-      ? `${update.actorName} withdrew the offer`
+      ? actorId === viewerId ? "You withdrew the offer" : `${actorName} withdrew the offer`
       : update.status === "EXPIRED"
         ? "The offer expired"
-        : `${update.actorName} declined the offer`
+        : actorId === viewerId ? "You declined the offer" : `${actorName} declined your offer`
 
   return (
     <a
@@ -103,6 +106,15 @@ export function TradeStatusCard({ update }: { update: OfferUpdatePayload }) {
       <span className="chat-status-card-title">{label}</span>
       {accepted && update.tradeId ? <span className="chat-status-card-hint">Open Trades to arrange the meetup</span> : null}
     </a>
+  )
+}
+
+export function CompletedTradeStatus({ tradeId, partnerName }: { tradeId?: string; partnerName: string }) {
+  return (
+    <div className="chat-status-card">
+      <span className="chat-status-card-title">Trade completed</span>
+      {tradeId ? <a className="chat-status-card-hint" href={`/rate-trade?id=${encodeURIComponent(tradeId)}`}>Rate {partnerName}</a> : null}
+    </div>
   )
 }
 

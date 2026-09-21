@@ -4,6 +4,7 @@ import prisma from "@/lib/prisma"
 import { CO2_PER_CATEGORY, computeImpactData } from "@/lib/impact-constants"
 import { isLeavesOnlyTrade } from "@/lib/trade-format"
 import TradesClient from "./TradesClient"
+import { describeMessage } from "@/lib/chat-helpers"
 
 const CATEGORY_HASHTAG: Record<string, string> = {
   ELECTRONICS: "#Electronics",
@@ -279,17 +280,7 @@ export default async function TradesPage() {
     .slice(0, 5)
     .map((m) => ({
       name:      m.sender.name,
-      preview:   (() => {
-        try {
-          const p = JSON.parse(m.content)
-          if (p.type === "offer") return "Sent a trade offer"
-          if (p.type === "offer_update") return `Offer ${String(p.status ?? "updated").toLowerCase()}`
-          if (p.type === "shared_post") return `Shared: ${p.postItem}`
-          if (p.type === "image") return "Sent an image"
-          if (p.type === "voice") return "Sent a voice message"
-        } catch { /* plain text */ }
-        return m.content.length > 60 ? m.content.slice(0, 60) + "…" : m.content
-      })(),
+      preview:      describeMessage(m.content),
       time:      timeAgo(m.createdAt),
       unread:    !m.read,
       partnerId: m.senderId,

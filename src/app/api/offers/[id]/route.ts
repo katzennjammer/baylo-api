@@ -8,6 +8,7 @@ import { enforceAcceptTrade } from "@/lib/reputation-gate"
 import { assessOffer, refusalStatus } from "@/lib/offer-check"
 import { holdBridgeFee, releaseBridgeFee } from "@/lib/bridge-fee"
 import { TRADING_POLICY_VERSION } from "@/lib/trade-rules"
+import { createSystemMessage } from "@/lib/system-message"
 
 /**
  * PATCH /api/offers/[id] — the RECEIVER accepts or declines.
@@ -404,6 +405,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       data: {
         userId: offer.senderId,
         type: action === "accept" ? "TRADE_ACCEPTED" : "TRADE_REJECTED",
+        read: false,
         message:
           action === "accept"
             ? `accepted your offer on "${offer.post.title}"`
@@ -434,29 +436,30 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       tradeId: tradeRecord?.id ?? null,
       status: newStatus,
       actorName,
+      accepterId: offer.receiverId,
+      proposerName: offer.sender?.name ?? "They",
+      accepterName: actorName,
       offeredItemTitle: offeredItemForCard?.title ?? tradeRecord?.offeredItemTitle ?? "Item",
       requestedItemTitle: offer.post.title,
       offeredItemImage: firstImage(offeredItemForCard?.images),
       requestedItemImage: firstImage(offer.post.images),
     }
-    const senderSystemContent = JSON.stringify({ ...updatePayload, partnerName: actorName })
-    const receiverSystemContent = JSON.stringify({ ...updatePayload, partnerName: offer.sender?.name ?? "They" })
-    const systemMsg = await prisma.message.create({
-      data: {
-        senderId: session.user.id,
-        receiverId: offer.senderId,
-        content: senderSystemContent,
-      },
+    const senderSystemContent = JSON.stringify(updatePayload)
+    const receiverSystemContent = JSON.stringify(updatePayload)
+    const systemMsg = await createSystemMessage({
+      eventKey: `offer-update:${offerId}:${newStatus}:${offer.senderId}`,
+      senderId: session.user.id,
+      receiverId: offer.senderId,
+      tradeId: tradeRecord?.id,
+      content: senderSystemContent,
     })
-    const counterpartMsg = action === "accept"
-      ? await prisma.message.create({
-          data: {
-            senderId: offer.senderId,
-            receiverId: offer.receiverId,
-            content: receiverSystemContent,
-          },
-        })
-      : null
+    const counterpartMsg = await createSystemMessage({
+      eventKey: `offer-update:${offerId}:${newStatus}:${offer.receiverId}`,
+      senderId: offer.senderId,
+      receiverId: offer.receiverId,
+      tradeId: tradeRecord?.id,
+      content: receiverSystemContent,
+    })
 
     const senderSystemPayload = {
       id: systemMsg.id,
@@ -497,10 +500,10 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       })
       .then(() => Promise.all([
         pusher.trigger(`private-user-${offer.senderId}`, "new-message", senderSystemPayload),
-        ...(action === "accept" && receiverSystemPayload ? [
+        ...(receiverSystemPayload ? [
           pusher.trigger(`private-user-${offer.receiverId}`, "new-message", receiverSystemPayload),
         ] : []),
-        ...(action === "accept" ? [
+        ...(receiverSystemPayload ? [
           pusher.trigger(`private-user-${offer.receiverId}`, "offer-updated", {
             offerId,
             status: newStatus,

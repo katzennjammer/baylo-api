@@ -7,7 +7,7 @@ import { subscribeChannel, unsubscribeChannel } from "@/lib/pusher-client"
 import AvatarImage from "@/components/AvatarImage"
 import { Icon } from "@/app/dashboard/_shell/TopNav"
 import ReportBlockMenu from "@/components/ReportBlockMenu"
-import { OfferCard, SharedPostCard, TradeStatusCard, VoicePlayer, ChatImageBubble } from "@/components/chat-renderers"
+import { CompletedTradeStatus, OfferCard, SharedPostCard, TradeStatusCard, VoicePlayer, ChatImageBubble } from "@/components/chat-renderers"
 import {
   tryParseMsg, uploadChatImage,
   type OfferPayload, type OfferUpdatePayload,
@@ -348,7 +348,12 @@ export default function MessagesClient({
 
                   if (parsed?.type === "offer_update") {
                     const up = parsed as OfferUpdatePayload
-                    return <TradeStatusCard key={msg.id} update={up} />
+                    return <TradeStatusCard key={msg.id} update={up} viewerId={currentUserId} />
+                  }
+
+                  if (parsed?.type === "trade_completed") {
+                    const completed = parsed as { tradeId?: unknown; partnerName?: unknown }
+                    return <CompletedTradeStatus key={msg.id} tradeId={typeof completed.tradeId === "string" ? completed.tradeId : undefined} partnerName={typeof completed.partnerName === "string" ? completed.partnerName : selected.partnerName} />
                   }
 
                   if (parsed?.type === "shared_post") {

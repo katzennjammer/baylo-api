@@ -15,7 +15,7 @@ import type { ChatWindow } from "../_shell/ChatDock"
 export interface ShelfItem {
   id:         string
   title:      string
-  status:     "AVAILABLE" | "OWNED"
+  status:     "AVAILABLE" | "OWNED" | "TRADED"
   image:      string | null
   condition:  string
   leaves:     number | null
@@ -105,6 +105,7 @@ function ShelfCard({
 }) {
   const [imgErr, setImgErr] = useState(false)
   const isOwned = item.status === "OWNED"
+  const isTraded = item.status === "TRADED"
   const conditionLabel = item.condition
     .replace(/_/g, " ")
     .toLowerCase()
@@ -112,17 +113,18 @@ function ShelfCard({
 
   return (
     <div
-      onClick={!isOwned ? onClick : undefined}
+      onClick={!isOwned && !isTraded ? onClick : undefined}
       style={{
         borderRadius: 16, overflow: "hidden",
         background: "#fff",
         boxShadow: "0 2px 12px rgba(0,0,0,0.07), 0 1px 3px rgba(0,0,0,0.04)",
         display: "flex", flexDirection: "column",
-        cursor: !isOwned ? "pointer" : "default",
+        cursor: !isOwned && !isTraded ? "pointer" : "default",
+        opacity: isTraded ? 0.62 : 1,
         transition: "box-shadow .15s, transform .15s",
       }}
       onMouseEnter={(e) => {
-        if (!isOwned) {
+        if (!isOwned && !isTraded) {
           e.currentTarget.style.boxShadow = "0 6px 24px rgba(0,0,0,0.12)"
           e.currentTarget.style.transform = "translateY(-2px)"
         }
@@ -171,15 +173,15 @@ function ShelfCard({
           display: "inline-flex", alignItems: "center", gap: 6,
           background: "#fff", borderRadius: 999, padding: "5px 12px",
           boxShadow: "0 2px 8px rgba(0,0,0,0.14)", fontSize: 13, fontWeight: 500,
-          color: isOwned ? "#92400E" : "#1A3520",
+          color: isOwned ? "#92400E" : isTraded ? "#4B5563" : "#1A3520",
           userSelect: "none",
         }}>
           <span style={{
             width: 8, height: 8, borderRadius: "50%",
-            background: isOwned ? "#F59E0B" : "#3C7143",
+            background: isOwned ? "#F59E0B" : isTraded ? "#6B7280" : "#3C7143",
             flexShrink: 0,
           }} />
-          {isOwned ? "In inventory" : "Available"}
+          {isOwned ? "In inventory" : isTraded ? "Traded" : "Available"}
         </div>
       </div>
 

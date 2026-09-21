@@ -1,7 +1,7 @@
 "use client";
 import React from "react";
 import { Icon, Avatar } from "./TopNav";
-import { OfferCard, SharedPostCard, TradeStatusCard, VoicePlayer, ChatImageBubble } from "@/components/chat-renderers";
+import { CompletedTradeStatus, OfferCard, SharedPostCard, TradeStatusCard, VoicePlayer, ChatImageBubble } from "@/components/chat-renderers";
 import {
   tryParseMsg, classifyUploadError, uploadChatImage, fmtDur,
   type ImagePayload, type VoicePayload, type OfferPayload,
@@ -493,7 +493,11 @@ function ChatWindowPanel({
               }
               if (parsed?.type === "offer_update") {
                 const up = parsed as OfferUpdatePayload;
-                return <TradeStatusCard key={m.id} update={up} />;
+                return <TradeStatusCard key={m.id} update={up} viewerId={myId} />;
+              }
+              if (parsed?.type === "trade_completed") {
+                const completed = parsed as { tradeId?: unknown; partnerName?: unknown };
+                return <CompletedTradeStatus key={m.id} tradeId={typeof completed.tradeId === "string" ? completed.tradeId : undefined} partnerName={typeof completed.partnerName === "string" ? completed.partnerName : win.name} />;
               }
               if (parsed?.type === "shared_post") {
                 return <SharedPostCard key={m.id} sp={parsed as SharedPostPayload} mine={mine} />;

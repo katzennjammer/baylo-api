@@ -10,6 +10,7 @@ import { enforceRateLimit } from "@/lib/rate-limit-config"
 import { payBridgeFee } from "@/lib/bridge-fee"
 import { awardTradeRewards, rewardDenialCopy, type RewardOutcome } from "@/lib/trade-reward"
 import { resolveMeetupHub } from "@/lib/safe-zones"
+import { createSystemMessage } from "@/lib/system-message"
 
 export async function POST(
   req: NextRequest,
@@ -448,7 +449,33 @@ export async function POST(
     const earned = (o: RewardOutcome | undefined) =>
       o && o.amount > 0 ? ` +${o.amount} Leaves earned.` : ""
 
+    const completionMessages = await Promise.all([
+      createSystemMessage({
+        eventKey: `trade-completed:${tradeId}:${trade.senderId}`,
+        senderId: trade.receiverId,
+        receiverId: trade.senderId,
+        tradeId,
+        content: JSON.stringify({ type: "trade_completed", tradeId, partnerName: trade.receiver.name }),
+      }),
+      createSystemMessage({
+        eventKey: `trade-completed:${tradeId}:${trade.receiverId}`,
+        senderId: trade.senderId,
+        receiverId: trade.receiverId,
+        tradeId,
+        content: JSON.stringify({ type: "trade_completed", tradeId, partnerName: trade.sender.name }),
+      }),
+    ])
+
     void Promise.allSettled([
+      ...completionMessages.map((message) =>
+        pusher.trigger(`private-user-${message.receiverId}`, "new-message", {
+          id: message.id,
+          content: message.content,
+          senderId: message.senderId,
+          receiverId: message.receiverId,
+          createdAt: message.createdAt.toISOString(),
+        }),
+      ),
       prisma.notification.create({
         data: {
           userId: trade.senderId, type: "TRADE_COMPLETED",

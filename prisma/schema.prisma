@@ -616,6 +616,7 @@ model TradeRequest {
 model Message {
   id        String   @id @default(cuid())
   content   String   @db.Text
+  systemEventKey String? @unique
   read      Boolean  @default(false)
   createdAt DateTime @default(now())
 

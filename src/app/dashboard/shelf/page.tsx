@@ -4,6 +4,7 @@ import prisma from "@/lib/prisma"
 import { computeImpactData } from "@/lib/impact-constants"
 import ShelfClient from "./ShelfClient"
 import type { ShelfItem } from "./ShelfClient"
+import { describeMessage } from "@/lib/chat-helpers"
 
 export const dynamic = "force-dynamic"
 export const revalidate = 0
@@ -71,7 +72,7 @@ export default async function ShelfPage() {
       select: { name: true, avatar: true },
     }),
     prisma.item.findMany({
-      where: { userId: myId, status: { in: ["AVAILABLE", "OWNED"] } },
+      where: { userId: myId, status: { in: ["AVAILABLE", "OWNED", "TRADED"] } },
       orderBy: { createdAt: "desc" },
     }),
     prisma.message.findMany({
@@ -145,7 +146,7 @@ export default async function ShelfPage() {
   const serializedItems: ShelfItem[] = items.map(item => ({
     id:         item.id,
     title:      item.title,
-    status:     item.status as "AVAILABLE" | "OWNED",
+    status:     item.status as "AVAILABLE" | "OWNED" | "TRADED",
     image:      firstImage(item.images),
     condition:  item.condition as string,
     leaves:     item.valueLeaves,
@@ -165,17 +166,7 @@ export default async function ShelfPage() {
     .slice(0, 5)
     .map(m => ({
       name:      m.sender.name,
-      preview:   (() => {
-        try {
-          const p = JSON.parse(m.content)
-          if (p.type === "offer") return "Sent a trade offer"
-          if (p.type === "offer_update") return `Offer ${String(p.status ?? "updated").toLowerCase()}`
-          if (p.type === "shared_post") return `Shared: ${p.postItem}`
-          if (p.type === "image") return "Sent an image"
-          if (p.type === "voice") return "Sent a voice message"
-        } catch { /* plain text */ }
-        return m.content.length > 60 ? m.content.slice(0, 60) + "…" : m.content
-      })(),
+      preview: describeMessage(m.content),
       time:      timeAgo(m.createdAt),
       unread:    !m.read,
       partnerId: m.senderId,

@@ -3,21 +3,10 @@ import { auth } from "@root/auth"
 import prisma from "@/lib/prisma"
 import DashShell from "../_shell/DashShell"
 import MessagesClient from "./MessagesClient"
+import { describeMessage } from "@/lib/chat-helpers"
 
 export const dynamic = "force-dynamic"
 export const revalidate = 0
-
-function previewContent(content: string): string {
-  try {
-    const p = JSON.parse(content)
-    if (p.type === "offer") return "Sent a trade offer"
-    if (p.type === "offer_update") return `Offer ${String(p.status ?? "updated").toLowerCase()}`
-    if (p.type === "shared_post") return `Shared: ${p.postItem}`
-    if (p.type === "image") return "Sent an image"
-    if (p.type === "voice") return "Sent a voice message"
-  } catch { /* plain text */ }
-  return content.slice(0, 60)
-}
 
 export default async function MessagesPage({
   searchParams,
@@ -71,7 +60,7 @@ export default async function MessagesPage({
               partnerId: partner.id,
               partnerName: partner.name,
               partnerAvatar: partner.avatar,
-              lastMessage: previewContent(msg.content),
+              lastMessage: describeMessage(msg.content),
               lastMessageDate: msg.createdAt.toISOString(),
               unread: !msg.read && msg.receiverId === userId,
             }
