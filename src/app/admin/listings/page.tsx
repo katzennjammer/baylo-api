@@ -51,7 +51,7 @@ export default async function ListingsPage({ searchParams }: Props) {
   const me = session?.user?.id
     ? await prisma.user.findUnique({ where: { id: session.user.id }, select: { role: true } })
     : null
-  const canAct = me?.role === "MODERATOR" || me?.role === "ADMIN"
+  const canAct = me?.role === "ADMIN"
 
   const listings = await prisma.item.findMany({
     where: {
