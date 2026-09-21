@@ -90,7 +90,7 @@ export async function POST(req: Request) {
       userId:  revieweeId,
       actorId: myId,
       type:    "NEW_REVIEW",
-      message: `${reviewer?.name ?? "Someone"} left you a ${starsInt}-star review`,
+      message: `left you a ${starsInt}-star review`,
       link:    "/profile",
     },
   })

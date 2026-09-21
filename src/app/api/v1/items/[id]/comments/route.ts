@@ -78,6 +78,7 @@ const COMMENT_AUTHOR_SELECT = { id: true, name: true, avatar: true } as const
 
 interface CommentRow {
   id: string
+  parentId: string | null
   content: string
   createdAt: Date
   user: { id: string; name: string; avatar: string | null }
@@ -93,6 +94,7 @@ interface CommentRow {
 function wireComment(row: CommentRow) {
   return {
     id: row.id,
+    parentId: row.parentId,
     content: row.content,
     createdAt: row.createdAt,
     user: row.user,
@@ -152,6 +154,7 @@ export async function GET(
     },
     select: {
       id: true,
+      parentId: true,
       content: true,
       createdAt: true,
       user: { select: COMMENT_AUTHOR_SELECT },
@@ -206,6 +209,7 @@ export async function POST(
     data: { postId: itemId, userId: viewerId, content, parentId: parentId ?? null },
     select: {
       id: true,
+      parentId: true,
       content: true,
       createdAt: true,
       user: { select: COMMENT_AUTHOR_SELECT },

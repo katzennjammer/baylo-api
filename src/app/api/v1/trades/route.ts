@@ -163,7 +163,10 @@ export async function GET(req: NextRequest) {
       requestedItemId: true,
       offeredItem: { select: ITEM_BRIEF },
       requestedItem: { select: ITEM_BRIEF },
-      reviews: { where: { reviewerId: viewerId }, select: { rating: true } },
+      reviews: {
+        where: { OR: [{ reviewerId: viewerId }, { revieweeId: viewerId }] },
+        select: { reviewerId: true, rating: true },
+      },
       // Code state, so canConfirm is a real answer rather than a guess from
       // status alone. At most two rows per trade.
       swapConfirmationCodes: { select: { userId: true, used: true, expiresAt: true } },
@@ -198,6 +201,15 @@ export async function GET(req: NextRequest) {
   })
 
   const now = Date.now()
+  const rewardRows = await prisma.leafTransaction.findMany({
+    where: {
+      tradeId: { in: page.map((trade) => trade.id) },
+      userId: viewerId,
+      type: "TRADE_REWARD",
+    },
+    select: { tradeId: true, amount: true },
+  })
+  const rewards = new Map(rewardRows.map((row) => [row.tradeId, row.amount]))
 
   const trades = page.map((t) => {
     const isSender = t.senderId === viewerId
@@ -223,7 +235,14 @@ export async function GET(req: NextRequest) {
       bridgeFeeLeaves: t.bridgeFeeLeaves,
       bridgeFeePaidBySender: t.bridgeFeePaidBySender,
       counterparty,
-      myReview: t.reviews[0] ? { rating: t.reviews[0].rating } : null,
+      myReview: t.reviews.find((review) => review.reviewerId === viewerId)
+        ? { rating: t.reviews.find((review) => review.reviewerId === viewerId)!.rating }
+        : null,
+      receivedReview: t.reviews.find((review) => review.reviewerId !== viewerId)
+        ? { rating: t.reviews.find((review) => review.reviewerId !== viewerId)!.rating }
+        : null,
+      rewardLeaves: rewards.get(t.id) ?? null,
+      codesMatchedAt: t.status === "COMPLETED" ? t.updatedAt : null,
       /*
        * ── SUPPRESSED ONLY WHEN IT IS ACTUALLY A PLACEHOLDER ────────────────
        *

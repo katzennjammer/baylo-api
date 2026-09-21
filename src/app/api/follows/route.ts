@@ -32,18 +32,15 @@ export async function POST(req: NextRequest) {
   })
   if (existing) return NextResponse.json(existing)
 
-  const [follow, follower] = await Promise.all([
-    prisma.follow.create({
-      data: { followerId: session.user.id, followeeId, status: "ACCEPTED" },
-    }),
-    prisma.user.findUnique({ where: { id: session.user.id }, select: { name: true } }),
-  ])
+  const follow = await prisma.follow.create({
+    data: { followerId: session.user.id, followeeId, status: "ACCEPTED" },
+  })
 
   await prisma.notification.create({
     data: {
       userId: followeeId,
       type: "FOLLOW_REQUEST",
-      message: `${follower?.name ?? "Someone"} started following you`,
+      message: "started following you",
       link: "/dashboard/friends",
       actorId: session.user.id,
     },

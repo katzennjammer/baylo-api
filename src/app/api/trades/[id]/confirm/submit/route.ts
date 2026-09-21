@@ -479,7 +479,7 @@ export async function POST(
       prisma.notification.create({
         data: {
           userId: trade.senderId, type: "TRADE_COMPLETED",
-          message: `Swap with ${trade.receiver.name} completed! ${trade.offeredItem.title} ↔ ${trade.requestedItem.title}. Rate your trade in the app.${earned(rewards?.sender)}`,
+          message: `completed! ${trade.offeredItem.title} ↔ ${trade.requestedItem.title}. Rate your trade in the app.${earned(rewards?.sender)}`,
           link: "/dashboard/trades", actorId: trade.receiverId,
           entityType: "trade", entityId: tradeId,
         },
@@ -487,7 +487,7 @@ export async function POST(
       prisma.notification.create({
         data: {
           userId: trade.receiverId, type: "TRADE_COMPLETED",
-          message: `Swap with ${trade.sender.name} completed! ${trade.offeredItem.title} ↔ ${trade.requestedItem.title}. Rate your trade in the app.${earned(rewards?.receiver)}`,
+          message: `completed! ${trade.offeredItem.title} ↔ ${trade.requestedItem.title}. Rate your trade in the app.${earned(rewards?.receiver)}`,
           link: "/dashboard/trades", actorId: trade.senderId,
           entityType: "trade", entityId: tradeId,
         },

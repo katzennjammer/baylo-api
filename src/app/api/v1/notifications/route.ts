@@ -49,6 +49,16 @@ const querySchema = z.strictObject({
 
 const ACTOR_BRIEF = { id: true, name: true, avatar: true } as const
 
+function firstImage(raw: string | null | undefined): string | null {
+  if (!raw) return null
+  try {
+    const images: unknown = JSON.parse(raw)
+    return Array.isArray(images) && typeof images[0] === "string" ? images[0] : null
+  } catch {
+    return null
+  }
+}
+
 export async function GET(req: NextRequest) {
   const session = await resolveSession()
   if (!session?.user?.id) return unauthenticated()
@@ -80,6 +90,18 @@ export async function GET(req: NextRequest) {
     take: limit + 1,
   })
 
+  const itemIds = rows
+    .filter((row) => row.entityType === "item" && row.entityId)
+    .map((row) => row.entityId as string)
+  const itemImages = new Map<string, string | null>()
+  if (itemIds.length > 0) {
+    const items = await prisma.item.findMany({
+      where: { id: { in: itemIds } },
+      select: { id: true, images: true },
+    })
+    for (const item of items) itemImages.set(item.id, firstImage(item.images))
+  }
+
   const { page, nextCursor } = paginate(rows, limit, (r) => encodeCursor(r.createdAt, r.id))
 
   // The unread total, and NOT `page.filter(r => !r.read).length`. The screen
@@ -99,6 +121,7 @@ export async function GET(req: NextRequest) {
         createdAt: n.createdAt.toISOString(),
         entityType: n.entityType,
         entityId: n.entityId,
+        itemImage: n.entityType === "item" && n.entityId ? itemImages.get(n.entityId) ?? null : null,
         actor: n.actor ? { id: n.actor.id, name: n.actor.name, avatar: n.actor.avatar } : null,
       })),
       unreadCount,

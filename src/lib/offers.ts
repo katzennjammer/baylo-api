@@ -123,7 +123,7 @@ export async function expireStaleOffers(
       bridgeFeeLeaves: true,
       offeredBracket: true,
       targetBracket: true,
-      post: { select: { title: true } },
+      post: { select: { id: true, title: true } },
     },
   })
   if (stale.length === 0) return 0
@@ -173,13 +173,15 @@ export async function expireStaleOffers(
           userId: offer.senderId,
           type: "OFFER_EXPIRED",
           message:
-            `your offer on "${offer.post.title}" expired after ${OFFER_EXPIRY_DAYS} days` +
+            `Your offer on "${offer.post.title}" expired after ${OFFER_EXPIRY_DAYS} days` +
             (fee > 0
               ? ` — your ${fee}-Leaf bridging fee is back in your balance`
               : offer.offeredLeaves
                 ? ` — ${offer.offeredLeaves} Leaves are back in your balance`
                 : ""),
           link: `/dashboard/tradeplace`,
+          entityType: "item",
+          entityId: offer.post.id,
         },
       })
     } catch {
