@@ -69,7 +69,12 @@ export default async function AdminLayout({ children }: { children: ReactNode })
         <nav aria-label="Admin navigation" style={{ display: "flex", alignItems: "center", gap: 4, flex: 1, height: "100%", overflowX: "auto" }}>
           <AdminLink href="/admin/dashboard" label="Overview" />
           <AdminLink href="/admin" label="Reports" />
-          <AdminLink href="/admin/id-verification" label="ID checks" />
+          {/* Two queues behind one entry: government IDs and business
+              documents, switched by the tab strip on both pages. They are one
+              job — "is this document real" — with different retention rules
+              and different consequences, which is why they are separate routes
+              rather than one filtered list. See DocumentQueueTabs. */}
+          <AdminLink href="/admin/id-verification" label="Documents" />
           <AdminLink href="/admin/review-queue" label="Review queue" />
           <AdminLink href="/admin/appeals" label="Appeals" />
           <AdminLink href="/admin/users" label="Users" />

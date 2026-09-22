@@ -236,6 +236,19 @@ export type AdminActionKind =
   | "ACHIEVEMENT_UPDATED"
   | "ACHIEVEMENT_DEACTIVATED"
   | "ACHIEVEMENT_REACTIVATED"
+  // Business-document reviews (23 Sep 2026). The same KIND of entry as the ID
+  // pair above -- a decision about who somebody is, granting rather than
+  // removing -- with one difference worth knowing when reading the log: a
+  // rejection here takes nothing away. A refused ID means the account still
+  // cannot post; a refused business document means the organisation carries on
+  // trading without a checkmark. So an ORGANIZATION_REJECTED row is never the
+  // cause of anything that follows it, which an ID_VERIFICATION_REJECTED row
+  // very often is.
+  //
+  // As with the ID pair, this row is the only durable record: the document is
+  // destroyed by the same transaction that writes this.
+  | "ORGANIZATION_VERIFIED"
+  | "ORGANIZATION_REJECTED"
 
 export type AdminTargetType =
   | "REPORT"
@@ -246,6 +259,10 @@ export type AdminTargetType =
   | "TRADE"
   | "LISTING_APPEAL"
   | "ACHIEVEMENT"
+  // The Organization row, never its backing User row. A reader following this
+  // target id wants the review and its document history, not an account page
+  // that shows a synthetic row with no password and no email anybody reads.
+  | "ORGANIZATION"
 
 /** A Prisma client or a transaction client. */
 type Db = PrismaClient | Prisma.TransactionClient

@@ -1,5 +1,4 @@
 import type { PrismaClient } from "@/generated/prisma/client"
-import { valueCap } from "@/lib/trade-rules"
 import type { ValuationOutcome } from "@/lib/valuation-server"
 
 /**
