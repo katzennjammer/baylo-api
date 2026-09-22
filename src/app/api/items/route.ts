@@ -1,5 +1,9 @@
 import { NextRequest, NextResponse } from "next/server"
+import { headers } from "next/headers"
 import { resolveSession } from "@/lib/api-auth"
+import { ORG_CONTEXT_HEADER, resolveActingIdentity } from "@/lib/organizations"
+import { decidePerishableValue } from "@/lib/perishable"
+import { notifyCategoryMatchesAsync } from "@/lib/category-match"
 import prisma from "@/lib/prisma"
 import { awardTaskAsync } from "@/lib/tasks"
 import { createItemSchema, parseBody, categorySchema } from "@/lib/validation"
@@ -116,6 +120,37 @@ export async function POST(req: NextRequest) {
     if (!parsed.ok) return parsed.response
     const body = parsed.data
 
+    // ── Acting as an organisation ───────────────────────────────────────────
+    //
+    // AFTER the ID gate, deliberately. The gate is about the PERSON — a real,
+    // once-usable government ID behind the act of listing — and acting as an
+    // organisation does not launder that requirement. Staff who have not
+    // verified their own ID cannot post, for the org or for themselves.
+    //
+    // The membership is re-read from the database here, on this request; it is
+    // not a claim on the token. See the header of @/lib/organizations for why.
+    const acting = await resolveActingIdentity(
+      prisma,
+      session.user.id,
+      (await headers()).get(ORG_CONTEXT_HEADER),
+    )
+    if (!acting.ok) {
+      return NextResponse.json(
+        {
+          error:
+            acting.reason === "membership_pending"
+              ? "Accept the invitation before posting for this organisation"
+              : "You are not a member of that organisation",
+          code: "ORG_CONTEXT_REFUSED",
+        },
+        { status: 403 },
+      )
+    }
+    // The AUTHOR. The org's backing row when acting as one, the person
+    // otherwise — the same `userId` column either way, which is the whole
+    // reason an organisation is a User row.
+    const authorId = acting.acting.actingUserId
+
     const resolvedTitle = body.title ?? body.wantedItem!
 
     // ── Valuation ───────────────────────────────────────────────────────────
@@ -132,6 +167,24 @@ export async function POST(req: NextRequest) {
     // `valueLeaves` are both populated on every listing created from here and
     // the divergence between them is measurable.
     const valued = await decideItemValue(body.category, body.condition, body.valueLeaves)
+
+    // ── The perishable rule ─────────────────────────────────────────────────
+    //
+    // A perishable does not WAIT, and it does not get a free bracket. Where
+    // decideItemValue() would have said PENDING_REVIEW, the value is clamped to
+    // the same ceiling anybody may raise to unreviewed and the listing goes
+    // live at once. Read the header of @/lib/perishable before changing this —
+    // skipping the cap as well as the queue would make the poster the author of
+    // their own bracket, and the bracket is what the bridging fee and the
+    // premium gate are computed from.
+    //
+    // Standard listings are untouched: `decidePerishableValue` is only
+    // consulted when `isPerishable`, and it returns its input unchanged for
+    // anything that did not need review anyway.
+    const perishable = body.isPerishable === true
+    const finalValue = perishable ? decidePerishableValue(valued) : null
+    const valueData = finalValue?.data ?? valued.data
+    const needsReview = perishable ? false : valued.needsReview
 
     // ── Safe-Zone hubs ──────────────────────────────────────────────────────
     // Validated against the table BEFORE the item is created, so a bad hub id
@@ -156,13 +209,29 @@ export async function POST(req: NextRequest) {
         description: body.description || resolvedTitle,
         category: body.category,
         condition: body.condition,
-        ...valued.data,
+        ...valueData,
         // Above the cap: the row exists, the owner can see it, nobody else
-        // can, and the admin Review queue lists it. See ItemStatus.
-        ...(valued.needsReview ? { status: "PENDING_REVIEW" as const } : {}),
+        // can, and the admin Review queue lists it. See ItemStatus. A
+        // perishable never lands here — it was clamped instead.
+        ...(needsReview ? { status: "PENDING_REVIEW" as const } : {}),
         wantedItems: body.wantedItems ?? null,
         images: JSON.stringify(body.images ?? []),
-        userId: session.user.id,
+        userId: authorId,
+        // The perishable block. All four are written together or not at all;
+        // the schema refuses any other combination.
+        ...(perishable
+          ? {
+              isPerishable: true,
+              quantity: body.quantity ?? null,
+              quantityUnit: body.quantityUnit ?? null,
+              tradeWithinHours: body.tradeWithinHours ?? null,
+            }
+          : {}),
+        // NOT perishable-only. This is the matcher's input and a standard
+        // listing is just as likely to name what it wants back.
+        ...(body.lookingForCategories?.length
+          ? { lookingForCategories: body.lookingForCategories }
+          : {}),
         ...(hasPickup
           ? {
               pickupLat: body.pickupLat!,
@@ -193,9 +262,33 @@ export async function POST(req: NextRequest) {
     // FIRST_LISTING is one-time — the @@unique([userId, task, refId]) constraint
     // on TaskCompletion makes every later listing a no-op. There is deliberately
     // NO per-listing reward: posting must never be a faucet.
-    awardTaskAsync(session.user.id, "FIRST_LISTING", "", {
+    // THE PERSON, NOT THE ORG. A task reward is a fact about somebody learning
+    // to use Baylo, and crediting it to the org's backing row would both rob
+    // the staff member of their own first-listing award and pay Leaves into an
+    // account no person controls. `humanUserId` is always the real person —
+    // see ActingIdentity.
+    awardTaskAsync(acting.acting.humanUserId, "FIRST_LISTING", "", {
       description: "Task reward: listed your first item",
     })
+
+    // ── Tell the people who asked for this category ─────────────────────────
+    //
+    // FIRE-AND-FORGET, and `void` is load-bearing: this does up to
+    // MATCH_NOTIFY_CAP writes and as many Pusher calls, and awaiting it would
+    // make posting an item as slow as the slowest of twenty-five network calls.
+    // A listing must not fail because nobody could be told about it.
+    //
+    // Skipped for a listing nobody can see yet — a PENDING_REVIEW row is
+    // invisible to everyone but its owner, and notifying strangers about it
+    // would be the one surface that leaks it.
+    if (!needsReview) {
+      notifyCategoryMatchesAsync({
+        itemId: item.id,
+        authorUserId: authorId,
+        category: body.category,
+        lookingForCategories: body.lookingForCategories ?? [],
+      })
+    }
 
     // The creator is the owner, so this response carries the exact point back.
     //
@@ -205,17 +298,30 @@ export async function POST(req: NextRequest) {
     const { safeZones, ...itemRow } = item
     return NextResponse.json(
       {
-        ...shapeItem(itemRow, session.user.id),
+        // The AUTHOR sees the exact point back — which is the org's row when
+        // posting for an org, and the staff member is acting as it.
+        ...shapeItem(itemRow, authorId),
         safeZones: safeZones.map((s) => v1Hub(s.hub as SafeZoneHubRow)),
         // What happened to the value, so the wizard's posted dialog can say
-        // "live" or "waiting for review" without re-deriving the rule.
+        // "live", "waiting for review" or "capped" without re-deriving the rule.
         valueReview: {
           decision: valued.decision,
-          pending: valued.needsReview,
-          notice: valued.needsReview
-            ? reviewNotice(valued.data.valueLeaves, valued.data.suggestedLeaves)
+          pending: needsReview,
+          notice: needsReview
+            ? reviewNotice(valueData.valueLeaves, valueData.suggestedLeaves)
             : null,
+          // Set only when the perishable rule lowered the value. A separate
+          // field from `notice` because it is not a refusal and the wizard
+          // styles it differently — the listing IS live.
+          clamped: finalValue?.clamped ?? false,
+          clampNotice: finalValue?.notice ?? null,
+          requestedLeaves: finalValue?.requestedLeaves ?? null,
         },
+        // Who it was posted as, so the wizard can say "Posted as <org>" rather
+        // than leaving the staff member to wonder whose shelf it landed on.
+        postedAs: acting.acting.organization
+          ? { organizationId: acting.acting.organization.id, name: acting.acting.organization.name }
+          : null,
       },
       { status: 201 },
     )
