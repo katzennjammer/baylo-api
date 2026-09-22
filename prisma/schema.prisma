@@ -1872,6 +1872,13 @@ enum AdminActionKind {
   ACHIEVEMENT_UPDATED
   ACHIEVEMENT_DEACTIVATED
   ACHIEVEMENT_REACTIVATED
+  /**
+   * The outcome of a business-document review. TWO KINDS, matching the ID
+   * pair above, because an audit log that records "a decision was made" and
+   * not which one is an audit log you have to open the target row to read.
+   */
+  ORGANIZATION_VERIFIED
+  ORGANIZATION_REJECTED
 }
 
 enum AdminTargetType {
@@ -1883,6 +1890,7 @@ enum AdminTargetType {
   TRADE
   LISTING_APPEAL
   ACHIEVEMENT
+  ORGANIZATION
 }
 
 /**
