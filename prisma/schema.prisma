@@ -166,6 +166,58 @@ model User {
   // raw table in live until it was finally modelled here.
   achievements    UserAchievement[]
 
+  // -- Organisation / SMME accounts -------------------------------------------
+  //
+  // TRUE ON A SYNTHETIC ROW THAT IS NOT A PERSON. An Organization is backed by
+  // a User row so that every FK already pointing at User -- Item.userId,
+  // Follow.followeeId, Message.senderId/receiverId, Offer, TradeRequest,
+  // LeafTransaction.userId -- keeps working without a second, org-shaped copy
+  // of each. The cost of that choice is that a row in this table is no longer
+  // necessarily a human being, and this column is what says so.
+  //
+  // A STORED BOOLEAN, WHICH IS THE OPPOSITE OF WHAT `totalTrades` AND THE
+  // ABSENT `idVerified` ARE NOTED ABOVE FOR. The rule those notes set --
+  // derive it, never denormalise it -- is right when the derived fact is read
+  // on a page, and wrong here, for two reasons:
+  //
+  //   WHEN.  The row has to be recognisable as non-human in the same statement
+  //          that creates it. `organization: { is: null }` is only true once
+  //          the Organization row exists, and between the two writes a
+  //          synthetic row reads as a person to every query in this codebase.
+  //          Both writes are in one transaction, so the window is short -- but
+  //          "short" is not a property a trust-tier aggregate should depend on.
+  //   WHERE. Trust tiers, the leaf-rank ladder and the reputation gate are
+  //          aggregate queries over User. A relation filter makes each of them
+  //          a join; a column makes each of them a predicate.
+  //
+  // It cannot drift, because it has exactly one writer -- createOrganization()
+  // in @/lib/organizations, which sets it in the same transaction as the
+  // Organization row -- and nothing ever updates it. scripts/verify-orgs.ts
+  // asserts the biconditional: isOrgAccount is true for exactly the rows an
+  // Organization points at.
+  //
+  // WHAT IT EXCLUDES: the trade-count trust ladder and the leaf-rank badge. An
+  // organisation is not RISING; it is verified or it is not. See
+  // notAnOrgWhere() in @/lib/organizations, which every reputation aggregate
+  // spreads in.
+  isOrgAccount Boolean @default(false)
+
+  /// The organisation this row IS, when isOrgAccount. Null on every human row.
+  organization Organization? @relation("OrganizationAccount")
+
+  /// The organisations this HUMAN belongs to. Empty on a synthetic org row --
+  /// an org is not a member of itself.
+  organizationMemberships OrganizationMember[] @relation("OrganizationMemberUser")
+
+  /// Business documents this user decided, as an admin. Mirrors
+  /// idVerificationsReviewed, and SetNull for the same reason: the decision
+  /// outlives the staff account that made it.
+  organizationsReviewed Organization[] @relation("OrganizationReviewer")
+
+  // Every reputation aggregate filters on this. Cheap, and the reason the flag
+  // is a column rather than a join -- see the note above.
+  @@index([isOrgAccount])
+
   // -- Government ID verification ---------------------------------------------
   //
   // NOT `isVerified`, AND THE TWO MUST NOT BE CONFLATED. `isVerified` above
@@ -406,6 +458,79 @@ model Item {
 
   /// One dHash per photo. See ItemImageHash.
   imageHashes ItemImageHash[]
+
+  // -- Perishables, and what the owner wants back -----------------------------
+  //
+  // ALL FIVE ARE OPTIONAL, AND FOUR OF THEM ARE NULL ON EVERY EXISTING ROW.
+  // A listing made before this block reads exactly as it did: isPerishable
+  // false, no quantity, no window, and an empty wanted-categories list. Nothing
+  // in the matcher, the feed or the expiry sweep treats that as a listing with
+  // something missing -- see the note on lookingForCategories.
+
+  /// Food, flowers, produce -- something with a shelf life. The flag that turns
+  /// the three columns below from noise into meaning, and the one the expiry
+  /// sweep selects on.
+  ///
+  /// IT DOES NOT BUY A HIGHER VALUE. A perishable whose requested value lands
+  /// more than one bracket above the model's suggestion is CLAMPED to the cap
+  /// and published, rather than waiting in PENDING_REVIEW -- the point is that
+  /// nothing perishable sits in a queue while it rots. It is emphatically not
+  /// a way around decideItemValue(): the cap is the same cap, and a value above
+  /// it is refused here exactly as it is anywhere else. See
+  /// decidePerishableValue() in @/lib/perishable.
+  isPerishable Boolean @default(false)
+
+  /// How much of it. A Float because "1.5 kg" and "0.5 L" are real listings and
+  /// an Int would round them into lies. Null on a standard item, and null is
+  /// also fine on a perishable -- "a basket of calamansi" has no number.
+  quantity Float?
+
+  /// The unit `quantity` is in. Null exactly when quantity is null; the write
+  /// paths refuse one without the other, because a bare "2" is not a quantity.
+  quantityUnit QuantityUnit?
+
+  /// The window, in hours, from createdAt. 6 or 24 in the wizard; stored as an
+  /// Int rather than an enum so the number can be widened without a migration
+  /// and so the arithmetic below is arithmetic.
+  ///
+  /// COUNTED FROM createdAt AND NOT FROM NOW, which is what makes the sweep
+  /// replayable: a job that did not run for two days expires exactly the
+  /// listings that were already past their window, and running it twice
+  /// changes nothing the first run did not.
+  tradeWithinHours Int?
+
+  /// The categories the owner will take in return. THE MATCHER'S INPUT, and
+  /// deliberately NOT perishable-only -- a standard item is just as likely to
+  /// name what it wants.
+  ///
+  /// A Postgres enum array, not a text column of tags: the values are the same
+  /// closed taxonomy `category` already uses, and a string list is a string
+  /// list until the day somebody writes "electronics" into it.
+  ///
+  /// EMPTY IS THE STEADY STATE, NOT A MISSING VALUE. A scalar list cannot be
+  /// null in Prisma, so every row that predates this column reads as `[]`, and
+  /// so does every listing whose owner skipped the question. The matcher skips
+  /// an empty list on either side rather than treating it as "wants
+  /// everything"; see matchesFor() in @/lib/category-match.
+  lookingForCategories Category[]
+
+  /// The perishable sweep: unexpired perishables, oldest first. Partial on the
+  /// flag would be tighter, which Prisma cannot declare -- the composite is
+  /// what it can express, and it is enough.
+  @@index([isPerishable, status, createdAt])
+
+  /// THE MATCHER'S INDEX IS NOT DECLARED HERE, AND CANNOT BE.
+  ///
+  ///   CREATE INDEX "Item_lookingForCategories_idx"
+  ///     ON "Item" USING GIN ("lookingForCategories");
+  ///
+  /// `hasSome` compiles to the array-overlap operator `&&`, which a B-tree
+  /// cannot answer -- without a GIN index the matcher sequentially scans every
+  /// AVAILABLE row on the hot listing-creation path. Prisma has no syntax for
+  /// GIN, so it lives in 20260923000000_organizations_and_perishables and is
+  /// written out here because a `migrate diff` will never mention it: the index
+  /// is invisible to the schema, so the diff neither creates it nor drops it.
+  /// If you rebuild this table by hand, put it back.
 
   // Both created by raw CREATE INDEX in the pre-baseline chain and never
   // declared here. Declaring them keeps the squashed baseline faithful.
@@ -885,6 +1010,26 @@ enum ItemStatus {
    * or by an overturned appeal, which publishes at the requested value.
    */
   VALUE_REJECTED
+
+  /**
+   * A perishable listing whose `tradeWithinHours` ran out. Written ONLY by the
+   * expiry sweep, and only on a row with `isPerishable`.
+   *
+   * A STATUS AND NOT A `expiredAt` COLUMN, for exactly the reason
+   * PENDING_REVIEW is one: every discovery query in this codebase already
+   * filters on `status: AVAILABLE`, so an expired listing leaves the feed, the
+   * browse grid, the matcher and the offer paths the moment the sweep runs,
+   * without a single WHERE clause changing. A timestamp beside AVAILABLE would
+   * need adding to all of them, and the one that was missed would keep selling
+   * yesterday's fish.
+   *
+   * DISTINCT FROM `REMOVED`, which the owner sets and can undo with relist.
+   * Expiry is a fact about the clock and relisting does not change it -- the
+   * owner posts the next batch as the next listing, which is what a batch is.
+   * Kept out of `moderationHiddenAt` for the opposite reason: nobody was
+   * judged here.
+   */
+  EXPIRED
 }
 
 /**
@@ -970,6 +1115,21 @@ enum NotificationType {
   /** The outcome of the recipient's appeal. Two types, same reason as above. */
   LISTING_APPEAL_UPHELD
   LISTING_APPEAL_OVERTURNED
+
+  /**
+   * Somebody posted a listing in a category the recipient said they were
+   * looking for. THE ONLY NOTIFICATION IN THIS ENUM THAT NOBODY DID TO THE
+   * RECIPIENT -- every other one names an actor who acted on them, and this one
+   * is a shop window.
+   *
+   * That difference is why it is one type and not two: there is no approve/
+   * reject pair to tell apart, and a client that wants to mute discovery
+   * without muting trades needs exactly this value to filter on. It carries
+   * entityType "item" with the NEW listing's id, which is a new routing token
+   * -- not "trade" and not "conversation", because the only useful destination
+   * is the listing itself.
+   */
+  CATEGORY_MATCH
 }
 
 enum FollowStatus {
@@ -2132,4 +2292,235 @@ model UserAchievement {
   @@unique([userId, achievementId])
   @@index([userId, displayOrder])
   @@index([achievementId])
+}
+
+// ── Organisations / SMMEs ────────────────────────────────────────────────────
+
+/**
+ * What kind of business it is. A CLOSED LIST, and deliberately not `Category`.
+ *
+ * Category is what an ITEM is; this is what a BUSINESS is, and the two only
+ * look alike until the first sari-sari store, which sells across eight
+ * categories and is none of them. Reusing Category would have forced every
+ * multi-category shop to pick one and be wrong about it on their own profile.
+ */
+enum BusinessCategory {
+  SARI_SARI
+  FOOD_AND_BEVERAGE
+  AGRICULTURE
+  HANDICRAFT
+  APPAREL
+  ELECTRONICS_REPAIR
+  SERVICES
+  RETAIL
+  COOPERATIVE
+  NONPROFIT
+  OTHER
+}
+
+/**
+ * The outcome of the business-document review. THREE VALUES, MATCHING
+ * IdVerificationStatus, because it is the same queue doing the same job to a
+ * different document and a reviewer should not have to learn a second
+ * vocabulary to work both tabs.
+ */
+enum OrgVerificationStatus {
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+/**
+ * Why a business document was refused. Closed, for the reason
+ * IdRejectionReason is closed: the applicant has to be able to fix it, and
+ * "rejected" is not something anybody can act on.
+ */
+enum OrgRejectionReason {
+  BLURRY_DOCUMENT
+  NAME_MISMATCH
+  EXPIRED_REGISTRATION
+  WRONG_DOCUMENT_TYPE
+  NOT_A_BUSINESS_DOCUMENT
+}
+
+/** What a member may do. OWNER manages staff and settings; STAFF trades. */
+enum OrgMemberRole {
+  OWNER
+  STAFF
+}
+
+/**
+ * PENDING is an invitation that has been sent and not answered. ACTIVE is a
+ * member. There is no DECLINED: a refused invitation is deleted, because a
+ * tombstone here would occupy the @@unique below and an owner could never
+ * re-invite somebody who said no once.
+ */
+enum OrgMemberStatus {
+  PENDING
+  ACTIVE
+}
+
+/**
+ * An organisation or SMME account.
+ *
+ * ── IT IS A User ROW, AND THAT IS THE WHOLE DESIGN ──────────────────────────
+ *
+ * Everything that makes an account visible on Baylo is a required foreign key
+ * to User: Item.userId, Follow.followeeId, Message.senderId/receiverId,
+ * Offer's two sides, TradeRequest's two sides, LeafTransaction.userId. An
+ * Organization that were merely "a row beside a user" could own nothing, be
+ * followed by nobody and hold no Leaves, and each of those would have needed
+ * its own nullable column and its own second code path on every read.
+ *
+ * So an organisation IS an account: `orgUserId` points at a User row created in
+ * the same transaction, flagged `isOrgAccount`, and every existing FK keeps
+ * working with no change at all. A staff member posting on the org's behalf
+ * writes `Item.userId = orgUserId` -- the same column, the same query, the same
+ * shape on the wire.
+ *
+ * WHAT THE BACKING ROW IS NOT. It is not a person and it never logs in: it has
+ * no password, and POST /api/auth/token refuses an `isOrgAccount` row outright.
+ * Humans reach it only through OrganizationMember, and only by presenting their
+ * OWN credentials plus an org context -- see resolveSession() and actingAs().
+ *
+ * ── THE LEAF LEDGER IS UNTOUCHED ────────────────────────────────────────────
+ *
+ * An org holds Leaves the way anybody does, on its own User row, so
+ * SUM(User.leaves) == SUM(LeafTransaction.amount) stays true across orgs
+ * without a single line of @/lib/leaves or @/lib/bridge-fee changing. That
+ * invariant is the reason this model has no balance of its own, and adding one
+ * later would break it.
+ *
+ * ── AND THE TRUST LADDER IS NOT ─────────────────────────────────────────────
+ *
+ * Organisations do not climb the trade-count trust tiers and do not carry a
+ * leaf rank; their badge is this row's `verificationStatus` and nothing else.
+ * Enforced by `isOrgAccount` on the backing row, which every reputation
+ * aggregate excludes -- see notAnOrgWhere() in @/lib/organizations.
+ */
+model Organization {
+  id String @id @default(cuid())
+
+  /**
+   * The User row this organisation IS. UNIQUE, so no two organisations can
+   * share an account, and Cascade because the backing row and the org are one
+   * thing -- deleting the account deletes the organisation with it, exactly as
+   * deleting a user deletes their items.
+   */
+  orgUserId String @unique
+  orgUser   User   @relation("OrganizationAccount", fields: [orgUserId], references: [id], onDelete: Cascade)
+
+  name String
+
+  /**
+   * The square logo. A SEPARATE COLUMN FROM User.avatar even though the backing
+   * row has one, because the two are rendered differently -- this one square,
+   * the avatar round -- and a profile that has to guess which shape a URL wants
+   * will get it wrong for somebody. Null renders the building-store placeholder
+   * rather than initials.
+   */
+  logoUrl String? @db.Text
+
+  businessCategory BusinessCategory
+
+  verificationStatus OrgVerificationStatus @default(PENDING)
+
+  /**
+   * The DTI/SEC registration or barangay permit, WHILE IT EXISTS.
+   *
+   * SAME RETENTION RULE AS IdVerification.imageUrl, and for the same reason:
+   * this is a business document carrying a real person's name and address under
+   * RA 10173. It is nulled inside the decision transaction, approve or reject,
+   * and `businessDocPublicId` survives until Cloudinary confirms the destroy --
+   * so a decided row with a non-null public id is exactly the set of files the
+   * retry sweep still has to delete. Read the note on IdVerification before
+   * changing either column; the split is not cosmetic.
+   */
+  businessDocUrl      String? @db.Text
+  businessDocPublicId String? @db.VarChar(255)
+
+  /** When Cloudinary confirmed the destroy. */
+  docDeletedAt DateTime?
+  /** When a destroy last failed. Non-null with businessDocPublicId = retry me. */
+  docDeleteFailedAt DateTime?
+
+  /** Why it was refused. Free of any reviewer's own words, like IdRejectionReason. */
+  rejectionReason OrgRejectionReason?
+
+  /** Who decided. SetNull: the decision outlives the staff account that made it. */
+  reviewedById String?
+  reviewedBy   User?     @relation("OrganizationReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
+  reviewedAt   DateTime?
+
+  members OrganizationMember[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// The admin queue: PENDING, oldest first. Mirrors IdVerification's.
+  @@index([verificationStatus, createdAt])
+  /// The retry sweep: decided rows whose document is still up there.
+  @@index([verificationStatus, businessDocPublicId])
+  @@index([reviewedById])
+}
+
+/**
+ * A human's membership of an organisation.
+ *
+ * ── THE ROW IS THE PERMISSION ───────────────────────────────────────────────
+ *
+ * There is no org-role column on User and there must not be one: a person can
+ * belong to two organisations, and a column on their own row can hold one
+ * answer. Every org-scoped authorisation decision in this codebase reads THIS
+ * table, through requireOrgMember()/requireOrgOwner() in @/lib/organizations,
+ * and an ACTIVE row is the whole of what permits acting as the org.
+ *
+ * `role` is the only privileged distinction: OWNER manages staff and org
+ * settings, STAFF posts and trades. Both may act as the org. The only route
+ * that writes OWNER onto an existing row is PATCH
+ * /api/v1/organizations/[id]/members/[memberId], under an existing OWNER's
+ * session -- the same shape User.role's note describes, for the same reason.
+ */
+model OrganizationMember {
+  id String @id @default(cuid())
+
+  organizationId String
+  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  /**
+   * The HUMAN. Never an org's backing row -- an organisation is not a member of
+   * itself, and the write paths refuse an `isOrgAccount` userId.
+   */
+  userId String
+  user   User   @relation("OrganizationMemberUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  role   OrgMemberRole   @default(STAFF)
+  status OrgMemberStatus @default(PENDING)
+
+  invitedAt DateTime  @default(now())
+  /** Null while PENDING. Stamped in the same statement that sets ACTIVE. */
+  joinedAt  DateTime?
+
+  /**
+   * ONE MEMBERSHIP PER (org, person). Two rows would mean two answers to "may
+   * this person act as this org", and the invite path uses this constraint to
+   * make a repeat invitation a no-op rather than a duplicate.
+   */
+  @@unique([organizationId, userId])
+  /// "which orgs may this person act as" -- read on every org-context switch.
+  @@index([userId, status])
+}
+
+/**
+ * The unit a perishable's `quantity` is counted in.
+ *
+ * Three values, matching the wizard. An enum rather than free text because the
+ * figure is rendered next to the number ("2 KG") and a text column is where
+ * "kg", "Kg", "kilos" and "kilograms" all end up being the same unit spelled
+ * four ways on four listings.
+ */
+enum QuantityUnit {
+  KG
+  PCS
+  LITERS
 }
