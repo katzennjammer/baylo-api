@@ -12,6 +12,9 @@ import { parseQuery, paginationShape } from "@/lib/v1/query"
 import { decodeCursor, encodeCursor, olderThan, paginate } from "@/lib/v1/cursor"
 import { V1_ITEM_SELECT, V1_ITEM_OWNER_SELECT, v1ItemStatsSelect, v1Item, type V1ItemRow } from "@/lib/v1/item"
 import { categoryLabel, categoryHashtag, type Category } from "@/lib/v1/taxonomy"
+import { sharedCategories, matchReason } from "@/lib/category-match"
+import { notAnOrgWhere } from "@/lib/organizations"
+import { expirePerishableItems } from "@/lib/perishable"
 
 export const dynamic = "force-dynamic"
 
@@ -60,6 +63,11 @@ export async function GET(req: NextRequest) {
 
   const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
   const keyset = olderThan(cursor)
+
+  // The perishable sweep, before the feed is read. See the longer note in
+  // /api/v1/browse -- nothing here runs on a schedule, so the read paths that
+  // would serve an expired listing are the ones that run it.
+  await expirePerishableItems(prisma)
 
   // ── 1 ── viewer, with their own available categories riding along.
   const viewer = await prisma.user.findUnique({
@@ -158,6 +166,12 @@ export async function GET(req: NextRequest) {
   // ── 6 ── match candidates.
   // Suggesting someone you blocked, or who blocked you, as a trading partner is
   // the single most conspicuous way a half-enforced block announces itself.
+  //
+  // notAnOrgWhere() because this list is PEOPLE. An organisation in "traders
+  // you might like" is a category error: the row it would render is a
+  // synthetic account, the trade count beside it belongs to a business rather
+  // than to somebody building a reputation, and organisations are excluded
+  // from the trust ladder everywhere else for exactly that reason.
   const candidates = await prisma.user.findMany({
     where: {
       id: { not: viewerId },
@@ -165,6 +179,7 @@ export async function GET(req: NextRequest) {
       items: { some: { status: "AVAILABLE", moderationHiddenAt: null } },
       ...userNotBlocked(viewerId),
       ...notSuspendedWhere(),
+      ...notAnOrgWhere(),
     },
     select: {
       id: true, name: true, avatar: true, totalTrades: true,
@@ -194,22 +209,22 @@ export async function GET(req: NextRequest) {
     where: { followeeId: viewerId, status: "PENDING" },
   })
 
-  const myCategories = new Set(viewer.items.map((i) => i.category))
+  // sharedCategories()/matchReason() rather than the overlap this route used to
+  // compute inline. The identical calculation lived here and in GET
+  // /api/matches and had already drifted in its fallback wording; there is now
+  // one definition, and the event-triggered matcher is a third caller of it
+  // rather than a third copy. See @/lib/category-match.
+  const myCategories = viewer.items.map((i) => i.category)
   const matches = candidates.map((u) => {
     const cats = [...new Set(u.items.map((i) => i.category))]
-    const shared = cats.filter((c) => myCategories.has(c))
-    const top = cats[0]
+    const shared = sharedCategories(myCategories, cats)
     return {
       userId: u.id,
       name: u.name,
       avatar: u.avatar,
       totalTrades: u.totalTrades,
       sharedCategories: shared,
-      reason: shared.length
-        ? `Both trading ${categoryLabel(shared[0])}`
-        : top
-          ? `Has ${categoryLabel(top)} you might like`
-          : "New to Baylo",
+      reason: matchReason(shared, cats[0]),
     }
   })
 

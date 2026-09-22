@@ -10,6 +10,7 @@ import {
 import { ok, unauthenticated, invalid } from "@/lib/v1/envelope"
 import { parseQuery, paginationShape } from "@/lib/v1/query"
 import { decodeCursor, encodeCursor, olderThan, paginate } from "@/lib/v1/cursor"
+import { expirePerishableItems } from "@/lib/perishable"
 import { V1_ITEM_SELECT, V1_ITEM_OWNER_SELECT, v1ItemStatsSelect, v1Item, type V1ItemRow } from "@/lib/v1/item"
 import { taskLabel } from "@/lib/v1/taxonomy"
 import { loadStanding, publicStanding } from "@/lib/reputation-gate"
@@ -64,6 +65,14 @@ export async function GET(req: NextRequest) {
   const { limit } = parsed.data
   const cursor = decodeCursor(parsed.data.cursor)
   if (parsed.data.cursor && !cursor) return invalid("Malformed cursor")
+
+  // The perishable sweep, SCOPED TO THIS USER. See /api/v1/browse for why the
+  // read paths run it at all; the scope is the difference here. The owner's own
+  // shelf is where an unswept listing is most visibly wrong -- it would show a
+  // live "2 hours left" countdown on something whose window closed yesterday --
+  // and it is also the one place a narrow sweep is the right sweep, because the
+  // only rows this screen renders are theirs.
+  await expirePerishableItems(prisma, { userId: viewerId })
 
   // ── 1 ──
   const user = await prisma.user.findUnique({

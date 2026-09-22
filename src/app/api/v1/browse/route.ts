@@ -6,6 +6,7 @@ import { preciseAccessItemIds } from "@/lib/item-visibility"
 import { visibleItemWhere } from "@/lib/blocking"
 import { CATEGORY_VALUES, conditionSchema } from "@/lib/validation"
 import { ok, unauthenticated, invalid } from "@/lib/v1/envelope"
+import { expirePerishableItems } from "@/lib/perishable"
 import { parseQuery, paginationShape } from "@/lib/v1/query"
 import { decodeCursor, encodeCursor, olderThan, paginate } from "@/lib/v1/cursor"
 import { V1_ITEM_SELECT, V1_ITEM_OWNER_SELECT, v1ItemStatsSelect, v1Item, type V1ItemRow } from "@/lib/v1/item"
@@ -106,6 +107,24 @@ const querySchema = z
     lng: z.coerce.number().min(-180).max(180).optional(),
     radiusKm: z.coerce.number().positive().max(MAX_RADIUS_KM).optional(),
     sort: z.enum(["recent", "nearest"]).optional().default("recent"),
+    /**
+     * The "Organizations" pill: show only listings posted by an organisation.
+     *
+     * A BOOLEAN FILTER AND NOT A CATEGORY. It sits in the same pill row as the
+     * category chips and looks like one, but it cannot be one -- `category` is
+     * the item taxonomy and "organisation" is a fact about the POSTER. Folding
+     * it into that list would mean a listing could be FOOD or it could be
+     * Organizations, and a sari-sari store's rice would have to be one or the
+     * other.
+     *
+     * So it composes rather than replaces: Organizations + Food is
+     * organisations' food listings, which is the useful query and the one a
+     * user picking both pills plainly means.
+     */
+    orgsOnly: z
+      .enum(["true", "false"])
+      .optional()
+      .transform((v) => v === "true"),
   })
   .refine((v) => v.sort !== "nearest" || (v.lat !== undefined && v.lng !== undefined), {
     message: "sort=nearest requires lat and lng",
@@ -138,10 +157,25 @@ export async function GET(req: NextRequest) {
 
   const parsed = parseQuery(req, querySchema)
   if (!parsed.ok) return parsed.response
-  const { limit, category, condition, minLeaves, maxLeaves, q, lat, lng, radiusKm, sort } =
+  const { limit, category, condition, minLeaves, maxLeaves, q, lat, lng, radiusKm, sort, orgsOnly } =
     parsed.data
   const cursor = decodeCursor(parsed.data.cursor)
   if (parsed.data.cursor && !cursor) return invalid("Malformed cursor")
+
+  // ── The perishable sweep, BEFORE the page is read ──────────────────────────
+  //
+  // The same arrangement expireStaleOffers() has, and for the same reason: this
+  // deployment runs nothing on a schedule, so the paths that would be WRONG if
+  // the sweep had not run are the paths that run it. Browse is the first of
+  // those -- a tray of fish whose six hours ran out an hour ago is AVAILABLE in
+  // the database until something moves it, and serving it here is serving a
+  // listing nobody can act on.
+  //
+  // Unscoped and awaited. Unscoped because browse is everyone's listings, not
+  // one person's; awaited because the very next statement reads the rows this
+  // updates, and firing it off would race its own page. It is one UPDATE over
+  // an index and it touches nothing when there is nothing to expire.
+  await expirePerishableItems(prisma)
 
   // A bounding box first: cheap in SQL, and it turns a whole-table distance
   // computation into one over a small candidate set. The circle is applied
@@ -190,6 +224,17 @@ export async function GET(req: NextRequest) {
     ...leafRange,
     ...(q ? { OR: [{ title: { contains: q, mode: "insensitive" as const } }, { description: { contains: q, mode: "insensitive" as const } }] } : {}),
     ...(box ?? {}),
+    // The Organizations pill. A predicate on the OWNER's discriminator column,
+    // which is why that column is stored rather than derived -- see the note on
+    // User.isOrgAccount. `organization: { isNot: null }` would say the same
+    // thing as a join, on the hottest list query in the app.
+    //
+    // isOrgAccount, NOT verificationStatus: the pill says "Organizations", so
+    // it shows organisations. Filtering to VERIFIED only would quietly hide
+    // every business still waiting on a review -- which is the state a business
+    // is in for its first days, exactly when it most needs to be findable. The
+    // badge on the card is what distinguishes verified from not.
+    ...(orgsOnly ? { user: { isOrgAccount: true } } : {}),
   }
 
   const selection = {

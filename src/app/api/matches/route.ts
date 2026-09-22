@@ -3,14 +3,22 @@ import { resolveSession } from "@/lib/api-auth"
 import prisma from "@/lib/prisma"
 import { userNotBlocked } from "@/lib/blocking"
 import { notSuspendedWhere } from "@/lib/moderation"
+import { sharedCategories, matchReason } from "@/lib/category-match"
+import { notAnOrgWhere } from "@/lib/organizations"
+import { categoryLabel } from "@/lib/v1/taxonomy"
 
 export const dynamic = "force-dynamic"
 
-const CATEGORY_LABEL: Record<string, string> = {
-  ELECTRONICS: "Electronics", CLOTHING: "Fashion", FURNITURE: "Home & Garden",
-  BOOKS: "Books & Media", SPORTS: "Sports", TOYS: "Kids & Toys",
-  TOOLS: "Tools & DIY", FOOD: "Food", SERVICES: "Services", OTHER: "Other",
-}
+/*
+ * THE LOCAL CATEGORY_LABEL MAP IS GONE (23 Sep 2026).
+ *
+ * It listed ten of the twenty categories, so BAGS, BEAUTY, ACCESSORIES,
+ * GAMING, BIKES, MUSIC, ART, COLLECTIBLES, PETS and PLANTS all fell through to
+ * the bare enum name and this endpoint answered "Both trading PLANTS". The
+ * overlap and the sentence now come from @/lib/category-match, which uses the
+ * complete taxonomy — the same one /api/v1/home and the event-triggered
+ * matcher use.
+ */
 
 export async function GET() {
   const session = await resolveSession()
@@ -32,6 +40,8 @@ export async function GET() {
         // Never suggest someone you blocked, or who blocked you, as a match.
         ...userNotBlocked(userId),
         ...notSuspendedWhere(),
+        // This list is PEOPLE. See the same call in /api/v1/home.
+        ...notAnOrgWhere(),
       },
       select: {
         name: true,
@@ -47,19 +57,22 @@ export async function GET() {
     }),
   ])
 
-  const myCategories = new Set(myItemCats.map((i) => i.category))
+  const myCategories = myItemCats.map((i) => i.category)
 
   const matches = candidates.map((u) => {
     const cats = [...new Set(u.items.map((i) => i.category))]
-    const overlapCat = cats.find((c) => myCategories.has(c))
-    const topCat = cats[0] ? (CATEGORY_LABEL[cats[0]] ?? cats[0]) : "items"
+    const shared = sharedCategories(myCategories, cats)
     const green = Math.min(100, Math.round(20 + u.totalTrades * 8))
     return {
       name: u.name,
-      reason: overlapCat
-        ? `Both trading ${CATEGORY_LABEL[overlapCat] ?? overlapCat}`
-        : `Has ${topCat} you might like`,
-      mutual: overlapCat ? "Mutual category match" : `Active in ${topCat}`,
+      // One definition of the overlap and one of the sentence, shared with
+      // /api/v1/home and the event-triggered matcher. See @/lib/category-match.
+      reason: matchReason(shared, cats[0]),
+      mutual: shared.length
+        ? "Mutual category match"
+        : cats[0]
+          ? `Active in ${categoryLabel(cats[0])}`
+          : "New to Baylo",
       green,
     }
   })
