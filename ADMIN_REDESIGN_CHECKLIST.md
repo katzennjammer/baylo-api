@@ -146,6 +146,22 @@ Restyled to `DESIGN_SPEC.md` §4.1's shape (main column + "Needs attention" side
 - [ ] Confirm the reason column still shows "indefinite" (red) and "N days" (muted) sublines where applicable.
 - [ ] Toggle light/dark theme — table and filter panel should both read correctly.
 
+## `/admin/access` — Access management redesign (ad hoc request, "too plain")
+
+- **`page.tsx`**: header restyled to the token system, no logic change (role guard/redirect untouched).
+- **`AccessActions.tsx`**: "Assign an existing account" panel and every row restyled to `--adm-panel`/`--adm-panel-flat`/tokens. Added a small current-role pill per row (violet/`--adm-info` for ADMIN, neutral for USER) next to the role select, so a pending change is visually obvious against the row's actual current role. Role `<select>` restyled as a pill-select. The green "just saved" flash now uses `--adm-good-bg` instead of a hardcoded `rgba(76,175,80,.12)`. Deleted-user rows get `opacity: 0.55` (was previously only disabling the controls with no visual dimming). **Everything else is identical**: `query`/`reason`/`draftRoles`/`busy`/`justSaved` state, the client-side (not URL-backed) search filter, `changeRole()`'s `PATCH /api/admin/access` call and its disabled-until-changed-and-reasoned gate on Save.
+- **`loading.tsx`**: restyled to match, same 6-row skeleton count and shape (now includes a role-pill placeholder to match the new UI).
+- Verified: `tsc`/lint clean (scoped to `access/` and the full admin diff against baseline) -- zero new errors/warnings. `next build` compiles; fails only on the pre-existing unrelated `scripts/` error. `curl -I /admin/access` still redirects to login with no 500.
+
+**Manual test steps:**
+- [ ] Open `/admin/access`. Confirm the "Assign an existing account" panel and every user row render on the dark panel background.
+- [ ] Confirm each row shows a small pill with the user's CURRENT role (ADMIN = violet, USER = neutral), separate from the role select next to it.
+- [ ] Type in the search box — confirm it filters the list client-side (no URL change, no navigation).
+- [ ] Change a row's role select without typing a reason — confirm Save stays disabled/dimmed.
+- [ ] Type a reason, change a role, click Save — confirm the row briefly flashes green, the reason field clears, and the row's current-role pill updates to the new role after `router.refresh()`.
+- [ ] Confirm a deleted user's row appears visibly dimmed and its controls stay disabled regardless of reason text.
+- [ ] Toggle light/dark theme — panel, rows, pills and the search/reason inputs should all read correctly.
+
 ## Baseline (recorded before any redesign changes)
 
 - `npx tsc --noEmit`: fails, but only on pre-existing errors in `scripts/seed-demo-appeal.ts`, `scripts/verify-id-verification.ts`, `scripts/verify-moderation.ts` (Role union type mismatches — `"SUPER_ADMIN"`/`"MODERATOR"` not in the current `Role` enum). None touch `src/app/admin` or `src/components/admin`.
