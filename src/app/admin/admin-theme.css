@@ -1,0 +1,322 @@
+/* Scoped: applied via <div className="admin-root"> in src/app/admin/layout.tsx */
+.admin-root {
+  /* ---------- Color: surfaces ---------- */
+  --adm-bg: #070708;                 /* page canvas */
+  --adm-shell: #0d0d10;              /* outer rounded shell */
+  --adm-shell-border: rgba(255,255,255,0.04);
+  --adm-panel: linear-gradient(180deg, #16141c 0%, #1a1224 100%); /* cards/panels */
+  --adm-panel-solid: #1a1224;        /* fallback / contrast reference for --adm-panel */
+  --adm-panel-flat: #17161b;         /* rows, rail, tiles, filter bars, menus */
+  --adm-input: #111015;              /* inputs, selects, textareas */
+  --adm-placeholder-a: #1d1b23;      /* striped placeholder stripe A */
+  --adm-placeholder-b: #17161b;      /* striped placeholder stripe B */
+  --adm-thumb-a: #24212c;            /* thumbnail placeholder stripe A */
+  --adm-thumb-b: #1b1920;            /* thumbnail placeholder stripe B */
+  --adm-scrim: rgba(0,0,0,0.60);     /* drawer / palette backdrop */
+
+  /* ---------- Color: borders & dividers ---------- */
+  --adm-border: rgba(255,255,255,0.06);         /* default panel/row border */
+  --adm-border-hover: rgba(255,255,255,0.12);   /* hover border */
+  --adm-border-input: rgba(255,255,255,0.10);   /* inputs, menus */
+  --adm-border-control: rgba(255,255,255,0.12); /* outlined pills (status chips, Live) */
+  --adm-border-secondary: rgba(255,255,255,0.16); /* secondary button outline */
+  --adm-border-chip: rgba(255,255,255,0.08);    /* inactive filter chip, rail icon buttons */
+  --adm-border-empty: rgba(255,255,255,0.10);   /* dashed empty-state border */
+  --adm-divider: rgba(255,255,255,0.06);
+  --adm-track: rgba(255,255,255,0.05);          /* bar-chart track */
+  --adm-hover-fill: rgba(255,255,255,0.05);     /* menu item hover */
+
+  /* ---------- Color: text ---------- */
+  --adm-text: #f5f4f7;          /* primary */
+  --adm-text-secondary: #c8c5d0;/* body-on-row, chart labels, meta values */
+  --adm-text-muted: #8d8a96;    /* sublines, micro-labels, placeholders */
+  --adm-text-dim: #5f5c68;      /* DISABLED ONLY (fails AA as text; see design spec §6) */
+  --adm-text-on-accent: #12081f;/* text on --adm-accent (solid violet) */
+  --adm-text-on-soft: #1a1024;  /* text on lavender, yellow, highlight gradient */
+
+  /* ---------- Color: accents ---------- */
+  --adm-accent: #a45cf0;          /* violet: primary buttons, active icons, chart primary */
+  --adm-accent-strong: #7b3fd1;   /* start of bar gradient */
+  --adm-accent-text: #c9a2f7;     /* violet used AS TEXT on dark (links, "View queue →") */
+  --adm-accent-icon-active: #b57bf5; /* active rail icon */
+  --adm-accent-soft: #dcc6fb;     /* lavender: selected chip/tile bg, focus ring */
+  --adm-accent-tint: rgba(164,92,240,0.16); /* avatar bg, active rail bg, violet pill bg */
+  --adm-accent-tint-hover: rgba(164,92,240,0.14); /* palette item hover */
+  --adm-accent-2: #f2cf3a;        /* yellow: secondary series, time/count pills */
+  --adm-bar-primary: linear-gradient(90deg, #7b3fd1 0%, #a45cf0 100%);
+  --adm-bar-secondary: #f2cf3a;
+
+  /* ---------- Color: status tones (fg / 12% bg) ---------- */
+  --adm-queue: #f5b544;  --adm-queue-bg: rgba(245,181,68,0.12);   /* amber: pending/waiting */
+  --adm-warn:  #ff5a6e;  --adm-warn-bg:  rgba(255,90,110,0.12);   /* red: rejected/hidden/destructive */
+  --adm-good:  #3fcf8e;  --adm-good-bg:  rgba(63,207,142,0.12);   /* green: active/approved */
+  --adm-info:  #c9a2f7;  --adm-info-bg:  rgba(164,92,240,0.16);   /* violet: updated/in-trade/admin role */
+  --adm-neutral: #c8c5d0; --adm-neutral-bg: rgba(255,255,255,0.06); /* owned/user role/neutral */
+  --adm-warn-outline: rgba(255,90,110,0.50);   /* destructive button border */
+  --adm-warn-hover-bg: rgba(255,90,110,0.10);  /* destructive button hover fill */
+  --adm-badge: #ff5a6e;  --adm-badge-text: #1a0508; /* rail count badge */
+
+  /* ---------- Gradients ---------- */
+  --adm-highlight: linear-gradient(160deg, #9b5cf0 0%, #d98bd0 55%, #f0c24a 100%);
+  --adm-stripes: repeating-linear-gradient(135deg, #1d1b23 0 8px, #17161b 8px 16px);
+  --adm-stripes-thumb: repeating-linear-gradient(135deg, #24212c 0 6px, #1b1920 6px 12px);
+
+  /* ---------- Typography ---------- */
+  --adm-font-sans: var(--font-adm-sans), "Plus Jakarta Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --adm-font-mono: var(--font-adm-mono), "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+
+  /* ---------- Spacing (8px base, 2/4/6 allowed for micro gaps) ---------- */
+  --adm-space-0-5: 2px;
+  --adm-space-1: 4px;
+  --adm-space-1-5: 6px;
+  --adm-space-2: 8px;
+  --adm-space-2-5: 10px;
+  --adm-space-3: 12px;
+  --adm-space-3-5: 14px;
+  --adm-space-4: 16px;
+  --adm-space-4-5: 18px;
+  --adm-space-5: 20px;
+  --adm-space-6: 24px;
+  --adm-space-7: 28px;
+  --adm-space-8: 32px;
+  --adm-space-10: 40px;
+  --adm-space-14: 56px;
+
+  /* ---------- Radii ---------- */
+  --adm-radius-shell: 36px;
+  --adm-radius-rail: 28px;
+  --adm-radius-panel: 24px;
+  --adm-radius-tile: 16px;     /* rows, tiles, menus, image frames, rail items */
+  --adm-radius-input: 14px;    /* inputs, selects, textareas, thumbnails */
+  --adm-radius-menu-item: 10px;
+  --adm-radius-pill: 999px;
+
+  /* ---------- Border widths ---------- */
+  --adm-border-w: 1px;
+  --adm-focus-w: 2px;
+  --adm-focus-offset: 2px;
+
+  /* ---------- Shadows & glows (panels have NO shadow) ---------- */
+  --adm-shadow-none: none;
+  --adm-glow-active: 0 0 24px rgba(164,92,240,0.35);  /* active rail item */
+  --adm-shadow-overlay: 0 24px 64px rgba(0,0,0,0.55); /* menus, palette, drawer */
+
+  /* ---------- Z-index ---------- */
+  --adm-z-base: 0;
+  --adm-z-sticky: 10;       /* rail, sticky action panels */
+  --adm-z-dropdown: 30;     /* account menu */
+  --adm-z-drawer-scrim: 40;
+  --adm-z-drawer: 41;
+  --adm-z-palette-scrim: 50;
+  --adm-z-palette: 51;
+  --adm-z-tooltip: 60;
+  --adm-z-toast: 70;
+
+  /* ---------- Motion ---------- */
+  --adm-dur-fast: 120ms;    /* press */
+  --adm-dur-base: 200ms;    /* hover, color, border */
+  --adm-dur-slow: 250ms;    /* rail width, drawer */
+  --adm-dur-shimmer: 1400ms;
+  --adm-ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --adm-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --adm-ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+
+  font-family: var(--adm-font-sans);
+  color: var(--adm-text);
+  background: var(--adm-bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Breakpoints (reference; CSS vars can't be used in media queries):
+   sm 640px · md 768px · lg 1024px · xl 1100px · 2xl 1280px · shell-max 1440px */
+
+/* ---------- Global admin utilities ---------- */
+.admin-root *:focus-visible {
+  outline: var(--adm-focus-w) solid var(--adm-accent-soft);
+  outline-offset: var(--adm-focus-offset);
+}
+.admin-root input::placeholder,
+.admin-root textarea::placeholder { color: var(--adm-text-muted); }
+.admin-root select option { background: var(--adm-input); color: var(--adm-text); }
+.admin-root input[type="date"] { color-scheme: dark; }
+
+.admin-root .adm-lift { transition: transform var(--adm-dur-base) var(--adm-ease-standard), border-color var(--adm-dur-base) var(--adm-ease-standard); }
+.admin-root .adm-lift:hover { transform: translateY(-2px); border-color: var(--adm-border-hover); }
+.admin-root .adm-row-hover { transition: border-color var(--adm-dur-base) var(--adm-ease-standard); }
+.admin-root .adm-row-hover:hover { border-color: var(--adm-border-hover); }
+.admin-root .adm-press:active { transform: scale(0.97); transition: transform var(--adm-dur-fast) var(--adm-ease-standard); }
+
+/* Press feedback for admin action buttons (Approve/Reject/Suspend/etc). */
+.admin-root .admin-btn-press {
+  transition: transform var(--adm-dur-fast) var(--adm-ease-standard), opacity var(--adm-dur-fast) var(--adm-ease-standard);
+}
+.admin-root .admin-btn-press:active:not(:disabled) { transform: scale(0.97); }
+
+/* Row success feedback: fade + settle, toggled via rowCollapse.ts right
+   after an action succeeds, then cleared before the data underneath
+   changes. See rowCollapse.ts for why it is a class and not React state. */
+.admin-root .admin-row-collapsing {
+  transition: opacity 220ms var(--adm-ease-in-out), transform 220ms var(--adm-ease-in-out);
+  opacity: 0;
+  transform: scaleY(0.94);
+  transform-origin: top;
+}
+
+/* Table row hover tint (superseded by .adm-row-hover once a page is redesigned;
+   kept restyled here until every consumer has moved off it). */
+.admin-root .admin-row-hover { transition: border-color var(--adm-dur-base) var(--adm-ease-standard), background var(--adm-dur-base) var(--adm-ease-standard); }
+.admin-root .admin-row-hover:hover { background: var(--adm-hover-fill); }
+
+/* Card hover lift (superseded by .adm-lift once a page is redesigned). */
+.admin-root .admin-card-hover { transition: transform var(--adm-dur-base) var(--adm-ease-standard), border-color var(--adm-dur-base) var(--adm-ease-standard); }
+.admin-root .admin-card-hover:hover { transform: translateY(-2px); border-color: var(--adm-border-hover); }
+
+/* Skeleton loading rows (see AdminTableSkeleton.tsx; superseded by .adm-shimmer). */
+.admin-root .admin-skeleton {
+  position: relative;
+  overflow: hidden;
+  background: var(--adm-panel-flat);
+  border-radius: var(--adm-radius-menu-item);
+}
+.admin-root .admin-skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.08), transparent);
+  animation: admin-shimmer-old 1.4s ease-in-out infinite;
+}
+@keyframes admin-shimmer-old { 100% { transform: translateX(100%); } }
+
+/* Filter chips: base look; the active pill itself is a Framer Motion
+   layoutId span (see FilterChips.tsx) so it can slide between chips.
+   Superseded by the new §3.6 chip markup once FilterChips is redesigned. */
+.admin-root .admin-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  padding: 9px 16px;
+  border-radius: var(--adm-radius-pill);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+  border: 1px solid var(--adm-border-chip);
+  color: var(--adm-text);
+  background: var(--adm-panel-flat);
+  overflow: hidden;
+  transition: border-color var(--adm-dur-base) var(--adm-ease-standard), color var(--adm-dur-base) var(--adm-ease-standard);
+}
+.admin-root .admin-chip:hover { border-color: var(--adm-border-hover); }
+.admin-root .admin-chip[data-active="true"] { border-color: var(--adm-accent-soft); color: var(--adm-text-on-soft); }
+.admin-root .admin-chip[data-active="true"]:hover { border-color: var(--adm-accent-soft); }
+.admin-root .admin-chip-pill { position: absolute; inset: -1px; z-index: 0; background: var(--adm-accent-soft); border-radius: var(--adm-radius-pill); }
+.admin-root .admin-chip-label { position: relative; z-index: 1; }
+
+/* Admin nav: active item's indicator slides between items (layoutId, see AdminNav.tsx).
+   Superseded by the vertical rail indicator once the shell is redesigned. */
+.admin-root .admin-nav-link {
+  position: relative;
+  display: inline-flex;
+  color: var(--adm-text-muted);
+  font-size: 13px;
+  font-weight: 700;
+  padding: 12px 14px;
+  border-radius: var(--adm-radius-menu-item);
+  white-space: nowrap;
+  transition: color var(--adm-dur-base) var(--adm-ease-standard), background var(--adm-dur-base) var(--adm-ease-standard);
+}
+.admin-root .admin-nav-link:hover { color: var(--adm-text); background: var(--adm-hover-fill); }
+.admin-root .admin-nav-link[data-active="true"] { color: var(--adm-text); }
+.admin-root .admin-nav-underline {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: 4px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--adm-accent);
+}
+
+/* Pulsing "needs attention" dot -- one per card, not the whole card. */
+.admin-root .admin-pulse-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  position: relative;
+}
+.admin-root .admin-pulse-dot::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 999px;
+  background: inherit;
+  opacity: .55;
+  animation: admin-pulse 2s ease-out infinite;
+}
+@keyframes admin-pulse {
+  0% { transform: scale(.6); opacity: .55; }
+  70% { transform: scale(1.9); opacity: 0; }
+  100% { opacity: 0; }
+}
+
+/* Leaflet hub-location map + marker (HubLocationPicker.tsx) */
+.admin-root .hub-location-map {
+  height: 440px;
+  width: 100%;
+  border: 1px solid var(--adm-border);
+  border-radius: var(--adm-radius-input);
+  overflow: hidden;
+  background: var(--adm-panel-flat);
+}
+.admin-root .admin-hub-marker-host {
+  background: transparent;
+  border: 0;
+}
+.admin-root .admin-hub-marker {
+  width: 38px;
+  height: 38px;
+  filter: drop-shadow(0 2px 3px rgba(0,0,0,.45));
+  cursor: grab;
+}
+.admin-root .admin-hub-marker:active {
+  cursor: grabbing;
+  filter: drop-shadow(0 4px 5px rgba(0,0,0,.55));
+}
+.admin-root .admin-hub-marker svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.admin-root .hub-location-help {
+  margin-top: 6px;
+  color: var(--adm-text-muted);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+@keyframes adm-shimmer { 0% { background-position: -400px 0; } 100% { background-position: 400px 0; } }
+.admin-root .adm-shimmer {
+  background: linear-gradient(90deg, #17161b 0%, #211a2c 40%, #2a1f3a 50%, #211a2c 60%, #17161b 100%);
+  background-size: 800px 100%;
+  animation: adm-shimmer var(--adm-dur-shimmer) linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .admin-root *, .admin-root *::before, .admin-root *::after {
+    animation-duration: 0.01ms !important; animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  .admin-root .adm-lift:hover { transform: none; }
+  .admin-root .adm-shimmer { animation: none; background: #1d1b23; }
+  .admin-root .admin-btn-press:active:not(:disabled) { transform: none; }
+  .admin-root .admin-pulse-dot::after { animation: none; }
+  .admin-root .admin-row-hover,
+  .admin-root .admin-card-hover,
+  .admin-root .admin-chip,
+  .admin-root .admin-nav-link {
+    transition: none !important;
+  }
+  .admin-root .admin-card-hover:hover { transform: none; }
+  .admin-root .admin-skeleton::after { animation: none; }
+}

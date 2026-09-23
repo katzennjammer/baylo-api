@@ -3,6 +3,17 @@
 Scope: `src/app/admin/**`, `src/components/admin/**`, admin-only blocks of `src/app/globals.css`.
 Each item is checked off after its page's commit, confirming the same handler is still called with the same arguments.
 
+## Step 2 — Foundation (done)
+
+- Created `src/app/admin/admin-theme.css` (all `--adm-*` tokens under `.admin-root`, plus all admin-only utility classes migrated from `globals.css` and restyled to the new tokens: `.admin-btn-press`, `.admin-row-collapsing`, `.admin-pulse-dot`, `.admin-row-hover`, `.admin-card-hover`, `.admin-skeleton`, `.admin-chip*`, `.admin-nav-link*`, `.hub-location-map`/`.admin-hub-marker*`/`.hub-location-help`, plus the new `.adm-lift`/`.adm-row-hover`/`.adm-press`/`.adm-shimmer` utilities and reduced-motion overrides).
+- Created `src/app/admin/tokens.ts` (the `t` object) verbatim per spec §1.2.
+- Wired `Plus_Jakarta_Sans`/`JetBrains_Mono` via `next/font/google` in `src/app/admin/layout.tsx`, added `className="admin-root ${admSans.variable} ${admMono.variable}"` to the shell wrapper. The existing inline `style` on that div (background/color/fontFamily) is untouched and still visually wins for now — the shell rebuild (rail/top bar/drawer) is Step 3, done as its own commit.
+- Removed the migrated blocks from `src/app/globals.css` (lines ~103–140 `.hub-location-map`/`.admin-hub-marker*`/`.hub-location-help`, and ~482–609 the "Admin console — motion" block), after grepping every class name to confirm zero usages outside `src/app/admin/**` and `src/components/admin/**`.
+- Added `lucide-react` dependency (approved).
+- Verified: `npx tsc --noEmit` and `npx eslint src/app/admin src/components/admin` diffed byte-for-byte identical to the saved baseline (`.baseline/tsc.txt`, `.baseline/lint-admin.txt`) — zero new errors/warnings. `npx next build` run to confirm no new build-time errors.
+
+**Manual test steps (Step 2):** none yet — no visual change is expected at this step since the old inline styles on the shell `<div>` still take visual precedence over the new `.admin-root` class. Visual verification starts at the Step 3 commit (shell rebuild).
+
 ## Baseline (recorded before any redesign changes)
 
 - `npx tsc --noEmit`: fails, but only on pre-existing errors in `scripts/seed-demo-appeal.ts`, `scripts/verify-id-verification.ts`, `scripts/verify-moderation.ts` (Role union type mismatches — `"SUPER_ADMIN"`/`"MODERATOR"` not in the current `Role` enum). None touch `src/app/admin` or `src/components/admin`.

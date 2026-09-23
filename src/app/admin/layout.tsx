@@ -1,11 +1,26 @@
 import type { ReactNode } from "react"
 import Link from "next/link"
 import { redirect } from "next/navigation"
+import { Plus_Jakarta_Sans, JetBrains_Mono } from "next/font/google"
 import { auth } from "@root/auth"
 import prisma from "@/lib/prisma"
 import { suspensionState } from "@/lib/moderation"
 import AccountMenu from "./AccountMenu"
 import AdminNav from "./AdminNav"
+import "./admin-theme.css"
+
+const admSans = Plus_Jakarta_Sans({
+  subsets: ["latin"],
+  weight: ["400", "500", "600", "700", "800"],
+  variable: "--font-adm-sans",
+  display: "swap",
+})
+const admMono = JetBrains_Mono({
+  subsets: ["latin"],
+  weight: ["400", "500"],
+  variable: "--font-adm-mono",
+  display: "swap",
+})
 
 export const dynamic = "force-dynamic"
 export const revalidate = 0
@@ -44,7 +59,10 @@ export default async function AdminLayout({ children }: { children: ReactNode })
   if (me.role !== "ADMIN") redirect("/dashboard")
 
   return (
-    <div style={{ minHeight: "100vh", background: "#f4f6f5", color: "#17201b", fontFamily: "var(--ff-body)" }}>
+    <div
+      className={`admin-root ${admSans.variable} ${admMono.variable}`}
+      style={{ minHeight: "100vh", background: "#f4f6f5", color: "#17201b", fontFamily: "var(--ff-body)" }}
+    >
       <header
         style={{
           position: "sticky",
