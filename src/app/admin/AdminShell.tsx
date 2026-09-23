@@ -3,7 +3,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
-import { signOut } from "next-auth/react"
 import { motion, useReducedMotion } from "framer-motion"
 import {
   LayoutGrid,
@@ -21,7 +20,6 @@ import {
   Menu,
   X,
   PanelLeft,
-  LogOut,
   Sun,
   Moon,
   type LucideIcon,
@@ -304,10 +302,6 @@ export default function AdminShell({
     }
   }, [drawerOpen])
 
-  async function leaveAdmin() {
-    await signOut({ callbackUrl: "/auth/login" })
-  }
-
   return (
     <div className={`admin-root ${fontVariables}`} data-theme={theme}>
       <div className="adm-canvas">
@@ -432,24 +426,6 @@ export default function AdminShell({
               <PanelLeft size={20} aria-hidden="true" style={{ flex: "none" }} />
               {railExpanded ? <span style={{ fontSize: 14, fontWeight: 600 }}>Collapse</span> : null}
             </button>
-
-            <button
-              type="button"
-              onClick={leaveAdmin}
-              aria-label="Sign out"
-              className="adm-press"
-              style={{
-                ...railItemBase,
-                border: 0,
-                background: "transparent",
-                cursor: "pointer",
-                width: "100%",
-                color: "var(--adm-warn)",
-              }}
-            >
-              <LogOut size={20} aria-hidden="true" style={{ flex: "none" }} />
-              {railExpanded ? <span style={{ fontSize: 14, fontWeight: 600 }}>Sign out</span> : null}
-            </button>
           </nav>
 
           <main id="adm-main" tabIndex={-1} className="adm-main">
@@ -516,26 +492,6 @@ export default function AdminShell({
               onNavigate={() => setDrawerOpen(false)}
               firstItemRef={firstDrawerItemRef}
             />
-
-            <div style={{ height: 1, background: "var(--adm-divider)", margin: "10px 4px" }} />
-
-            <button
-              type="button"
-              onClick={leaveAdmin}
-              aria-label="Sign out"
-              className="adm-press"
-              style={{
-                ...railItemBase,
-                border: 0,
-                background: "transparent",
-                cursor: "pointer",
-                width: "100%",
-                color: "var(--adm-warn)",
-              }}
-            >
-              <LogOut size={20} aria-hidden="true" style={{ flex: "none" }} />
-              <span style={{ fontSize: 14, fontWeight: 600 }}>Sign out</span>
-            </button>
           </nav>
         </>
       ) : null}
