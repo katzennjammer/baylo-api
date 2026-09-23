@@ -63,7 +63,7 @@ export default function RailTooltip({
             transform: "translateY(-50%)",
             zIndex: 60,
             background: "var(--adm-tooltip-bg)",
-            color: "var(--adm-text)",
+            color: "var(--adm-tooltip-text)",
             font: "600 13px/1.2 var(--adm-font-sans)",
             padding: "6px 10px",
             borderRadius: 10,

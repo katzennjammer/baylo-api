@@ -55,7 +55,10 @@
   --adm-warn-outline: rgba(255,90,110,0.50);   /* destructive button border */
   --adm-warn-hover-bg: rgba(255,90,110,0.10);  /* destructive button hover fill */
   --adm-badge: #ff5a6e;  --adm-badge-text: #1a0508; /* rail count badge */
-  --adm-tooltip-bg: #23212a; /* rail tooltip background */
+  --adm-tooltip-bg: #23212a;   /* rail tooltip background -- stays dark in both themes */
+  --adm-tooltip-text: #f5f4f7; /* rail tooltip text -- NOT overridden in light theme; it
+                                   pairs with --adm-tooltip-bg, which also never changes,
+                                   not with the page canvas */
 
   /* ---------- Gradients ---------- */
   --adm-highlight: linear-gradient(160deg, #9b5cf0 0%, #d98bd0 55%, #f0c24a 100%);
