@@ -89,8 +89,19 @@ export default function ReportControls({
   }
 
   return (
-    <div className="no-print" style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-      <span style={{ fontSize: 12, color: "#777", fontWeight: 700 }}>Period</span>
+    <div
+      className="no-print"
+      style={{
+        display: "flex",
+        alignItems: "center",
+        gap: 8,
+        flexWrap: "wrap",
+        background: "var(--adm-panel-flat)",
+        borderRadius: 16,
+        padding: "10px 12px",
+      }}
+    >
+      <span style={{ fontSize: 12, color: "var(--adm-text-muted)", fontWeight: 700, marginRight: 2 }}>Period</span>
       {options.map((option) => {
         const active = option.days === activeDays
         return (
@@ -100,13 +111,18 @@ export default function ReportControls({
             onClick={() => selectWindow(option.days)}
             className="admin-chip admin-btn-press"
             data-active={active}
-            style={{ border: "1px solid " + (active ? "#1f6b43" : "rgba(0,0,0,.14)"), color: active ? "#21643d" : "#555", cursor: "pointer" }}
+            style={{
+              border: "1px solid " + (active ? "var(--adm-accent-soft)" : "var(--adm-border-chip)"),
+              color: active ? "var(--adm-text-on-soft)" : "var(--adm-text)",
+              background: active ? undefined : "transparent",
+              cursor: "pointer",
+            }}
           >
             {active ? (
               <motion.span
                 layoutId="chip-pill-report-window"
                 className="admin-chip-pill"
-                style={{ background: "rgba(31,107,67,.10)" }}
+                style={{ background: "var(--adm-accent-soft)" }}
                 transition={{ type: "spring", stiffness: 500, damping: 40, mass: 0.6 }}
               />
             ) : null}
@@ -126,14 +142,14 @@ export default function ReportControls({
         className="admin-btn-press"
         style={{
           marginLeft: 6,
-          padding: "7px 13px",
+          padding: "9px 16px",
           borderRadius: 999,
           fontSize: 13,
           fontWeight: 700,
           cursor: "pointer",
-          border: "1px solid " + (live ? "#15803d" : "rgba(0,0,0,.14)"),
-          background: live ? "rgba(21,128,61,.10)" : "#fff",
-          color: live ? "#15803d" : "#555",
+          border: "1px solid " + (live ? "var(--adm-good)" : "var(--adm-border-control)"),
+          background: live ? "var(--adm-good-bg)" : "transparent",
+          color: live ? "var(--adm-good)" : "var(--adm-text)",
         }}
       >
         {live ? "● Live" : "○ Live"}
@@ -144,14 +160,14 @@ export default function ReportControls({
         onClick={() => router.refresh()}
         className="admin-btn-press"
         style={{
-          padding: "7px 13px",
+          padding: "9px 16px",
           borderRadius: 999,
           fontSize: 13,
           fontWeight: 700,
           cursor: "pointer",
-          border: "1px solid rgba(0,0,0,.14)",
-          background: "#fff",
-          color: "#555",
+          border: "1px solid var(--adm-border-secondary)",
+          background: "transparent",
+          color: "var(--adm-text)",
         }}
       >
         Refresh now

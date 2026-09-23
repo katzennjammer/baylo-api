@@ -88,6 +88,29 @@ Not part of `DESIGN_SPEC.md`, which only specifies a dark palette. Added a top-b
 - [ ] Check contrast by eye in light mode on a few busy pages (once later steps add them) — flag anything that looks low-contrast, since this palette hasn't been formally audited yet.
 - [ ] Tab to the toggle button with the keyboard — visible focus ring, `aria-label` reads "Switch to light theme" / "Switch to dark theme" depending on current state (check with a screen reader or the accessibility inspector).
 
+## `/admin/reports` — Overall report redesign (ad hoc request, dashboard-template look)
+
+Requested independently of the Step 5 page order, based on a reference screenshot of a generic analytics dashboard template (KPI tiles, a big line/area trend chart, a donut chart with a legend). Implemented as a visual restyle plus two new chart-rendering components consuming the **same already-fetched data** — no new queries, no data reshaping, no prop/handler changes to `ReportControls` or `ExportReportButton`.
+
+- **`ReportCharts.tsx`**: `BarChart`, `StatTile`, `RankTable` restyled to the `--adm-*` token system (dark/light aware, same as the rest of the redesign). Added two new exported components:
+  - `TrendChart` — a line + gradient-area chart (plain inline SVG, `viewBox`-scaled so it can't reproduce the old fixed-width bar-overflow bug documented in this same file's header comment), following `DESIGN_SPEC.md` §3.29's line/area color spec (violet primary + area fill, dashed yellow comparison series, horizontal-only gridlines).
+  - `DonutChart` — a ring built from stacked `<circle>` strokes with `stroke-dasharray` (not `<path>` wedges, to avoid arc-angle trig), paired with a legend listing exact values and percentages.
+- **`page.tsx`**: replaced the "Reports filed per month" + "New accounts per month" bar charts with one `TrendChart` (New accounts primary, Reports filed as the dashed comparison — the pairing DESIGN_SPEC's line-chart section anticipated). Replaced the "Reports by status" bar chart with `DonutChart`. Every other section, its order, and its content is unchanged per DESIGN_SPEC assumption #10 ("keep the current section order and content of the page. Only apply the styles"). Color constants (`SERIES_COLOR` etc.) now reference `--adm-*` tokens instead of hardcoded hex.
+- **`ReportControls.tsx` / `ExportReportButton.tsx`**: colors only — restyled chips/buttons to the token system. `selectWindow()`, the live-refresh timer, the beforeprint/afterprint handlers, and `window.print()` are byte-identical to before.
+- **Print stylesheet**: added three new rules (`.report-trend-chart svg`/`text` sizing, `.report-donut-chart svg` sizing) shrinking the two new chart types for the print column, following the exact same "shrink via CSS override on a percentage/viewBox-scaled element" pattern the existing bar-track print rules already use. Did not touch any of the existing print rules.
+- Verified: `tsc`, lint (both scoped to `reports/` and the full admin diff against baseline) clean — zero new errors/warnings. `next build` compiles; fails only on the pre-existing unrelated `scripts/` error. Confirmed via `curl -I` that `/admin/reports` still redirects to login with no 500 (renders/compiles without a runtime error).
+
+**Not verified:** the actual print/PDF output with the new SVG charts — I can't drive a browser print dialog from here. Please export a PDF once you can and check the trend chart and donut chart aren't clipped or oversized in the two-column print grid before relying on it.
+
+**Manual test steps:**
+- [ ] Open `/admin/reports`. Confirm the "New accounts vs. reports filed, per month" trend chart renders a smooth line + violet gradient fill for New accounts, plus a dashed yellow line for Reports filed, with month labels along the bottom.
+- [ ] Confirm "Reports by status" now renders as a ring with a colored legend (label, count, percentage) instead of a bar list.
+- [ ] Switch the period selector (7/30/90 days, 12 months) — confirm both new charts update along with everything else (same `router.push`/server refetch as before).
+- [ ] Toggle Live on — confirm both new charts still refresh every 30s without visual glitches.
+- [ ] Toggle light/dark theme — confirm the trend chart's gridlines, text, and area fill, and the donut's track color, all switch correctly (they're all `var(--adm-*)`-driven).
+- [ ] Click "Export as PDF" and check the print preview: the trend chart and donut chart should each fit inside their card, not overflow into the next section, and the donut's legend should stay legible.
+- [ ] Resize the browser to confirm both new charts scale down gracefully in a single-column layout (no horizontal scroll, no overflow).
+
 ## Baseline (recorded before any redesign changes)
 
 - `npx tsc --noEmit`: fails, but only on pre-existing errors in `scripts/seed-demo-appeal.ts`, `scripts/verify-id-verification.ts`, `scripts/verify-moderation.ts` (Role union type mismatches — `"SUPER_ADMIN"`/`"MODERATOR"` not in the current `Role` enum). None touch `src/app/admin` or `src/components/admin`.

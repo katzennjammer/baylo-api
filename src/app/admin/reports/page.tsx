@@ -1,5 +1,5 @@
 import { loadReportSummary, normaliseWindowDays, WINDOW_OPTIONS } from "@/lib/admin-reports"
-import { BarChart, RankTable, StatTile } from "./ReportCharts"
+import { BarChart, DonutChart, RankTable, StatTile, TrendChart } from "./ReportCharts"
 import ReportControls from "./ReportControls"
 import ExportReportButton from "./ExportReportButton"
 
@@ -33,9 +33,10 @@ export const revalidate = 0
  * ExportReportButton for why there is no PDF library.
  */
 
-const SERIES_COLOR = "#1f6b43"
-const WARN_COLOR = "#b45309"
-const INFO_COLOR = "#1d4ed8"
+const SERIES_COLOR = "var(--adm-accent)"
+const WARN_COLOR = "var(--adm-queue)"
+const INFO_COLOR = "var(--adm-info)"
+const NEUTRAL_COLOR = "var(--adm-text-secondary)"
 
 interface Props {
   searchParams: Promise<{ days?: string }>
@@ -138,6 +139,15 @@ const toLabel = summary.to.toLocaleDateString("en-US", dateFormat)
             // track keeps room.
             "  .report-grid [role='img'] { min-width: 40px !important; }",
             "  .report-grid section > div > div > span:first-child { width: 92px !important; white-space: normal !important; overflow: visible !important; text-overflow: clip !important; }",
+            // TrendChart / DonutChart in print. Both size themselves off a
+            // fixed viewBox scaled by CSS width (the same percentage-safe
+            // shape the bar tracks use, see ReportCharts.tsx's file header),
+            // so shrinking them for the narrow print column is a CSS height
+            // override, not a layout change -- nothing about the SVG's own
+            // coordinate system needs to know it's printing.
+            "  .report-trend-chart svg { height: 130px !important; }",
+            "  .report-trend-chart text { font-size: 8px !important; }",
+            "  .report-donut-chart svg { width: 96px !important; height: 96px !important; }",
             // TABLES IN A HALF-COLUMN. A RankTable cell is white-space: nowrap
             // on screen, which is right when the card is full width. In a
             // ~380px print column that nowrap made the columns overlap each
@@ -173,12 +183,12 @@ const toLabel = summary.to.toLocaleDateString("en-US", dateFormat)
       </div>
       <div className="report-head" style={{ display: "flex", justifyContent: "space-between", alignItems: "start", gap: 16, flexWrap: "wrap" }}>
         <div style={{ minWidth: 0 }}>
-          <h1 style={{ fontSize: 24, fontWeight: 800, letterSpacing: "-.02em" }}>Overall report</h1>
-          <p style={{ fontSize: 13, color: "#777", marginTop: 4, maxWidth: "72ch", lineHeight: 1.6 }}>
+          <h1 style={{ fontSize: 30, fontWeight: 700, letterSpacing: "-0.02em", color: "var(--adm-text)" }}>Overall report</h1>
+          <p style={{ fontSize: 14, fontWeight: 500, color: "var(--adm-text-secondary)", marginTop: 6, maxWidth: "72ch", lineHeight: 1.6 }}>
             {summary.windowLabel} ({fromLabel} to {toLabel}). Every figure is counted in the database,
             not on this screen.
           </p>
-          <p style={{ fontSize: 12, color: "#999", marginTop: 4 }}>Generated {generatedLabel}</p>
+          <p style={{ fontSize: 12, color: "var(--adm-text-muted)", marginTop: 4 }}>Generated {generatedLabel}</p>
         </div>
         <ExportReportButton
           windowLabel={summary.windowLabel}
@@ -229,17 +239,11 @@ const toLabel = summary.to.toLocaleDateString("en-US", dateFormat)
       <section>
         <h2 style={sectionHeading}>Trend</h2>
         <div className="report-grid" style={gridStyle}>
-          <BarChart
-            title="Reports filed per month"
-            caption="How much moderation the platform generated, month by month."
-            points={summary.reportsByMonth}
-            color={WARN_COLOR}
-          />
-          <BarChart
-            title="New accounts per month"
-            caption="Registrations, month by month. A falling bar here is a growth problem, not a moderation one."
-            points={summary.usersByMonth}
-            color={INFO_COLOR}
+          <TrendChart
+            title="New accounts vs. reports filed, per month"
+            caption="Growth against the moderation load it generated -- a falling accent line with a rising dashed one is a ratio worth a second look."
+            primary={{ points: summary.usersByMonth, color: "var(--adm-accent)", label: "New accounts" }}
+            secondary={{ points: summary.reportsByMonth, color: "var(--adm-accent-2)", label: "Reports filed" }}
           />
           <BarChart
             title="Leaf movement per month"
@@ -281,7 +285,7 @@ const toLabel = summary.to.toLocaleDateString("en-US", dateFormat)
             title="Meetups confirmed, by hub"
             caption="Where the parties said they met -- a different column from where they planned to, so confirmed meetups only."
             points={summary.hubClaims}
-            color="#6b7280"
+            color={NEUTRAL_COLOR}
             limit={10}
             emptyLabel="No meetup has been confirmed yet."
           />
@@ -349,11 +353,10 @@ const toLabel = summary.to.toLocaleDateString("en-US", dateFormat)
           />
           <StatTile label="ID approvals" value={t.idApprovedInWindow} hint={t.idDecidedInWindow + " decisions in period"} />
           <StatTile label="Appeals overturned" value={t.appealsOverturnedInWindow} hint={t.appealsDecidedInWindow + " decided in period"} />
-          <BarChart
+          <DonutChart
             title="Reports by status"
             caption="All time, not just the period -- how much of the queue is still live."
             points={summary.reportsByStatus}
-            color={SERIES_COLOR}
             emptyLabel="No reports have ever been filed."
           />
         </div>
@@ -384,7 +387,7 @@ const toLabel = summary.to.toLocaleDateString("en-US", dateFormat)
         </div>
       </section>
 
-      <p style={{ fontSize: 12, color: "#999", lineHeight: 1.6 }}>
+      <p style={{ fontSize: 12, color: "var(--adm-text-muted)", lineHeight: 1.6 }}>
         Read-only report. Nothing on this page changes a record, so nothing here writes an audit
         row. Open queues and all-time totals do not move with the period selector; everything else
         does. The figures are live as of {generatedLabel} and will differ if the page is reloaded.
@@ -394,13 +397,14 @@ const toLabel = summary.to.toLocaleDateString("en-US", dateFormat)
 }
 
 const sectionHeading: React.CSSProperties = {
-  fontSize: 15,
-  fontWeight: 800,
-  marginBottom: 10,
+  fontSize: 22,
+  fontWeight: 700,
+  marginBottom: 14,
   lineHeight: 1.25,
   breakAfter: "avoid",
   pageBreakAfter: "avoid",
   overflow: "visible",
+  color: "var(--adm-text)",
 }
 
 /**
