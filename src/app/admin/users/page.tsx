@@ -3,6 +3,8 @@ import { auth } from "@root/auth"
 import prisma from "@/lib/prisma"
 import { suspensionState } from "@/lib/moderation"
 import UserActions from "./UserActions"
+import { FilterChips } from "@/components/admin/FilterChips"
+import { StaggerGroup, StaggerItem } from "@/components/admin/Stagger"
 
 export const dynamic = "force-dynamic"
 export const revalidate = 0
@@ -26,6 +28,8 @@ function chip(active: boolean): React.CSSProperties {
     color: active ? "#2e7d32" : "#555",
   }
 }
+// Used only by the Previous/Next pager below, which is a single link rather
+// than a filter axis and so keeps the plain (non-sliding) chip look.
 
 function idStatus(user: {
   idVerifiedGrandfatheredAt: Date | null
@@ -123,19 +127,21 @@ export default async function UsersPage({ searchParams }: Props) {
         </button>
       </form>
 
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        <Link href={href({ status: undefined })} style={chip(!status)}>All</Link>
-        {STATUSES.map((value) => (
-          <Link key={value} href={href({ status: status === value ? undefined : value })} style={chip(status === value)}>
-            {value[0].toUpperCase() + value.slice(1)}
-          </Link>
-        ))}
-        {ROLES.map((value) => (
-          <Link key={value} href={href({ role: role === value ? undefined : value })} style={chip(role === value)}>
-            {value}
-          </Link>
-        ))}
-      </div>
+      <FilterChips
+        groupId="status"
+        options={[
+          { key: "all", label: "All", href: href({ status: undefined }) },
+          ...STATUSES.map((value) => ({
+            key: value,
+            label: value[0].toUpperCase() + value.slice(1),
+            href: href({ status: status === value ? undefined : value }),
+          })),
+        ]}
+      />
+      <FilterChips
+        groupId="role"
+        options={ROLES.map((value) => ({ key: value, label: value, href: href({ role: role === value ? undefined : value }) }))}
+      />
 
       {users.length === 0 ? (
         <p style={{ padding: 32, textAlign: "center", background: "#fff", borderRadius: 14, color: "#888" }}>No users found.</p>
@@ -151,11 +157,17 @@ export default async function UsersPage({ searchParams }: Props) {
                 <th style={{ padding: "12px 14px" }}>Account action</th>
               </tr>
             </thead>
-            <tbody>
-              {users.map((user) => {
+            <StaggerGroup as="tbody">
+              {users.map((user, index) => {
                 const suspension = suspensionState(user)
                 return (
-                  <tr key={user.id} style={{ borderTop: "1px solid rgba(0,0,0,.06)", verticalAlign: "top" }}>
+                  <StaggerItem
+                    as="tr"
+                    index={index}
+                    key={user.id}
+                    className="admin-row-hover"
+                    style={{ borderTop: "1px solid rgba(0,0,0,.06)", verticalAlign: "top" }}
+                  >
                     <td style={{ padding: "14px" }}>
                       <strong>{user.name}</strong>
                       <div style={{ color: "#777", marginTop: 3 }}>{user.email}</div>
@@ -188,10 +200,10 @@ export default async function UsersPage({ searchParams }: Props) {
                         <UserActions userId={user.id} suspended={suspension.suspended} canSuspend={canSuspend} />
                       )}
                     </td>
-                  </tr>
+                  </StaggerItem>
                 )
               })}
-            </tbody>
+            </StaggerGroup>
           </table>
         </div>
       )}

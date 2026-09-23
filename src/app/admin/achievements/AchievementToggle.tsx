@@ -3,6 +3,7 @@
 import { useState } from "react"
 import { useRouter } from "next/navigation"
 import toast from "react-hot-toast"
+import { Expandable } from "@/components/admin/Expandable"
 
 /**
  * Activate / deactivate one achievement.
@@ -54,56 +55,66 @@ export default function AchievementToggle({
     }
   }
 
-  if (!open) {
-    return (
-      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-        <button
-          type="button"
-          onClick={() => setOpen(true)}
-          style={{
-            padding: "7px 10px", border: "1px solid rgba(0,0,0,.12)", borderRadius: 7,
-            background: isActive ? "#fee2e2" : "#e4f2e8",
-            color: isActive ? "#991b1b" : "#21643d", fontWeight: 700, fontSize: 12, cursor: "pointer",
-          }}
-        >
-          {isActive ? "Deactivate" : "Reactivate"}
-        </button>
-        {isActive && earnedCount > 0 ? (
-          <span style={{ fontSize: 11, color: "#888" }}>
-            {earnedCount} user{earnedCount === 1 ? "" : "s"} keep it
-          </span>
-        ) : null}
-      </div>
-    )
-  }
-
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 200 }}>
-      <input
-        value={reason}
-        onChange={(e) => setReason(e.target.value)}
-        placeholder="Reason required"
-        maxLength={1000}
-        disabled={busy}
-        style={{ padding: "7px 9px", borderRadius: 7, border: "1px solid rgba(0,0,0,.16)", fontSize: 12 }}
-      />
-      <div style={{ display: "flex", gap: 6 }}>
-        <button
-          type="button"
-          onClick={submit}
-          disabled={busy || !reason.trim()}
-          style={{
-            flex: 1, padding: "7px 10px", border: 0, borderRadius: 7,
-            background: isActive ? "#e5484d" : "#4CAF50", color: "#fff",
-            fontWeight: 700, fontSize: 12, opacity: busy || !reason.trim() ? 0.55 : 1,
-          }}
-        >
-          {busy ? "Saving…" : isActive ? "Deactivate" : "Reactivate"}
-        </button>
-        <button type="button" onClick={() => { setOpen(false); setReason("") }} disabled={busy} style={{ padding: "7px 10px", border: "1px solid rgba(0,0,0,.12)", borderRadius: 7, background: "#fff", fontSize: 12, cursor: "pointer" }}>
-          Cancel
-        </button>
-      </div>
+      {!open ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+          <button
+            type="button"
+            onClick={() => setOpen(true)}
+            className="admin-btn-press"
+            style={{
+              padding: "7px 10px", border: "1px solid rgba(0,0,0,.12)", borderRadius: 7,
+              background: isActive ? "#fee2e2" : "#e4f2e8",
+              color: isActive ? "#991b1b" : "#21643d", fontWeight: 700, fontSize: 12, cursor: "pointer",
+            }}
+          >
+            {isActive ? "Deactivate" : "Reactivate"}
+          </button>
+          {isActive && earnedCount > 0 ? (
+            <span style={{ fontSize: 11, color: "#888" }}>
+              {earnedCount} user{earnedCount === 1 ? "" : "s"} keep it
+            </span>
+          ) : null}
+        </div>
+      ) : null}
+      <Expandable open={open}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <input
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="Reason required"
+            maxLength={1000}
+            disabled={busy}
+            autoFocus
+            style={{ padding: "7px 9px", borderRadius: 7, border: "1px solid rgba(0,0,0,.16)", fontSize: 12 }}
+          />
+          <div style={{ display: "flex", gap: 6 }}>
+            <button
+              type="button"
+              onClick={submit}
+              disabled={busy || !reason.trim()}
+              className="admin-btn-press"
+              style={{
+                flex: 1, padding: "7px 10px", border: 0, borderRadius: 7,
+                background: isActive ? "#e5484d" : "#4CAF50", color: "#fff",
+                fontWeight: 700, fontSize: 12, opacity: busy || !reason.trim() ? 0.55 : 1,
+              }}
+            >
+              {busy ? "Saving…" : isActive ? "Deactivate" : "Reactivate"}
+            </button>
+            <button
+              type="button"
+              onClick={() => { setOpen(false); setReason("") }}
+              disabled={busy}
+              className="admin-btn-press"
+              style={{ padding: "7px 10px", border: "1px solid rgba(0,0,0,.12)", borderRadius: 7, background: "#fff", fontSize: 12, cursor: "pointer" }}
+            >
+              Cancel
+            </button>
+          </div>
+        </div>
+      </Expandable>
     </div>
   )
 }

@@ -14,6 +14,7 @@ import { V1_ITEM_SELECT, V1_ITEM_OWNER_SELECT, v1ItemStatsSelect, v1Item, type V
 import { taskLabel } from "@/lib/v1/taxonomy"
 import { loadStanding, publicStanding } from "@/lib/reputation-gate"
 import { loadIdVerificationState, publicIdVerification } from "@/lib/id-verification"
+import { claimDailyTierGrant } from "@/lib/tier-grant"
 
 /** What the owner's own shelf lists. See the note at step 2. */
 const SHELF_STATUSES: ItemStatus[] = [
@@ -64,6 +65,13 @@ export async function GET(req: NextRequest) {
   const { limit } = parsed.data
   const cursor = decodeCursor(parsed.data.cursor)
   if (parsed.data.cursor && !cursor) return invalid("Malformed cursor")
+
+  // The daily Premium/VIP Leaves allowance, claimed lazily on the one screen a
+  // subscriber reliably opens. Runs BEFORE the balance read below so a
+  // same-request grant shows up in the numbers this response returns, rather
+  // than landing one refresh late. A no-op (0 credited) costs one indexed
+  // read; see @/lib/tier-grant for why this is not a cron job.
+  await claimDailyTierGrant(viewerId)
 
   // ── 1 ──
   const user = await prisma.user.findUnique({

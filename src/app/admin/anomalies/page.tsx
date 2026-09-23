@@ -5,6 +5,7 @@ import { bracketOf } from "@/lib/brackets"
 import { valueCap } from "@/lib/trade-rules"
 import { AdminListingImage } from "@/components/AdminListingImage"
 import { ValueReviewActions } from "../listings/ValueReviewActions"
+import { StaggerGroup, StaggerItem } from "@/components/admin/Stagger"
 
 export const dynamic = "force-dynamic"
 export const revalidate = 0
@@ -147,13 +148,13 @@ export default async function ReviewQueuePage() {
                   <th style={th}>Decision</th>
                 </tr>
               </thead>
-              <tbody>
-                {reviews.map((i) => {
+              <StaggerGroup as="tbody">
+                {reviews.map((i, index) => {
                   const suggested = i.suggestedLeaves
                   const asked = i.valueLeaves
                   const cap = suggested === null ? null : valueCap(suggested)
                   return (
-                    <tr key={i.id} style={{ borderTop: "1px solid rgba(0,0,0,.06)" }}>
+                    <StaggerItem as="tr" index={index} key={i.id} className="admin-row-hover" style={{ borderTop: "1px solid rgba(0,0,0,.06)" }}>
                       <td style={{ ...td, display: "flex", alignItems: "center", gap: 10 }}>
                         <AdminListingImage src={parseFirstImage(i.images)} alt={i.title} size={52} />
                         <div>
@@ -188,10 +189,10 @@ export default async function ReviewQueuePage() {
                       <td style={td}>
                         <ValueReviewActions itemId={i.id} />
                       </td>
-                    </tr>
+                    </StaggerItem>
                   )
                 })}
-              </tbody>
+              </StaggerGroup>
             </table>
           </div>
         )}
@@ -225,12 +226,12 @@ export default async function ReviewQueuePage() {
                   <th style={th}>Most recent</th>
                 </tr>
               </thead>
-              <tbody>
-                {pairs.map((p) => {
+              <StaggerGroup as="tbody">
+                {pairs.map((p, index) => {
                   const u = byId.get(p.userId)
                   const q = byId.get(p.partnerId)
                   return (
-                    <tr key={`${p.userId}-${p.partnerId}`} style={{ borderTop: "1px solid rgba(0,0,0,.06)" }}>
+                    <StaggerItem as="tr" index={index} key={`${p.userId}-${p.partnerId}`} className="admin-row-hover" style={{ borderTop: "1px solid rgba(0,0,0,.06)" }}>
                       <td style={td}>
                         {u?.name ?? p.userId}
                         <div style={{ fontSize: 11, color: "#aaa" }}>{u?.email}</div>
@@ -241,10 +242,10 @@ export default async function ReviewQueuePage() {
                       </td>
                       <td style={{ ...td, fontWeight: 700 }}>{Number(p.zeroSwaps)}</td>
                       <td style={td}>{new Date(p.lastAt).toLocaleString()}</td>
-                    </tr>
+                    </StaggerItem>
                   )
                 })}
-              </tbody>
+              </StaggerGroup>
             </table>
           </div>
         )}

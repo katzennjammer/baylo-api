@@ -54,6 +54,7 @@ export interface AchievementView {
   imageUrl: string | null
   criterion: AchievementCriterion
   threshold: number
+  points: number
   /** What the user has reached toward `threshold`. Equal to threshold when unlocked. */
   progress: number
   unlocked: boolean
@@ -79,6 +80,7 @@ interface Activity {
   lifetimeLeaves: number
   safeZoneMeetups: number
   reportsFiled: number
+  bridgesCompleted: number
 }
 
 /**
@@ -87,9 +89,14 @@ interface Activity {
  * `trades` counts COMPLETED trades on EITHER side -- the same reading as the
  * task engine's FIRST_TRADE, so the two never disagree about what a completed
  * trade is. `safeZoneMeetups` narrows that to completed trades that named a hub.
+ * `bridgesCompleted` narrows it instead to trades that carried a bridge fee --
+ * see @/lib/bridge-fee for what that means. A COMPLETED trade with
+ * `bridgeFeeLeaves` set has definitely had that fee PAID: completion is the one
+ * status that pays it (rejection and cancellation release it back to the payer
+ * instead), so there is no need to read the LeafTransaction ledger separately.
  */
 async function readActivity(db: Db, userId: string): Promise<Activity | null> {
-  const [user, listings, completedTrades, safeZoneMeetups, reportsFiled, idVerified] =
+  const [user, listings, completedTrades, safeZoneMeetups, bridgesCompleted, reportsFiled, idVerified] =
     await Promise.all([
       db.user.findUnique({
         where: { id: userId },
@@ -103,6 +110,13 @@ async function readActivity(db: Db, userId: string): Promise<Activity | null> {
         where: {
           status: "COMPLETED",
           safeZoneHubId: { not: null },
+          OR: [{ senderId: userId }, { receiverId: userId }],
+        },
+      }),
+      db.tradeRequest.count({
+        where: {
+          status: "COMPLETED",
+          bridgeFeeLeaves: { gt: 0 },
           OR: [{ senderId: userId }, { receiverId: userId }],
         },
       }),
@@ -121,6 +135,7 @@ async function readActivity(db: Db, userId: string): Promise<Activity | null> {
     lifetimeLeaves: user.lifetimeLeaves,
     safeZoneMeetups,
     reportsFiled,
+    bridgesCompleted,
   }
 }
 
@@ -153,6 +168,8 @@ export function progressFor(criterion: AchievementCriterion, activity: Activity)
       return activity.safeZoneMeetups
     case "REPORTS_FILED":
       return activity.reportsFiled
+    case "BRIDGE_COMPLETED":
+      return activity.bridgesCompleted
   }
 }
 
@@ -237,6 +254,7 @@ export async function evaluateAchievements(
         imageUrl: def.imageUrl,
         criterion: def.criterion,
         threshold: def.threshold,
+        points: def.points,
         // A locked badge shows real progress (capped at the threshold); an
         // unlocked one shows full, because it is met by definition.
         progress: unlocked ? def.threshold : Math.min(reached, def.threshold),

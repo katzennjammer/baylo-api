@@ -1,8 +1,9 @@
 "use client"
 
-import { useState } from "react"
+import { useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 import toast from "react-hot-toast"
+import { collapseRowThen } from "@/components/admin/rowCollapse"
 
 export default function UserActions({
   userId,
@@ -17,6 +18,7 @@ export default function UserActions({
   const [reason, setReason] = useState("")
   const [days, setDays] = useState("")
   const [busy, setBusy] = useState(false)
+  const buttonRef = useRef<HTMLButtonElement>(null)
 
   async function submit() {
     if (!reason.trim()) {
@@ -41,7 +43,7 @@ export default function UserActions({
       toast.success(suspended ? "Account restored." : "Account suspended.")
       setReason("")
       setDays("")
-      router.refresh()
+      collapseRowThen(buttonRef.current, () => router.refresh())
     } catch {
       toast.error("That action failed.")
     } finally {
@@ -72,10 +74,12 @@ export default function UserActions({
         />
       )}
       <button
+        ref={buttonRef}
         type="button"
         onClick={submit}
         disabled={!canSuspend || busy || !reason.trim()}
         title={canSuspend ? undefined : "Only ADMIN can suspend accounts"}
+        className="admin-btn-press"
         style={{
           padding: "8px 10px",
           border: 0,

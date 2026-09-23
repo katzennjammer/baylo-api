@@ -143,6 +143,7 @@ export default function IdDecisionActions({ submissionId, accountName, reasons }
         </p>
         <button
           type="button"
+          className="admin-btn-press"
           style={{ ...solid, opacity: idNumber.trim() && !busy ? 1 : 0.5 }}
           disabled={busy || !idNumber.trim()}
           onClick={() =>
@@ -186,6 +187,7 @@ export default function IdDecisionActions({ submissionId, accountName, reasons }
         </p>
         <button
           type="button"
+          className="admin-btn-press"
           style={{ ...danger, opacity: reason && !busy ? 1 : 0.5 }}
           disabled={busy || !reason}
           onClick={() => {

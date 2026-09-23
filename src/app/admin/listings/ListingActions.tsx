@@ -1,8 +1,9 @@
 "use client"
 
-import { useState } from "react"
+import { useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 import toast from "react-hot-toast"
+import { collapseRowThen } from "@/components/admin/rowCollapse"
 
 export default function ListingActions({
   listingId,
@@ -16,6 +17,7 @@ export default function ListingActions({
   const router = useRouter()
   const [reason, setReason] = useState("")
   const [busy, setBusy] = useState(false)
+  const buttonRef = useRef<HTMLButtonElement>(null)
 
   async function submit() {
     if (!reason.trim()) {
@@ -36,7 +38,7 @@ export default function ListingActions({
       }
       toast.success(hidden ? "Listing restored." : "Listing hidden.")
       setReason("")
-      router.refresh()
+      collapseRowThen(buttonRef.current, () => router.refresh())
     } catch {
       toast.error("That action failed.")
     } finally {
@@ -55,10 +57,12 @@ export default function ListingActions({
         style={{ padding: "7px 9px", borderRadius: 7, border: "1px solid rgba(0,0,0,.16)", fontSize: 12 }}
       />
       <button
+        ref={buttonRef}
         type="button"
         onClick={submit}
         disabled={!canAct || busy || !reason.trim()}
         title={canAct ? undefined : "Moderators can manage listings"}
+        className="admin-btn-press"
         style={{
           padding: "8px 10px",
           border: 0,
