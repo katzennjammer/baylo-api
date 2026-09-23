@@ -58,6 +58,20 @@ General:
 - [ ] No horizontal scrollbar on the page body at 375, 768, 1024, 1280, 1440px widths.
 - [ ] With OS "reduce motion" enabled, the rail-expand and tooltip animations should be instant/absent rather than animated (spot-check is enough; full reduced-motion audit is Step 6).
 
+## Bug fix: modal content (Hubs, Achievements) losing admin-theme CSS
+
+Regression from the Step 2 CSS migration, reported via a screenshot of the Hub edit form with a missing map. Root cause: `Modal.tsx` (used by `HubForm` and `AchievementForm`) renders its children through `createPortal()` onto `document.body`, deliberately outside `.admin-root` (needed so the dialog's `position: fixed` isn't captured by an animated ancestor's `transform`). Step 2 scoped every migrated utility class as `.admin-root .foo`, which silently stops matching anything rendered through a portal — this is what made `HubLocationPicker`'s map, its Leaflet marker, and its helper paragraph disappear (visible in the screenshot as an empty gap and an unstyled oversized line of help text where the small gray caption should be).
+
+**Fix:** dropped the `.admin-root` ancestor requirement from every migrated interaction/decorative class (`admin-btn-press`, `admin-row-collapsing`, `admin-row-hover`, `admin-card-hover`, `admin-skeleton`, `admin-chip*`, `admin-nav-link*`, `admin-pulse-dot`, `hub-location-map`, `admin-hub-marker*`, `hub-location-help`, `adm-lift`/`adm-row-hover`/`adm-press`/`adm-shimmer`) and gave every `var(--adm-*)` reference inside them a literal fallback matching the dark theme's default. All of these classes are already uniquely `admin-`/`adm-`/`hub-location-`-prefixed (confirmed unused outside `/admin` back in Step 2), so removing the ancestor requirement can't cause a collision — it only makes the selectors match in more places, including inside a portal. Shell-structure classes (`.adm-canvas`, `.adm-shell`, `.adm-topbar`, the rail, etc.) are never portaled and stay scoped to `.admin-root`.
+
+**Not yet checked:** `AchievementForm` also uses `Modal`, so it was very likely hit by the same bug (button press-feedback, any striped placeholders) even though no screenshot of it was reported — worth a manual look once Achievements reaches its redesign step, or sooner if you want to confirm now.
+
+**Manual test steps:**
+- [ ] `/admin/hubs` → open "Edit" on any hub (or "Create hub") → confirm the Leaflet map renders with its tile layer and a marker icon matching the hub type, and the small gray helper line ("Search for an approximate place…") appears at its correct small size below the map, not as an oversized unstyled line.
+- [ ] Drag the marker or click the map — coordinates update in the Latitude/Longitude fields.
+- [ ] Click Save/Cancel/Find inside the modal — confirm the press-scale micro-interaction still fires (`admin-btn-press`).
+- [ ] `/admin/achievements` → open "Manage" on any achievement (or "Create achievement") — spot-check that nothing else inside that modal looks unstyled.
+
 ## Light/dark theme toggle (added after Step 3, ad hoc request)
 
 Not part of `DESIGN_SPEC.md`, which only specifies a dark palette. Added a top-bar toggle (Sun/Moon icon button, next to Account menu, per your placement choice) that flips `.admin-root`'s `data-theme` attribute between `"dark"` (default, matches the spec) and `"light"`.
