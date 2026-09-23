@@ -1,4 +1,4 @@
-import type { PrismaClient } from "@/generated/prisma/client"
+import { Prisma, type PrismaClient } from "@/generated/prisma/client"
 import type { ValuationOutcome } from "@/lib/valuation-server"
 
 /**
@@ -118,6 +118,46 @@ export type TradeWithinHours = (typeof TRADE_WITHIN_HOURS)[number]
 type PerishableDb = Pick<PrismaClient, "item">
 
 /**
+ * `"<schema>"."Item"`, for the raw statements below.
+ *
+ * ── WHY RAW SQL NEEDS THIS AND MODEL QUERIES DO NOT (23 Sep 2026) ───────────
+ *
+ * `src/lib/prisma.ts` hands `?schema=` to the driver adapter, and that option
+ * qualifies the SQL PRISMA BUILDS -- every `prisma.item.*` call lands in the
+ * named schema. It does not rewrite a raw string, and nothing here sets
+ * `search_path`. So `UPDATE "Item"` resolved against the connection's default
+ * search_path, which is `public` -- THE LIVE DATABASE -- however the URL read.
+ *
+ * The three statements below are the only raw WRITER in `src/`, and they run
+ * on /browse, /home and /profile/me, so this was not a background job quietly
+ * missing its target: an acceptance harness on `scratch_x` was expiring live
+ * listings and counting scratch ones. Proven by running one clause twice on one
+ * connection -- unqualified moved 0, qualified moved 1 -- which is what
+ * `scripts/verify-perishable-schema-qualification.ts` now does on every run.
+ *
+ * `Prisma.raw` is the interpolation that does NOT parameterise, which is the
+ * point: a schema is an identifier and `$1` cannot be one. It is safe here
+ * because the value is not input -- it is parsed off this process's own
+ * `DATABASE_URL`, the same string the adapter was built from -- and it is
+ * quoted, with embedded quotes doubled, so it stays a single identifier.
+ *
+ * MIRRORS `databaseSchema()` in @/lib/prisma, and `targetSchema()` in
+ * scripts/lib/live-guard.ts, for the reason live-guard states at length:
+ * importing @/lib/prisma constructs a PrismaClient as a side effect, and this
+ * module is handed its `db` precisely so that it owns no client. Three copies
+ * of four lines; if one changes, change all three.
+ */
+function itemTable(): Prisma.Sql {
+  let schema = "public"
+  try {
+    schema = new URL(process.env.DATABASE_URL ?? "").searchParams.get("schema") ?? "public"
+  } catch {
+    schema = "public"
+  }
+  return Prisma.raw(`"${schema.replace(/"/g, '""')}"."Item"`)
+}
+
+/**
  * Move every perishable past its window to EXPIRED. Returns how many moved.
  *
  * ── A LAZY SWEEP, BECAUSE NOTHING HERE RUNS ON A SCHEDULE ───────────────────
@@ -164,7 +204,7 @@ export async function expirePerishableItems(
   // that guarantee gets lost.
   if (scope.itemId) {
     return db.$executeRaw`
-      UPDATE "Item"
+      UPDATE ${itemTable()}
          SET "status" = 'EXPIRED', "updatedAt" = now()
        WHERE "id" = ${scope.itemId}
          AND "isPerishable" = true
@@ -175,7 +215,7 @@ export async function expirePerishableItems(
 
   if (scope.userId) {
     return db.$executeRaw`
-      UPDATE "Item"
+      UPDATE ${itemTable()}
          SET "status" = 'EXPIRED', "updatedAt" = now()
        WHERE "userId" = ${scope.userId}
          AND "isPerishable" = true
@@ -185,7 +225,7 @@ export async function expirePerishableItems(
   }
 
   return db.$executeRaw`
-    UPDATE "Item"
+    UPDATE ${itemTable()}
        SET "status" = 'EXPIRED', "updatedAt" = now()
      WHERE "isPerishable" = true
        AND "status" = 'AVAILABLE'

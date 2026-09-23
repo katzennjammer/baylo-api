@@ -32,17 +32,23 @@
  * cron entry written with the guard permanently disabled.
  */
 
-import prisma from "../src/lib/prisma"
+import prisma, { databaseSchema } from "../src/lib/prisma"
 import { expirePerishableItems } from "../src/lib/perishable"
+import { Prisma } from "../src/generated/prisma/client"
 
 async function main() {
   const dryRun = process.argv.includes("--dry-run")
 
   if (dryRun) {
-    // Counted with the same predicate the sweep updates on, so the number
-    // printed is the number that would move.
+    // Counted with the same predicate the sweep updates on, AND IN THE SAME
+    // SCHEMA, so the number printed is the number that would move. Unqualified
+    // it was neither: raw SQL ignores the adapter's `?schema=` and resolves
+    // against `public`, so `--dry-run` on a scratch schema reported the live
+    // backlog and the run that followed touched scratch. See `itemTable()` in
+    // @/lib/perishable for the whole account.
+    const item = Prisma.raw(`"${databaseSchema().replace(/"/g, '""')}"."Item"`)
     const due = await prisma.$queryRaw<{ count: bigint }[]>`
-      SELECT count(*) FROM "Item"
+      SELECT count(*) FROM ${item}
        WHERE "isPerishable" = true
          AND "status" = 'AVAILABLE'
          AND "tradeWithinHours" IS NOT NULL
