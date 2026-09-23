@@ -5,6 +5,7 @@ import { suspensionState } from "@/lib/moderation"
 import UserActions from "./UserActions"
 import { FilterChips } from "@/components/admin/FilterChips"
 import { StaggerGroup, StaggerItem } from "@/components/admin/Stagger"
+import UrlSyncedForm from "@/components/admin/primitives/UrlSyncedForm"
 
 export const dynamic = "force-dynamic"
 export const revalidate = 0
@@ -115,7 +116,7 @@ export default async function UsersPage({ searchParams }: Props) {
         </p>
       </div>
 
-      <form action="/admin/users" style={{ display: "flex", gap: 8, maxWidth: 620 }}>
+      <UrlSyncedForm action="/admin/users" style={{ display: "flex", gap: 8, maxWidth: 620 }}>
         <input
           name="q"
           defaultValue={q}
@@ -125,7 +126,7 @@ export default async function UsersPage({ searchParams }: Props) {
         <button type="submit" style={{ padding: "10px 16px", border: 0, borderRadius: 9, background: "#17201b", color: "#fff", fontWeight: 700 }}>
           Search
         </button>
-      </form>
+      </UrlSyncedForm>
 
       <FilterChips
         groupId="status"

@@ -8,6 +8,7 @@ import ListingActions from "./ListingActions"
 import { TakedownDisclosure } from "./TakedownDisclosure"
 import { FilterChips } from "@/components/admin/FilterChips"
 import { StaggerGroup, StaggerItem } from "@/components/admin/Stagger"
+import UrlSyncedForm from "@/components/admin/primitives/UrlSyncedForm"
 
 export const dynamic = "force-dynamic"
 export const revalidate = 0
@@ -84,10 +85,10 @@ export default async function ListingsPage({ searchParams }: Props) {
           Search listings, decide value reviews, and manage moderator takedowns without opening a report.
         </p>
       </div>
-      <form action="/admin/listings" style={{ display: "flex", gap: 8, maxWidth: 620 }}>
+      <UrlSyncedForm action="/admin/listings" style={{ display: "flex", gap: 8, maxWidth: 620 }}>
         <input name="q" defaultValue={q} placeholder="Search title or owner" style={{ flex: 1, padding: "10px 12px", borderRadius: 9, border: "1px solid rgba(0,0,0,.16)", fontSize: 14 }} />
         <button type="submit" style={{ padding: "10px 16px", border: 0, borderRadius: 9, background: "#17201b", color: "#fff", fontWeight: 700 }}>Search</button>
-      </form>
+      </UrlSyncedForm>
       <FilterChips
         groupId="status"
         options={[

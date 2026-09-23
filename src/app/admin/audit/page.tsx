@@ -1,5 +1,6 @@
 import Link from "next/link"
 import prisma from "@/lib/prisma"
+import UrlSyncedForm from "@/components/admin/primitives/UrlSyncedForm"
 
 export const dynamic = "force-dynamic"
 export const revalidate = 0
@@ -102,7 +103,7 @@ export default async function AuditPage({ searchParams }: Props) {
         </p>
       </div>
 
-      <form action="/admin/audit" style={{ ...cardStyle, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "end" }}>
+      <UrlSyncedForm action="/admin/audit" style={{ ...cardStyle, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "end" }}>
         <label style={labelStyle}>
           Actor
           <select name="actorId" defaultValue={actorId ?? ""} style={fieldStyle}>
@@ -133,7 +134,7 @@ export default async function AuditPage({ searchParams }: Props) {
         </label>
         <button type="submit" style={buttonStyle}>Filter</button>
         <Link href="/admin/audit" style={{ ...buttonStyle, background: "#fff", color: "#555", textDecoration: "none" }}>Clear</Link>
-      </form>
+      </UrlSyncedForm>
 
       {actions.length === 0 ? (
         <p style={{ fontSize: 14, color: "#888", padding: 32, textAlign: "center", background: "#fff", borderRadius: 14 }}>
