@@ -22,6 +22,8 @@ import {
   X,
   PanelLeft,
   LogOut,
+  Sun,
+  Moon,
   type LucideIcon,
 } from "lucide-react"
 import AccountMenu from "./AccountMenu"
@@ -74,6 +76,29 @@ function getRailSnapshot() {
 }
 function getRailServerSnapshot() {
   return false
+}
+
+type Theme = "dark" | "light"
+const THEME_KEY = "baylo.adm.theme"
+const THEME_EVENT = "adm-theme-change"
+
+function subscribeTheme(callback: () => void) {
+  window.addEventListener("storage", callback)
+  window.addEventListener(THEME_EVENT, callback)
+  return () => {
+    window.removeEventListener("storage", callback)
+    window.removeEventListener(THEME_EVENT, callback)
+  }
+}
+function getThemeSnapshot(): Theme {
+  try {
+    return window.localStorage.getItem(THEME_KEY) === "light" ? "light" : "dark"
+  } catch {
+    return "dark"
+  }
+}
+function getThemeServerSnapshot(): Theme {
+  return "dark"
 }
 
 const railItemBase: React.CSSProperties = {
@@ -185,14 +210,17 @@ function RailBody({
 export default function AdminShell({
   name,
   role,
+  fontVariables,
   children,
 }: {
   name: string | null
   role: "ADMIN"
+  fontVariables: string
   children: ReactNode
 }) {
   const pathname = usePathname()
   const railExpanded = useSyncExternalStore(subscribeRail, getRailSnapshot, getRailServerSnapshot)
+  const theme = useSyncExternalStore(subscribeTheme, getThemeSnapshot, getThemeServerSnapshot)
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [lastPathname, setLastPathname] = useState(pathname)
 
@@ -207,6 +235,15 @@ export default function AdminShell({
   if (pathname !== lastPathname) {
     setLastPathname(pathname)
     if (drawerOpen) setDrawerOpen(false)
+  }
+
+  function toggleTheme() {
+    try {
+      window.localStorage.setItem(THEME_KEY, theme === "dark" ? "light" : "dark")
+      window.dispatchEvent(new Event(THEME_EVENT))
+    } catch {
+      // localStorage unavailable -- the toggle simply won't persist across reloads.
+    }
   }
 
   function toggleRail() {
@@ -272,12 +309,13 @@ export default function AdminShell({
   }
 
   return (
-    <div className="adm-canvas">
-      <a href="#adm-main" className="adm-skip-link">
-        Skip to content
-      </a>
-      <div className="adm-shell">
-        <div className="adm-topbar">
+    <div className={`admin-root ${fontVariables}`} data-theme={theme}>
+      <div className="adm-canvas">
+        <a href="#adm-main" className="adm-skip-link">
+          Skip to content
+        </a>
+        <div className="adm-shell">
+          <div className="adm-topbar">
           <button
             ref={hamburgerRef}
             type="button"
@@ -328,6 +366,29 @@ export default function AdminShell({
               Admin console
             </span>
           </Link>
+
+          <button
+            type="button"
+            onClick={toggleTheme}
+            aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
+            aria-pressed={theme === "light"}
+            className="adm-press"
+            style={{
+              width: 48,
+              height: 48,
+              borderRadius: "999px",
+              background: "var(--adm-panel-flat)",
+              border: "1px solid var(--adm-border-chip)",
+              color: "var(--adm-text)",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+              cursor: "pointer",
+              flex: "none",
+            }}
+          >
+            {theme === "dark" ? <Sun size={18} aria-hidden="true" /> : <Moon size={18} aria-hidden="true" />}
+          </button>
 
           <AccountMenu name={name} role={role} />
         </div>
@@ -478,6 +539,7 @@ export default function AdminShell({
           </nav>
         </>
       ) : null}
+      </div>
     </div>
   )
 }

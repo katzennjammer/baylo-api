@@ -55,6 +55,7 @@
   --adm-warn-outline: rgba(255,90,110,0.50);   /* destructive button border */
   --adm-warn-hover-bg: rgba(255,90,110,0.10);  /* destructive button hover fill */
   --adm-badge: #ff5a6e;  --adm-badge-text: #1a0508; /* rail count badge */
+  --adm-tooltip-bg: #23212a; /* rail tooltip background */
 
   /* ---------- Gradients ---------- */
   --adm-highlight: linear-gradient(160deg, #9b5cf0 0%, #d98bd0 55%, #f0c24a 100%);
@@ -125,6 +126,59 @@
   color: var(--adm-text);
   background: var(--adm-bg);
   -webkit-font-smoothing: antialiased;
+}
+
+/* ---------- Light theme ----------
+   Opt-in via data-theme="light" on .admin-root (default is dark, matching
+   DESIGN_SPEC.md, which only specifies a dark palette). Only surface,
+   border, divider and page-background text colors are overridden here --
+   accent/tone/badge/highlight/bar colors are left as-is because they're
+   always drawn on their own filled background (buttons, pills, tiles),
+   not the page canvas, so they don't need a light-mode variant. The two
+   exceptions are --adm-accent-text and --adm-accent-icon-active, which
+   ARE used as text/icon color directly on the page background and need a
+   darker, higher-contrast violet on a light canvas.
+   NOTE: this palette hasn't been through the same WCAG contrast audit as
+   DESIGN_SPEC.md §6.1 did for the dark palette -- do that alongside the
+   Step 6 accessibility pass before shipping. */
+.admin-root[data-theme="light"] {
+  --adm-bg: #f3f1f6;
+  --adm-shell: #ffffff;
+  --adm-shell-border: rgba(0,0,0,0.06);
+  --adm-panel: linear-gradient(180deg, #ffffff 0%, #f8f6fb 100%);
+  --adm-panel-solid: #f8f6fb;
+  --adm-panel-flat: #f2eff5;
+  --adm-input: #ffffff;
+  --adm-placeholder-a: #ece8f1;
+  --adm-placeholder-b: #f2eff5;
+  --adm-thumb-a: #e6e1ed;
+  --adm-thumb-b: #eeeaf2;
+  --adm-scrim: rgba(20,16,26,0.45);
+
+  --adm-border: rgba(0,0,0,0.08);
+  --adm-border-hover: rgba(0,0,0,0.16);
+  --adm-border-input: rgba(0,0,0,0.14);
+  --adm-border-control: rgba(0,0,0,0.16);
+  --adm-border-secondary: rgba(0,0,0,0.20);
+  --adm-border-chip: rgba(0,0,0,0.10);
+  --adm-border-empty: rgba(0,0,0,0.16);
+  --adm-divider: rgba(0,0,0,0.08);
+  --adm-track: rgba(0,0,0,0.07);
+  --adm-hover-fill: rgba(0,0,0,0.04);
+
+  --adm-text: #18151f;
+  --adm-text-secondary: #4a4653;
+  --adm-text-muted: #6f6c78;
+  --adm-text-dim: #a5a1ac;
+
+  --adm-accent-text: #7b3fd1;
+  --adm-accent-icon-active: #7b3fd1;
+  --adm-tooltip-bg: #232030;
+
+  --adm-stripes: repeating-linear-gradient(135deg, #ece8f1 0 8px, #f2eff5 8px 16px);
+  --adm-stripes-thumb: repeating-linear-gradient(135deg, #e6e1ed 0 6px, #eeeaf2 6px 12px);
+
+  --adm-shadow-overlay: 0 24px 64px rgba(20,16,26,0.18);
 }
 
 /* Breakpoints (reference; CSS vars can't be used in media queries):

@@ -57,10 +57,8 @@ export default async function AdminLayout({ children }: { children: ReactNode })
   if (me.role !== "ADMIN") redirect("/dashboard")
 
   return (
-    <div className={`admin-root ${admSans.variable} ${admMono.variable}`}>
-      <AdminShell name={me.name} role={me.role}>
-        {children}
-      </AdminShell>
-    </div>
+    <AdminShell name={me.name} role={me.role} fontVariables={`${admSans.variable} ${admMono.variable}`}>
+      {children}
+    </AdminShell>
   )
 }

@@ -58,6 +58,22 @@ General:
 - [ ] No horizontal scrollbar on the page body at 375, 768, 1024, 1280, 1440px widths.
 - [ ] With OS "reduce motion" enabled, the rail-expand and tooltip animations should be instant/absent rather than animated (spot-check is enough; full reduced-motion audit is Step 6).
 
+## Light/dark theme toggle (added after Step 3, ad hoc request)
+
+Not part of `DESIGN_SPEC.md`, which only specifies a dark palette. Added a top-bar toggle (Sun/Moon icon button, next to Account menu, per your placement choice) that flips `.admin-root`'s `data-theme` attribute between `"dark"` (default, matches the spec) and `"light"`.
+
+- `src/app/admin/AdminShell.tsx` now owns the top-level `.admin-root` div (previously in `layout.tsx`); `layout.tsx` passes the `next/font` variable class names down as a `fontVariables` string prop instead of rendering the wrapper itself. The role guard and data fetch in `layout.tsx` are unchanged.
+- Theme state is read via `useSyncExternalStore` with `getServerSnapshot` returning `"dark"`, the same hydration-safe pattern already used for the rail expand/collapse state, persisted to `localStorage["baylo.adm.theme"]` wrapped in try/catch.
+- Added a `.admin-root[data-theme="light"]` override block in `admin-theme.css` that re-defines only the surface/border/divider/text-on-page-background tokens (`--adm-bg`, `--adm-shell`, `--adm-panel*`, `--adm-border*`, `--adm-divider`, `--adm-track`, `--adm-hover-fill`, `--adm-text*`, `--adm-stripes*`, `--adm-scrim`, `--adm-shadow-overlay`, `--adm-tooltip-bg`) plus `--adm-accent-text`/`--adm-accent-icon-active` (darkened, since those two are used as text/icon color directly on the page background rather than on a filled pill/button). Every other token (accent, tone, badge, highlight gradient, bar colors) is left as-is because those are always drawn on their own colored surface, not the page canvas, so a single value works in both themes.
+- **Not yet done:** a WCAG contrast audit of the light palette equivalent to `DESIGN_SPEC.md` §6.1 (which only audited dark). I designed the light values by eye/convention, not by computing ratios. This should happen alongside the Step 6 accessibility pass, before treating light mode as final.
+- Verified: `tsc`/`eslint` diff clean against baseline; `next build` run to confirm no new build-time errors; dev server still returns a healthy redirect (no 500) after the `layout.tsx`/`AdminShell.tsx` restructuring.
+
+**Manual test steps (theme toggle):**
+- [ ] Click the Sun/Moon button in the top bar — the whole console (shell, rail, panels, text) switches from dark to light and back, everywhere, not just the top bar.
+- [ ] Reload the page after switching to light — it stays light (persisted via localStorage), with no flash of the wrong theme and no layout jump.
+- [ ] Check contrast by eye in light mode on a few busy pages (once later steps add them) — flag anything that looks low-contrast, since this palette hasn't been formally audited yet.
+- [ ] Tab to the toggle button with the keyboard — visible focus ring, `aria-label` reads "Switch to light theme" / "Switch to dark theme" depending on current state (check with a screen reader or the accessibility inspector).
+
 ## Baseline (recorded before any redesign changes)
 
 - `npx tsc --noEmit`: fails, but only on pre-existing errors in `scripts/seed-demo-appeal.ts`, `scripts/verify-id-verification.ts`, `scripts/verify-moderation.ts` (Role union type mismatches — `"SUPER_ADMIN"`/`"MODERATOR"` not in the current `Role` enum). None touch `src/app/admin` or `src/components/admin`.
