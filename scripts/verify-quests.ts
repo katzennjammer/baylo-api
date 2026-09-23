@@ -7,13 +7,14 @@
 //   1  dayStartUtc() lands on that calendar day's 00:00 UTC
 //   2  a fresh user gets exactly 5 assignments: 2 Easy, 2 Medium, 1 Hard
 //   3  the assignment is STABLE across repeated calls the same day
-//   4  MEDIUM always assigns both pool entries (pool size == slot count)
+//   4  MEDIUM picks a valid 2-of-3 (no tier's pool equals its slot count any more)
 //   5  completing the real action behind a quest pays it out exactly once
 //   6  a second reconcile does not pay twice
 //   7  the reward amounts match QUEST_REWARDS and write one ledger row each
+//   8  SEND_BRIDGE_OFFER (the new MEDIUM quest) completes off Offer.bridgeFeeLeaves
 
 import prisma from "../src/lib/prisma"
-import { reconcileQuests, dayStartUtc, QUEST_REWARDS, QUEST_SLOTS, QUEST_TIERS } from "../src/lib/quests"
+import { reconcileQuests, dayStartUtc, QUEST_REWARDS, QUEST_SLOTS, QUEST_TIERS, QUEST_POOL } from "../src/lib/quests"
 import { requireScratchSchema } from "./lib/live-guard"
 
 const P = "ZZQUEST_"
@@ -102,9 +103,16 @@ async function main() {
   check("MEDIUM unchanged", sameSet("MEDIUM"))
   check("HARD unchanged", sameSet("HARD"))
 
-  head("4  MEDIUM always assigns both pool entries")
-  const mediumKinds = first.filter((q) => q.tier === "MEDIUM").map((q) => q.quest).sort()
-  check("LIST_ITEM and RECEIVE_OFFER both assigned", JSON.stringify(mediumKinds) === JSON.stringify(["LIST_ITEM", "RECEIVE_OFFER"]))
+  head("4  MEDIUM picks a valid 2-of-3")
+  // MEDIUM's pool grew to 3 (LIST_ITEM, RECEIVE_OFFER, SEND_BRIDGE_OFFER) for
+  // 2 slots, so -- unlike when this test was written against a 2-entry pool
+  // -- there is no longer one fixed pair every user gets. What's still true:
+  // every pick is a real pool member, and no tier repeats a kind.
+  const mediumPoolKinds = new Set(QUEST_POOL.MEDIUM.map((q) => q.quest))
+  const mediumKinds = first.filter((q) => q.tier === "MEDIUM").map((q) => q.quest)
+  check("2 MEDIUM quests assigned", mediumKinds.length === 2, JSON.stringify(mediumKinds))
+  check("both are real MEDIUM pool entries", mediumKinds.every((k) => mediumPoolKinds.has(k)), JSON.stringify(mediumKinds))
+  check("no repeat within MEDIUM", new Set(mediumKinds).size === mediumKinds.length)
 
   const lister = await prisma.user.create({
     data: { name: "Lister", email: `${P}lister@example.com`, isVerified: true, leaves: 0 },
@@ -117,10 +125,11 @@ async function main() {
     },
   })
   const listerQuests = await reconcileQuests(lister.id, at)
-  const listerMediumKinds = listerQuests.filter((q) => q.tier === "MEDIUM").map((q) => q.quest).sort()
+  const listerMediumKinds = listerQuests.filter((q) => q.tier === "MEDIUM").map((q) => q.quest)
   check(
-    "a user who has already listed something still gets both MEDIUM quests",
-    JSON.stringify(listerMediumKinds) === JSON.stringify(["LIST_ITEM", "RECEIVE_OFFER"]),
+    "a user who has already listed something still gets 2 valid MEDIUM quests",
+    listerMediumKinds.length === 2 && listerMediumKinds.every((k) => mediumPoolKinds.has(k)),
+    JSON.stringify(listerMediumKinds),
   )
 
   head("5  completing the real action")
@@ -166,6 +175,41 @@ async function main() {
     head("7  ledger row")
     const rows = await prisma.leafTransaction.count({ where: { userId: payer.id, type: "QUEST_REWARD" } })
     check("exactly one QUEST_REWARD row", rows === 1, String(rows))
+  }
+
+  head("8  SEND_BRIDGE_OFFER (new MEDIUM quest)")
+  // Same hunt as section 5, for MEDIUM landing on SEND_BRIDGE_OFFER this
+  // time. The Offer row is written directly with a non-null bridgeFeeLeaves
+  // rather than going through the real bridging flow (holdBridgeFee() et
+  // al.) -- questSatisfied() only reads the column, so this exercises the
+  // same check the real flow would trigger without re-testing bridging
+  // itself, which trade-rules.ts's own suite already covers.
+  let bridger: { id: string } | null = null
+  for (let i = 0; i < 40 && !bridger; i++) {
+    const candidate = await prisma.user.create({
+      data: { name: `Bridger${i}`, email: `${P}bridger${i}@example.com`, isVerified: true, leaves: 0 },
+    })
+    const qs = await reconcileQuests(candidate.id, at)
+    if (qs.some((q) => q.tier === "MEDIUM" && q.quest === "SEND_BRIDGE_OFFER")) {
+      bridger = candidate
+    } else {
+      await prisma.user.delete({ where: { id: candidate.id } })
+    }
+  }
+  if (!bridger) {
+    check("found a SEND_BRIDGE_OFFER fixture within 40 tries", false)
+  } else {
+    await prisma.offer.create({
+      data: {
+        postId: target.id, senderId: bridger.id, receiverId: owner.id, offeredItems: "[]",
+        bridgeFeeLeaves: 10, offeredBracket: 1, targetBracket: 2, createdAt: at,
+      },
+    })
+    const after = await reconcileQuests(bridger.id, new Date(at.getTime() + 1000))
+    check(
+      "SEND_BRIDGE_OFFER now shows completed",
+      after.find((q) => q.tier === "MEDIUM" && q.quest === "SEND_BRIDGE_OFFER")?.completed === true,
+    )
   }
 
   await cleanup()

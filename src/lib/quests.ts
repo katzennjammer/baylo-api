@@ -36,7 +36,7 @@ import prisma from "@/lib/prisma"
 export type QuestTier = "EASY" | "MEDIUM" | "HARD"
 export type QuestKind =
   | "SEND_OFFER" | "FOLLOW_TRADER" | "LEAVE_REVIEW"
-  | "LIST_ITEM" | "RECEIVE_OFFER"
+  | "LIST_ITEM" | "RECEIVE_OFFER" | "SEND_BRIDGE_OFFER"
   | "COMPLETE_TRADE" | "COMPLETE_BRIDGE_TRADE" | "COMPLETE_SAFEZONE_TRADE"
 
 export const QUEST_TIERS: readonly QuestTier[] = ["EASY", "MEDIUM", "HARD"]
@@ -76,6 +76,11 @@ export const QUEST_POOL: Record<QuestTier, readonly QuestDef[]> = {
   MEDIUM: [
     { quest: "LIST_ITEM", label: "List a new item", description: "Post something from your closet today." },
     { quest: "RECEIVE_OFFER", label: "Get an offer on your shelf", description: "Have one of your listings receive an offer." },
+    {
+      quest: "SEND_BRIDGE_OFFER",
+      label: "Bridge a value gap",
+      description: "Send an offer that spends Leaves to reach a listing one bracket above your item.",
+    },
   ],
   HARD: [
     { quest: "COMPLETE_TRADE", label: "Complete a trade", description: "See a trade all the way through to completion." },
@@ -102,9 +107,10 @@ function poolIndex(userId: string, dayStart: Date, tier: QuestTier, poolSize: nu
 /**
  * Picks the `count` pool entries that fill a tier's slots for this user
  * today: a stable rotation starting at a per-(user, day, tier) hashed
- * offset, wrapping around the pool. When the pool is no bigger than the
- * slot count (MEDIUM today: 2 entries, 2 slots) every entry is picked, in
- * pool order, every day -- there's nothing to rotate.
+ * offset, wrapping around the pool. When a tier's pool is no bigger than
+ * its slot count, every entry is picked, in pool order, every day --
+ * there's nothing to rotate. (No tier is in that position any more: EASY is
+ * 2 of 3, MEDIUM is 2 of 3, HARD is 1 of 3 -- see QUEST_POOL.)
  */
 function pickPoolEntries(userId: string, dayStart: Date, tier: QuestTier): QuestDef[] {
   const pool = QUEST_POOL[tier]
@@ -137,6 +143,16 @@ async function questSatisfied(userId: string, quest: QuestKind, dayStart: Date):
     case "RECEIVE_OFFER":
       return (await prisma.offer.findFirst({
         where: { receiverId: userId, createdAt: { gte: dayStart } },
+        select: { id: true },
+      })) !== null
+    case "SEND_BRIDGE_OFFER":
+      // Offer.bridgeFeeLeaves is non-null exactly when the offer bridges a
+      // bracket gap (the "bridgeUp" case in @/lib/trade-rules: proposer offers
+      // a lower-bracket item for a higher-bracket listing, fee held at
+      // propose time). Same signal COMPLETE_BRIDGE_TRADE reads off
+      // TradeRequest below, one step earlier in the lifecycle.
+      return (await prisma.offer.findFirst({
+        where: { senderId: userId, createdAt: { gte: dayStart }, bridgeFeeLeaves: { not: null } },
         select: { id: true },
       })) !== null
     case "FOLLOW_TRADER":
