@@ -20,7 +20,13 @@ export function CountUp({
   format?: (n: number) => string
 }) {
   const reduce = useReducedMotion()
-  const [display, setDisplay] = useState(reduce || value === 0 ? value : 0)
+  // Never branch the initial render on `reduce`: it resolves synchronously
+  // on the client (via matchMedia) but is always false during SSR, so using
+  // it here would make the client's first paint disagree with the server's
+  // and trigger a hydration mismatch (see the same trap documented in
+  // Stagger.tsx). Always start at 0 (or the final value, if that's also 0)
+  // and let the effect below correct it post-hydration.
+  const [display, setDisplay] = useState(value === 0 ? value : 0)
   const rafRef = useRef<number | null>(null)
   const fmt = format ?? ((n: number) => Math.round(n).toLocaleString())
 
