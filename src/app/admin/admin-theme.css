@@ -250,6 +250,19 @@
   top: 16px;
 }
 
+/* Dashboard overview: main column + "Needs attention" sidebar, single
+   column once the sidebar would otherwise squeeze the tiles below their
+   190px minmax. */
+.admin-root .adm-dashboard-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 28px;
+  align-items: start;
+}
+@media (max-width: 1099px) {
+  .admin-root .adm-dashboard-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
 /* ---------- Global admin utilities ---------- */
 .admin-root *:focus-visible {
   outline: var(--adm-focus-w) solid var(--adm-accent-soft);

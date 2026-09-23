@@ -112,6 +112,26 @@ Requested independently of the Step 5 page order, based on a reference screensho
 - [ ] Resize the browser to confirm both new charts scale down gracefully in a single-column layout (no horizontal scroll, no overflow).
 - [ ] Confirm the period bar now shows only the period pills — no "Live" or "Refresh now" button. Reloading the page or switching periods should still always show current data (nothing should look stale from having removed them).
 
+## `/admin/dashboard` — Overview redesign (ad hoc request, "too plain")
+
+Restyled to `DESIGN_SPEC.md` §4.1's shape (main column + "Needs attention" sidebar + highlight card), using only counts already fetched by this page today — no new queries.
+
+- **`OverviewCards.tsx`**: tiles restyled per spec §3.2 -- `--adm-panel` gradient background, micro-label + tone dot header row (dot is `--adm-good` when the value is 0, else the tile's tone, replacing the old 3px left border), `metricXL` (44/700) `CountUp` number, "View queue →" with a lucide `ArrowRight` in `--adm-accent-text`. Grid changed from `minmax(170px,...)` to the spec's `minmax(190px,...)`. Same `OverviewMetric` props, same hrefs, same tone logic (`PulsingDot` only for a non-zero `queue`-tone tile) -- restyle only.
+- **`page.tsx`**: split into `.adm-dashboard-grid` (new responsive class in `admin-theme.css`, single column below 1100px) -- main column keeps the header, `OverviewCards`, and a restyled "Recent audit actions" panel (avatar-initial circles, action name tone-colored via a small `ACTION_TONE` map mirroring `/admin/audit`'s existing `ACTION_COLOR`, same 8 rows, same data). The new right sidebar has:
+  - "Needs attention": three count-only tiles (ID checks / Appeals / Values in review), each linking to its queue -- the count-only fallback DESIGN_SPEC.md §7#5 describes, since this page has never fetched per-item rows (just counts), and I'm not adding queries to get real names/ages without being asked.
+  - A highlight card ("N items waiting on a decision") -- the exact sum DESIGN_SPEC.md §7#6 specifies (pending ID checks + open appeals + values in review), computed from the same three counts already used for the metric tiles and the attention list, not a new query.
+- **`loading.tsx`**: header text restyled to match; the skeleton itself (`AdminCardSkeleton`) is shared infrastructure, not touched.
+- Verified: `tsc`/lint clean (scoped to `dashboard/` and the full admin diff against baseline) -- zero new errors/warnings. `next build` compiles; fails only on the pre-existing unrelated `scripts/` error. `curl -I /admin/dashboard` still redirects to login with no 500.
+
+**Manual test steps:**
+- [ ] Open `/admin/dashboard`. Confirm all 8 metric tiles render with the new bigger-number card style, and each tile's tone dot is `--adm-good` (green) when its count is 0, and the tile's own color (amber/red) when non-zero.
+- [ ] Confirm the "Pending ID checks" and "Open appeals" tiles (queue tone) show a pulsing dot when non-zero; "Suspended users"/"Hidden listings"/"Inactive hubs" (warn tone) never pulse, even when non-zero.
+- [ ] Confirm the right sidebar's three "Needs attention" tiles show the same numbers as the "Pending ID checks", "Open appeals" and "Values in review" metric tiles, and that clicking one navigates to the same queue the metric tile does.
+- [ ] Confirm the highlight card's big number equals the sum of those same three counts, and its subtext ("N ID checks · N appeals · N values in review") matches.
+- [ ] Confirm "Recent audit actions" still shows the same 8 rows as before, now with an avatar-initial circle per row and the action name colored by its tone.
+- [ ] Resize below ~1100px — the sidebar should drop below the main column (single column), not overlap or overflow.
+- [ ] Toggle light/dark theme — everything on this page should still read correctly in both.
+
 ## Baseline (recorded before any redesign changes)
 
 - `npx tsc --noEmit`: fails, but only on pre-existing errors in `scripts/seed-demo-appeal.ts`, `scripts/verify-id-verification.ts`, `scripts/verify-moderation.ts` (Role union type mismatches — `"SUPER_ADMIN"`/`"MODERATOR"` not in the current `Role` enum). None touch `src/app/admin` or `src/components/admin`.

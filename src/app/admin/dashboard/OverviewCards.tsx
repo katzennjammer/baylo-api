@@ -1,6 +1,7 @@
 "use client"
 
 import Link from "next/link"
+import { ArrowRight } from "lucide-react"
 import { StaggerGroup, StaggerItem } from "@/components/admin/Stagger"
 import { CountUp } from "@/components/admin/CountUp"
 import { PulsingDot } from "@/components/admin/PulsingDot"
@@ -21,41 +22,62 @@ export interface OverviewMetric {
 }
 
 const TONE_COLOR: Record<OverviewMetric["tone"], string> = {
-  queue: "#b45309",
-  warn: "#b91c1c",
-  good: "#1f6b43",
+  queue: "var(--adm-queue)",
+  warn: "var(--adm-warn)",
+  good: "var(--adm-good)",
 }
 
 export function OverviewCards({ metrics }: { metrics: OverviewMetric[] }) {
   return (
-    <StaggerGroup as="div" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 12 }}>
+    <StaggerGroup as="div" style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))", gap: 12 }}>
       {metrics.map((metric, index) => {
         const active = metric.value > 0
-        const accent = active ? TONE_COLOR[metric.tone] : "#c7cdc9"
+        const accent = active ? TONE_COLOR[metric.tone] : "var(--adm-good)"
         return (
           <StaggerItem as="div" index={index} key={metric.label}>
             <Link
               href={metric.href}
-              className="admin-card-hover"
+              className="adm-lift adm-press"
               style={{
-                display: "block",
-                background: "#fff",
-                border: "1px solid rgba(0,0,0,.08)",
-                borderLeft: `3px solid ${accent}`,
-                borderRadius: 14,
-                padding: 18,
+                display: "flex",
+                flexDirection: "column",
+                gap: 14,
+                background: "var(--adm-panel)",
+                border: "1px solid var(--adm-border)",
+                borderRadius: "var(--adm-radius-panel)",
+                padding: "20px 22px",
                 textDecoration: "none",
-                color: "#17201b",
+                color: "var(--adm-text)",
+                minWidth: 0,
               }}
             >
-              <div style={{ display: "flex", alignItems: "center", gap: 6, color: "#77827b", fontSize: 12, fontWeight: 700 }}>
-                {metric.label}
-                {active && metric.tone === "queue" ? <PulsingDot color={accent} /> : null}
+              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+                <span
+                  style={{
+                    color: "var(--adm-text-muted)",
+                    fontSize: 11,
+                    fontWeight: 600,
+                    textTransform: "uppercase",
+                    letterSpacing: "0.08em",
+                    overflow: "hidden",
+                    textOverflow: "ellipsis",
+                    whiteSpace: "nowrap",
+                  }}
+                >
+                  {metric.label}
+                </span>
+                {active && metric.tone === "queue" ? (
+                  <PulsingDot color={accent} />
+                ) : (
+                  <span style={{ width: 8, height: 8, borderRadius: 999, background: accent, flexShrink: 0 }} aria-hidden="true" />
+                )}
               </div>
-              <div style={{ fontSize: 30, fontWeight: 800, marginTop: 8, color: active ? accent : "#17201b" }}>
+              <div style={{ fontSize: 44, fontWeight: 700, letterSpacing: "-0.03em", color: "var(--adm-text)", fontVariantNumeric: "tabular-nums" }}>
                 <CountUp value={metric.value} />
               </div>
-              <div style={{ color: "#4CAF50", fontSize: 12, marginTop: 8 }}>View queue →</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--adm-accent-text)", fontSize: 13, fontWeight: 600 }}>
+                View queue <ArrowRight size={14} aria-hidden="true" />
+              </div>
             </Link>
           </StaggerItem>
         )
