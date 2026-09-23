@@ -16,26 +16,38 @@ export const revalidate = 0
  * Filters are URL-backed so an investigation can be bookmarked and shared.
  */
 
-const th: React.CSSProperties = { padding: "10px 12px", textAlign: "left", color: "#888", fontSize: 12 }
-const td: React.CSSProperties = { padding: "10px 12px", fontSize: 13, verticalAlign: "top" }
-
-const ACTION_COLOR: Record<string, string> = {
-  REPORT_REVIEWING: "#1d4ed8",
-  REPORT_DISMISSED: "#6b7280",
-  REPORT_ACTIONED: "#15803d",
-  LISTING_HIDDEN: "#b91c1c",
-  LISTING_UNHIDDEN: "#15803d",
-  USER_SUSPENDED: "#b91c1c",
-  USER_UNSUSPENDED: "#15803d",
-  LISTING_VALUE_APPROVED: "#15803d",
-  LISTING_VALUE_REJECTED: "#b45309",
-  LISTING_APPEAL_UPHELD: "#7c2d12",
-  LISTING_APPEAL_OVERTURNED: "#15803d",
-  ACHIEVEMENT_CREATED: "#15803d",
-  ACHIEVEMENT_UPDATED: "#1d4ed8",
-  ACHIEVEMENT_DEACTIVATED: "#b91c1c",
-  ACHIEVEMENT_REACTIVATED: "#15803d",
+const th: React.CSSProperties = {
+  padding: "10px 12px",
+  textAlign: "left",
+  color: "var(--adm-text-muted)",
+  fontSize: 11,
+  fontWeight: 600,
+  textTransform: "uppercase",
+  letterSpacing: "0.06em",
 }
+const td: React.CSSProperties = { padding: "12px", fontSize: 13, verticalAlign: "top" }
+
+/** fg/bg pulled from the same tone tokens as everywhere else in the redesign.
+ *  The four colors this mapped to before (red/amber/blue/green/gray) map
+ *  onto warn/queue/info/good/neutral one for one. */
+const ACTION_TONE: Record<string, { fg: string; bg: string }> = {
+  REPORT_REVIEWING: { fg: "var(--adm-info)", bg: "var(--adm-info-bg)" },
+  REPORT_DISMISSED: { fg: "var(--adm-neutral)", bg: "var(--adm-neutral-bg)" },
+  REPORT_ACTIONED: { fg: "var(--adm-good)", bg: "var(--adm-good-bg)" },
+  LISTING_HIDDEN: { fg: "var(--adm-warn)", bg: "var(--adm-warn-bg)" },
+  LISTING_UNHIDDEN: { fg: "var(--adm-good)", bg: "var(--adm-good-bg)" },
+  USER_SUSPENDED: { fg: "var(--adm-warn)", bg: "var(--adm-warn-bg)" },
+  USER_UNSUSPENDED: { fg: "var(--adm-good)", bg: "var(--adm-good-bg)" },
+  LISTING_VALUE_APPROVED: { fg: "var(--adm-good)", bg: "var(--adm-good-bg)" },
+  LISTING_VALUE_REJECTED: { fg: "var(--adm-queue)", bg: "var(--adm-queue-bg)" },
+  LISTING_APPEAL_UPHELD: { fg: "var(--adm-warn)", bg: "var(--adm-warn-bg)" },
+  LISTING_APPEAL_OVERTURNED: { fg: "var(--adm-good)", bg: "var(--adm-good-bg)" },
+  ACHIEVEMENT_CREATED: { fg: "var(--adm-good)", bg: "var(--adm-good-bg)" },
+  ACHIEVEMENT_UPDATED: { fg: "var(--adm-info)", bg: "var(--adm-info-bg)" },
+  ACHIEVEMENT_DEACTIVATED: { fg: "var(--adm-warn)", bg: "var(--adm-warn-bg)" },
+  ACHIEVEMENT_REACTIVATED: { fg: "var(--adm-good)", bg: "var(--adm-good-bg)" },
+}
+const DEFAULT_TONE = { fg: "var(--adm-text-secondary)", bg: "var(--adm-neutral-bg)" }
 
 const TARGET_TYPES = ["REPORT", "LISTING", "USER", "HUB", "ID_VERIFICATION", "TRADE", "LISTING_APPEAL", "ACHIEVEMENT"] as const
 
@@ -93,17 +105,28 @@ export default async function AuditPage({ searchParams }: Props) {
   ])
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: 22 }}>
       <div>
-        <h1 style={{ fontSize: 24, fontWeight: 800, letterSpacing: "-.02em" }}>Audit log</h1>
-        <p style={{ fontSize: 13, color: "#777", marginTop: 4, maxWidth: "72ch", lineHeight: 1.6 }}>
+        <h1 style={{ fontSize: 30, fontWeight: 700, letterSpacing: "-0.02em", color: "var(--adm-text)" }}>Audit log</h1>
+        <p style={{ fontSize: 14, fontWeight: 500, color: "var(--adm-text-secondary)", marginTop: 6, maxWidth: "72ch", lineHeight: 1.6 }}>
           Every moderation action, with who did it and why. Rows are written inside the same
           transaction as the change they describe, and there is no route that edits or deletes
           one — a log with an edit button records what somebody was willing to admit to.
         </p>
       </div>
 
-      <UrlSyncedForm action="/admin/audit" style={{ ...cardStyle, display: "flex", gap: 8, flexWrap: "wrap", alignItems: "end" }}>
+      <UrlSyncedForm
+        action="/admin/audit"
+        style={{
+          background: "var(--adm-panel-flat)",
+          borderRadius: "var(--adm-radius-panel)",
+          padding: 18,
+          display: "grid",
+          gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+          gap: 12,
+          alignItems: "end",
+        }}
+      >
         <label style={labelStyle}>
           Actor
           <select name="actorId" defaultValue={actorId ?? ""} style={fieldStyle}>
@@ -132,17 +155,45 @@ export default async function AuditPage({ searchParams }: Props) {
           To
           <input type="date" name="to" defaultValue={to ?? ""} style={fieldStyle} />
         </label>
-        <button type="submit" style={buttonStyle}>Filter</button>
-        <Link href="/admin/audit" style={{ ...buttonStyle, background: "#fff", color: "#555", textDecoration: "none" }}>Clear</Link>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button type="submit" className="admin-btn-press" style={{ ...buttonStyle, flex: 1 }}>Filter</button>
+          <Link
+            href="/admin/audit"
+            className="admin-btn-press"
+            style={{
+              ...buttonStyle,
+              flex: 1,
+              background: "transparent",
+              color: "var(--adm-text)",
+              border: "1px solid var(--adm-border-secondary)",
+              textDecoration: "none",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            Clear
+          </Link>
+        </div>
       </UrlSyncedForm>
 
       {actions.length === 0 ? (
-        <p style={{ fontSize: 14, color: "#888", padding: 32, textAlign: "center", background: "#fff", borderRadius: 14 }}>
+        <p
+          style={{
+            fontSize: 14,
+            color: "var(--adm-text-muted)",
+            padding: 40,
+            textAlign: "center",
+            background: "var(--adm-panel-flat)",
+            border: "1px dashed var(--adm-border-empty)",
+            borderRadius: "var(--adm-radius-panel)",
+          }}
+        >
           No moderation actions yet.
         </p>
       ) : (
-        <div style={{ background: "#fff", borderRadius: 14, border: "1px solid rgba(0,0,0,.08)", overflowX: "auto" }}>
-          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 860 }}>
+        <div style={{ background: "var(--adm-panel)", borderRadius: "var(--adm-radius-panel)", border: "1px solid var(--adm-border)", overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 900 }}>
             <thead>
               <tr>
                 <th style={th}>When</th>
@@ -162,37 +213,54 @@ export default async function AuditPage({ searchParams }: Props) {
                 } catch {
                   detail = null
                 }
+                const tone = ACTION_TONE[a.action] ?? DEFAULT_TONE
                 return (
-                  <tr key={a.id} style={{ borderTop: "1px solid rgba(0,0,0,.06)" }}>
-                    <td style={{ ...td, whiteSpace: "nowrap", color: "#666" }}>
+                  <tr key={a.id} className="admin-row-hover" style={{ borderTop: "1px solid var(--adm-divider)" }}>
+                    <td style={{ ...td, whiteSpace: "nowrap", color: "var(--adm-text-secondary)" }}>
                       {a.createdAt.toLocaleString()}
                     </td>
                     <td style={td}>
-                      {a.actor.name}
-                      <div style={{ fontSize: 11, color: "#aaa" }}>{a.actor.role}</div>
-                    </td>
-                    <td style={{ ...td, color: ACTION_COLOR[a.action] ?? "#333", fontWeight: 700 }}>
-                      {a.action}
+                      <span style={{ color: "var(--adm-text)", fontWeight: 700 }}>{a.actor.name}</span>
+                      <div style={{ fontSize: 11, fontWeight: 700, letterSpacing: "0.06em", textTransform: "uppercase", color: "var(--adm-text-muted)", marginTop: 2 }}>
+                        {a.actor.role}
+                      </div>
                     </td>
                     <td style={td}>
-                      {a.targetType}
-                      <div style={{ fontSize: 11, color: "#aaa", fontFamily: "monospace" }}>
+                      <span
+                        style={{
+                          display: "inline-flex",
+                          padding: "4px 10px",
+                          borderRadius: 999,
+                          background: tone.bg,
+                          color: tone.fg,
+                          fontSize: 11,
+                          fontWeight: 800,
+                          letterSpacing: "0.04em",
+                          overflowWrap: "anywhere",
+                        }}
+                      >
+                        {a.action}
+                      </span>
+                    </td>
+                    <td style={td}>
+                      <span style={{ color: "var(--adm-text-secondary)", fontSize: 13, fontWeight: 600 }}>{a.targetType}</span>
+                      <div style={{ fontSize: 11, color: "var(--adm-text-muted)", fontFamily: "var(--adm-font-mono)", marginTop: 3, overflowWrap: "anywhere" }}>
                         {a.targetId}
                       </div>
                       {detail?.title != null && (
-                        <div style={{ fontSize: 11, color: "#888" }}>“{String(detail.title)}”</div>
+                        <div style={{ fontSize: 12, color: "var(--adm-text-muted)", marginTop: 2 }}>“{String(detail.title)}”</div>
                       )}
                       {detail?.email != null && (
-                        <div style={{ fontSize: 11, color: "#888" }}>{String(detail.email)}</div>
+                        <div style={{ fontSize: 12, color: "var(--adm-text-muted)", marginTop: 2 }}>{String(detail.email)}</div>
                       )}
                     </td>
-                    <td style={{ ...td, maxWidth: 320, color: "#555", lineHeight: 1.5 }}>
+                    <td style={{ ...td, maxWidth: 320, color: "var(--adm-text-secondary)", lineHeight: 1.5, overflowWrap: "anywhere" }}>
                       {a.reason}
                       {detail?.indefinite === true && (
-                        <div style={{ fontSize: 11, color: "#b91c1c", marginTop: 2 }}>indefinite</div>
+                        <div style={{ fontSize: 11, color: "var(--adm-warn)", marginTop: 3, fontWeight: 700 }}>indefinite</div>
                       )}
                       {typeof detail?.days === "number" && (
-                        <div style={{ fontSize: 11, color: "#888", marginTop: 2 }}>{detail.days} days</div>
+                        <div style={{ fontSize: 11, color: "var(--adm-text-muted)", marginTop: 3 }}>{detail.days} days</div>
                       )}
                     </td>
                   </tr>
@@ -206,15 +274,33 @@ export default async function AuditPage({ searchParams }: Props) {
   )
 }
 
-const cardStyle: React.CSSProperties = {
-  background: "#fff", border: "1px solid rgba(0,0,0,.08)", borderRadius: 14, padding: 14,
-}
 const labelStyle: React.CSSProperties = {
-  display: "flex", flexDirection: "column", gap: 5, fontSize: 11, color: "#777", fontWeight: 700,
+  display: "flex",
+  flexDirection: "column",
+  gap: 6,
+  fontSize: 11,
+  fontWeight: 600,
+  textTransform: "uppercase",
+  letterSpacing: "0.08em",
+  color: "var(--adm-text-muted)",
 }
 const fieldStyle: React.CSSProperties = {
-  minHeight: 36, padding: "7px 9px", borderRadius: 7, border: "1px solid rgba(0,0,0,.16)", background: "#fff", color: "#111", fontSize: 12,
+  minHeight: 40,
+  padding: "10px 12px",
+  borderRadius: "var(--adm-radius-input)",
+  border: "1px solid var(--adm-border-input)",
+  background: "var(--adm-input)",
+  color: "var(--adm-text)",
+  fontSize: 13,
 }
 const buttonStyle: React.CSSProperties = {
-  minHeight: 36, padding: "8px 12px", border: 0, borderRadius: 7, background: "#17201b", color: "#fff", fontWeight: 700, fontSize: 12,
+  minHeight: 40,
+  padding: "10px 16px",
+  border: 0,
+  borderRadius: 999,
+  background: "var(--adm-accent)",
+  color: "var(--adm-text-on-accent)",
+  fontWeight: 700,
+  fontSize: 13,
+  cursor: "pointer",
 }

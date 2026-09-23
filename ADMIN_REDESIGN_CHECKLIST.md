@@ -132,6 +132,20 @@ Restyled to `DESIGN_SPEC.md` §4.1's shape (main column + "Needs attention" side
 - [ ] Resize below ~1100px — the sidebar should drop below the main column (single column), not overlap or overflow.
 - [ ] Toggle light/dark theme — everything on this page should still read correctly in both.
 
+## `/admin/audit` — Audit log redesign (ad hoc request, "too plain")
+
+- **Filter form**: restyled as a dark rounded panel (`--adm-panel-flat`), fields laid out in a responsive `repeat(auto-fit, minmax(150px,1fr))` grid instead of a plain flex-wrap row, Filter as a primary pill button and Clear as a secondary outline button. Same `UrlSyncedForm` wrapper, same field names (`actorId`, `targetType`, `targetId`, `from`, `to`), same server-side parsing -- restyle only.
+- **Table**: kept as a native `<table>` (same approach as `RankTable` on the Overall report -- restyle colors, not markup, for a table). "What" column changed from plain colored text to a small pill, using the exact same 15-action → color mapping the page already had, just renamed from raw hex to the tone tokens (`#1d4ed8`→`--adm-info`, `#6b7280`→`--adm-neutral`, `#15803d`→`--adm-good`, `#b91c1c`/`#7c2d12`→`--adm-warn`, `#b45309`→`--adm-queue`). "Who" gets the role as a small uppercase label under the name; "Target" gets its ID in mono; "Why" keeps the reason plus the existing `indefinite`/`days` detail lines. Same 100-row query, same `detail` JSON parsing (including the try/catch that keeps one malformed row from taking down the page).
+- Verified: `tsc`/lint clean (scoped to `audit/` and the full admin diff against baseline) -- zero new errors/warnings. `next build` compiles; fails only on the pre-existing unrelated `scripts/` error. `curl -I /admin/audit` still redirects to login with no 500.
+
+**Manual test steps:**
+- [ ] Open `/admin/audit`. Confirm the filter panel renders as a dark card with all 5 fields (Actor, Target type, Target ID, From, To) plus Filter/Clear buttons.
+- [ ] Pick an actor and a target type, click Filter — confirm the URL updates (`?actorId=...&targetType=...`) and the table re-filters, without a full page reload (this reuses the `UrlSyncedForm` fix from earlier).
+- [ ] Click Clear — confirm it navigates back to `/admin/audit` with no filters.
+- [ ] Confirm each row's "What" pill is colored correctly: green for *_APPROVED/*_UNHIDDEN/*_UNSUSPENDED/*_OVERTURNED/*_REACTIVATED/*_ACTIONED/*_CREATED, red for *_HIDDEN/*_SUSPENDED/*_UPHELD/*_DEACTIVATED, amber for VALUE_REJECTED, blue for *_REVIEWING/*_UPDATED, gray for DISMISSED.
+- [ ] Confirm the reason column still shows "indefinite" (red) and "N days" (muted) sublines where applicable.
+- [ ] Toggle light/dark theme — table and filter panel should both read correctly.
+
 ## Baseline (recorded before any redesign changes)
 
 - `npx tsc --noEmit`: fails, but only on pre-existing errors in `scripts/seed-demo-appeal.ts`, `scripts/verify-id-verification.ts`, `scripts/verify-moderation.ts` (Role union type mismatches — `"SUPER_ADMIN"`/`"MODERATOR"` not in the current `Role` enum). None touch `src/app/admin` or `src/components/admin`.
