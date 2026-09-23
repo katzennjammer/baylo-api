@@ -815,8 +815,12 @@ enum TaskKind {
 // QUEST_REWARDS never rewrites what a past week actually paid.
 model QuestAssignment {
   id           String    @id @default(cuid())
-  weekStart    DateTime
+  dayStart     DateTime
   tier         QuestTier
+  /// 0-based index within the tier's slots for this day (2 Easy: 0-1, 2
+  /// Medium: 0-1, 1 Hard: 0). Part of the unique key so a tier can hold more
+  /// than one assignment per day.
+  slot         Int       @default(0)
   quest        QuestKind
   rewardLeaves Int
   /// Non-null means paid -- the same "row's existence/non-null column is the
@@ -828,8 +832,8 @@ model QuestAssignment {
   userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@unique([userId, weekStart, tier])
-  @@index([userId, weekStart])
+  @@unique([userId, dayStart, tier, slot])
+  @@index([userId, dayStart])
 }
 
 enum QuestTier {

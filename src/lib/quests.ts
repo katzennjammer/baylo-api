@@ -1,8 +1,8 @@
 import prisma from "@/lib/prisma"
 
 /**
- * Weekly quests: three per user, one per tier, refreshed every Monday
- * 00:00 UTC.
+ * Daily quests ("Daily Nest"): five per user per UTC calendar day --
+ * 2 Easy, 2 Medium, 1 Hard -- refreshed every 24 hours at UTC midnight.
  *
  * ── WHY RECONCILE, NOT AN EVENT HOOK AT EVERY MUTATION SITE ─────────────────
  *
@@ -41,12 +41,21 @@ export type QuestKind =
 
 export const QUEST_TIERS: readonly QuestTier[] = ["EASY", "MEDIUM", "HARD"]
 
-/** Leaves paid per tier. Snapshotted onto QuestAssignment.rewardLeaves at
- *  assignment time, so a later change here never rewrites a past week. */
+/** Leaves paid per completed quest in that tier: 2 Easy + 2 Medium + 1 Hard
+ *  adds up to 2+2+3+3+5 = 15 Leaves for a fully-cleared day. Snapshotted onto
+ *  QuestAssignment.rewardLeaves at assignment time, so a later change here
+ *  never rewrites a past day. */
 export const QUEST_REWARDS: Record<QuestTier, number> = {
-  EASY: 5,
-  MEDIUM: 10,
-  HARD: 20,
+  EASY: 2,
+  MEDIUM: 3,
+  HARD: 5,
+}
+
+/** How many quests are assigned per tier per day. */
+export const QUEST_SLOTS: Record<QuestTier, number> = {
+  EASY: 2,
+  MEDIUM: 2,
+  HARD: 1,
 }
 
 interface QuestDef {
@@ -56,15 +65,16 @@ interface QuestDef {
 }
 
 /** One pool per tier. QuestKind values never repeat across tiers, which is
- *  what lets completeQuest() key a ledger row off `quest` alone. */
+ *  what lets completeQuest() key a ledger row off `quest` alone. Each pool
+ *  must hold at least QUEST_SLOTS[tier] entries. */
 export const QUEST_POOL: Record<QuestTier, readonly QuestDef[]> = {
   EASY: [
-    { quest: "SEND_OFFER", label: "Send a trade offer", description: "Propose a trade on any listing this week." },
+    { quest: "SEND_OFFER", label: "Send a trade offer", description: "Propose a trade on any listing today." },
     { quest: "FOLLOW_TRADER", label: "Follow a trader", description: "Follow someone whose items you like." },
     { quest: "LEAVE_REVIEW", label: "Leave a review", description: "Review a trade you completed." },
   ],
   MEDIUM: [
-    { quest: "LIST_ITEM", label: "List a new item", description: "Post something from your closet this week." },
+    { quest: "LIST_ITEM", label: "List a new item", description: "Post something from your closet today." },
     { quest: "RECEIVE_OFFER", label: "Get an offer on your shelf", description: "Have one of your listings receive an offer." },
   ],
   HARD: [
@@ -74,48 +84,40 @@ export const QUEST_POOL: Record<QuestTier, readonly QuestDef[]> = {
   ],
 } as const
 
-/** Monday 00:00 UTC of the week containing `at`. Sunday counts as day 7 of
- *  the PRECEDING week, matching ISO week semantics, not JS's Sunday-first. */
-export function weekStartUtc(at: Date): Date {
-  const d = new Date(Date.UTC(at.getUTCFullYear(), at.getUTCMonth(), at.getUTCDate()))
-  const isoDay = d.getUTCDay() === 0 ? 7 : d.getUTCDay() // Mon=1 .. Sun=7
-  d.setUTCDate(d.getUTCDate() - (isoDay - 1))
-  return d
+/** UTC midnight of the day containing `at`. */
+export function dayStartUtc(at: Date): Date {
+  return new Date(Date.UTC(at.getUTCFullYear(), at.getUTCMonth(), at.getUTCDate()))
 }
 
-/** A cheap, stable per-(user, week, tier) index into a pool -- not a security
+/** A cheap, stable per-(user, day, tier) index into a pool -- not a security
  *  boundary, just enough spread that two users don't always see the same
- *  quest in a tier with more than one option. */
-function poolIndex(userId: string, weekStart: Date, tier: QuestTier, poolSize: number): number {
-  const key = `${userId}:${weekStart.toISOString()}:${tier}`
+ *  quests in a tier with more options than slots. */
+function poolIndex(userId: string, dayStart: Date, tier: QuestTier, poolSize: number): number {
+  const key = `${userId}:${dayStart.toISOString()}:${tier}`
   let hash = 0
   for (let i = 0; i < key.length; i++) hash = (hash * 31 + key.charCodeAt(i)) >>> 0
   return hash % poolSize
 }
 
 /**
- * Picks which pool entry fills `tier` for this user this week.
- *
- * MEDIUM is the one tier with real personalisation: a user who has never
- * listed anything gets LIST_ITEM rather than a coin flip, because nudging an
- * empty shelf toward its first listing is a genuine, stated goal of the
- * reward system, not a manipulative metric. Every other slot is a stable
- * pseudo-random pick over the pool -- "personalised" only in the sense that
- * users see a mix, not that it reads behaviour to manipulate them.
+ * Picks the `count` pool entries that fill a tier's slots for this user
+ * today: a stable rotation starting at a per-(user, day, tier) hashed
+ * offset, wrapping around the pool. When the pool is no bigger than the
+ * slot count (MEDIUM today: 2 entries, 2 slots) every entry is picked, in
+ * pool order, every day -- there's nothing to rotate.
  */
-async function pickQuest(userId: string, weekStart: Date, tier: QuestTier): Promise<QuestDef> {
+function pickPoolEntries(userId: string, dayStart: Date, tier: QuestTier): QuestDef[] {
   const pool = QUEST_POOL[tier]
+  const count = Math.min(QUEST_SLOTS[tier], pool.length)
+  if (count >= pool.length) return [...pool]
 
-  if (tier === "MEDIUM") {
-    const hasListed = await prisma.item.findFirst({ where: { userId }, select: { id: true } })
-    if (!hasListed) return pool.find((q) => q.quest === "LIST_ITEM")!
-  }
-
-  return pool[poolIndex(userId, weekStart, tier, pool.length)]
+  const start = poolIndex(userId, dayStart, tier, pool.length)
+  return Array.from({ length: count }, (_, i) => pool[(start + i) % pool.length])
 }
 
 export interface QuestView {
   tier: QuestTier
+  slot: number
   quest: QuestKind
   label: string
   description: string
@@ -124,38 +126,38 @@ export interface QuestView {
 }
 
 /** True when the DB already shows the action `quest` needs, done by `userId`
- *  no earlier than `weekStart`. Read-only; completeQuest() does the writing. */
-async function questSatisfied(userId: string, quest: QuestKind, weekStart: Date): Promise<boolean> {
+ *  no earlier than `dayStart`. Read-only; completeQuest() does the writing. */
+async function questSatisfied(userId: string, quest: QuestKind, dayStart: Date): Promise<boolean> {
   switch (quest) {
     case "SEND_OFFER":
       return (await prisma.offer.findFirst({
-        where: { senderId: userId, createdAt: { gte: weekStart } },
+        where: { senderId: userId, createdAt: { gte: dayStart } },
         select: { id: true },
       })) !== null
     case "RECEIVE_OFFER":
       return (await prisma.offer.findFirst({
-        where: { receiverId: userId, createdAt: { gte: weekStart } },
+        where: { receiverId: userId, createdAt: { gte: dayStart } },
         select: { id: true },
       })) !== null
     case "FOLLOW_TRADER":
       return (await prisma.follow.findFirst({
-        where: { followerId: userId, createdAt: { gte: weekStart } },
+        where: { followerId: userId, createdAt: { gte: dayStart } },
         select: { id: true },
       })) !== null
     case "LEAVE_REVIEW":
       return (await prisma.review.findFirst({
-        where: { reviewerId: userId, createdAt: { gte: weekStart } },
+        where: { reviewerId: userId, createdAt: { gte: dayStart } },
         select: { id: true },
       })) !== null
     case "LIST_ITEM":
       return (await prisma.item.findFirst({
-        where: { userId, createdAt: { gte: weekStart } },
+        where: { userId, createdAt: { gte: dayStart } },
         select: { id: true },
       })) !== null
     case "COMPLETE_TRADE":
       return (await prisma.tradeRequest.findFirst({
         where: {
-          status: "COMPLETED", updatedAt: { gte: weekStart },
+          status: "COMPLETED", updatedAt: { gte: dayStart },
           OR: [{ senderId: userId }, { receiverId: userId }],
         },
         select: { id: true },
@@ -163,7 +165,7 @@ async function questSatisfied(userId: string, quest: QuestKind, weekStart: Date)
     case "COMPLETE_BRIDGE_TRADE":
       return (await prisma.tradeRequest.findFirst({
         where: {
-          status: "COMPLETED", updatedAt: { gte: weekStart },
+          status: "COMPLETED", updatedAt: { gte: dayStart },
           bridgeFeeLeaves: { gt: 0 },
           OR: [{ senderId: userId }, { receiverId: userId }],
         },
@@ -172,7 +174,7 @@ async function questSatisfied(userId: string, quest: QuestKind, weekStart: Date)
     case "COMPLETE_SAFEZONE_TRADE":
       return (await prisma.tradeRequest.findFirst({
         where: {
-          status: "COMPLETED", updatedAt: { gte: weekStart },
+          status: "COMPLETED", updatedAt: { gte: dayStart },
           safeZoneHubId: { not: null },
           OR: [{ senderId: userId }, { receiverId: userId }],
         },
@@ -197,7 +199,7 @@ async function completeQuest(userId: string, assignmentId: string, amount: numbe
     if (claimed.count !== 1) return
 
     await tx.leafTransaction.create({
-      data: { userId, type: "QUEST_REWARD", amount, description: "Weekly quest completed", eventAt: at },
+      data: { userId, type: "QUEST_REWARD", amount, description: "Daily quest completed", eventAt: at },
     })
     await tx.user.update({
       where: { id: userId },
@@ -207,52 +209,56 @@ async function completeQuest(userId: string, assignmentId: string, amount: numbe
 }
 
 /**
- * The entry point: ensures this week's three assignments exist, checks each
- * unclaimed one against real DB state, pays out anything newly satisfied, and
- * returns the week's quests as the client should see them. Safe to call on
- * every GET /api/v1/quests -- idempotent, and cheap once a week's rows exist
- * (three unique-keyed lookups plus up to three read-only satisfaction checks).
+ * The entry point: ensures today's five assignments exist (2 Easy, 2
+ * Medium, 1 Hard), checks each unclaimed one against real DB state, pays out
+ * anything newly satisfied, and returns the day's quests as the client
+ * should see them. Safe to call on every GET /api/v1/quests -- idempotent,
+ * and cheap once a day's rows exist.
  */
 export async function reconcileQuests(userId: string, at: Date = new Date()): Promise<QuestView[]> {
-  const weekStart = weekStartUtc(at)
+  const dayStart = dayStartUtc(at)
 
   const existing = await prisma.questAssignment.findMany({
-    where: { userId, weekStart },
+    where: { userId, dayStart },
   })
-  const byTier = new Map(existing.map((a) => [a.tier as QuestTier, a]))
+  const byKey = new Map(existing.map((a) => [`${a.tier}:${a.slot}`, a]))
 
-  const missing = QUEST_TIERS.filter((t) => !byTier.has(t))
+  const wanted = QUEST_TIERS.flatMap((tier) =>
+    Array.from({ length: QUEST_SLOTS[tier] }, (_, slot) => ({ tier, slot })),
+  )
+  const missing = wanted.filter(({ tier, slot }) => !byKey.has(`${tier}:${slot}`))
+
   if (missing.length > 0) {
-    const picks = await Promise.all(missing.map((tier) => pickQuest(userId, weekStart, tier)))
-    // createMany + skipDuplicates: the @@unique([userId, weekStart, tier])
+    const picksByTier = new Map(QUEST_TIERS.map((tier) => [tier, pickPoolEntries(userId, dayStart, tier)]))
+    // createMany + skipDuplicates: the @@unique([userId, dayStart, tier, slot])
     // constraint is the real guard against a concurrent request assigning the
-    // week twice, the same pattern claimCompletion() in @/lib/tasks uses.
+    // day twice, the same pattern claimCompletion() in @/lib/tasks uses.
     await prisma.questAssignment.createMany({
-      data: missing.map((tier, i) => ({
-        userId, weekStart, tier,
-        quest: picks[i].quest,
+      data: missing.map(({ tier, slot }) => ({
+        userId, dayStart, tier, slot,
+        quest: picksByTier.get(tier)![slot].quest,
         rewardLeaves: QUEST_REWARDS[tier],
       })),
       skipDuplicates: true,
     })
-    const refreshed = await prisma.questAssignment.findMany({ where: { userId, weekStart } })
-    for (const a of refreshed) byTier.set(a.tier as QuestTier, a)
+    const refreshed = await prisma.questAssignment.findMany({ where: { userId, dayStart } })
+    for (const a of refreshed) byKey.set(`${a.tier}:${a.slot}`, a)
   }
 
   const views: QuestView[] = []
-  for (const tier of QUEST_TIERS) {
-    const a = byTier.get(tier)
+  for (const { tier, slot } of wanted) {
+    const a = byKey.get(`${tier}:${slot}`)
     if (!a) continue // createMany lost a race and this reconcile didn't refetch its winner; next call fills it
 
     let completed = a.completedAt !== null
-    if (!completed && (await questSatisfied(userId, a.quest as QuestKind, weekStart))) {
+    if (!completed && (await questSatisfied(userId, a.quest as QuestKind, dayStart))) {
       await completeQuest(userId, a.id, a.rewardLeaves, at)
       completed = true
     }
 
     const def = QUEST_POOL[tier].find((q) => q.quest === a.quest)!
     views.push({
-      tier, quest: a.quest as QuestKind, label: def.label, description: def.description,
+      tier, slot, quest: a.quest as QuestKind, label: def.label, description: def.description,
       rewardLeaves: a.rewardLeaves, completed,
     })
   }

@@ -1,12 +1,12 @@
 import { NextRequest } from "next/server"
 import { resolveSession } from "@/lib/api-auth"
 import { ok, unauthenticated } from "@/lib/v1/envelope"
-import { reconcileQuests, weekStartUtc } from "@/lib/quests"
+import { reconcileQuests, dayStartUtc } from "@/lib/quests"
 
 export const dynamic = "force-dynamic"
 
 /**
- * GET /api/v1/quests -- the week's three quests (Easy, Medium, Hard), with
+ * GET /api/v1/quests -- today's five quests (2 Easy, 2 Medium, 1 Hard), with
  * real completion state and a `resetsAt` the client can count down to.
  *
  * Reconciles on every call rather than reading a cached row: see the header
@@ -21,8 +21,8 @@ export async function GET(_req: NextRequest) {
 
   const now = new Date()
   const quests = await reconcileQuests(session.user.id, now)
-  const weekStart = weekStartUtc(now)
-  const resetsAt = new Date(weekStart.getTime() + 7 * 24 * 60 * 60 * 1000)
+  const dayStart = dayStartUtc(now)
+  const resetsAt = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000)
 
-  return ok({ quests, weekStart: weekStart.toISOString(), resetsAt: resetsAt.toISOString() })
+  return ok({ quests, dayStart: dayStart.toISOString(), resetsAt: resetsAt.toISOString() })
 }
