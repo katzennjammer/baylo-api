@@ -32,7 +32,13 @@
 
 import type { PrismaClient } from "@/generated/prisma/client"
 
-/** Rows that bring Leaves into the system, or (negative) back out of it. */
+/**
+ * Rows that bring Leaves into the system, or (negative) back out of it.
+ *
+ * FEATURE_BOOST is the second kind: a sink, like a reversal, with no partner
+ * row. Counted here so check 2 reads "balances + escrow == net issuance"
+ * rather than flagging every boost as Leaves gone missing.
+ */
 export const ISSUANCE_TYPES = [
   "SIGNUP_GRANT",
   "TASK_REWARD",
@@ -40,6 +46,7 @@ export const ISSUANCE_TYPES = [
   "TRADE_REWARD_REVERSAL",
   "QUEST_REWARD",
   "TIER_DAILY_GRANT",
+  "FEATURE_BOOST",
 ] as const
 
 /** The fee triple. HOLD is negative; RELEASE and PAID positive; live holds net negative. */
@@ -137,6 +144,10 @@ export async function ledgerInvariant(db: Db): Promise<LedgerJudgement> {
  * is the schema the tables live in -- "public" live, the drill schema in a
  * restore rehearsal. Column names match `LedgerFigures`; every value comes
  * back as text and the caller `Number()`s it.
+ *
+ * `type::text` rather than a bare enum comparison: Postgres rejects an enum
+ * literal the type does not have, so a backup of a database that predates a
+ * newly listed type (FEATURE_BOOST) would fail outright instead of summing 0.
  */
 export function LEDGER_INVARIANT_SQL(schema = "public"): string {
   const q = (t: string) => `"${schema}"."${t}"`
@@ -146,9 +157,9 @@ export function LEDGER_INVARIANT_SQL(schema = "public"): string {
       (SELECT COALESCE(SUM(leaves), 0) FROM ${q("User")})::text AS "userLeaves",
       (SELECT COALESCE(SUM(amount), 0) FROM ${q("LeafTransaction")})::text AS "ledger",
       (SELECT -COALESCE(SUM(amount), 0) FROM ${q("LeafTransaction")}
-         WHERE type IN (${list(ESCROW_TYPES)}))::text AS "escrow",
+         WHERE type::text IN (${list(ESCROW_TYPES)}))::text AS "escrow",
       (SELECT COALESCE(SUM(amount), 0) FROM ${q("LeafTransaction")}
-         WHERE type IN (${list(ISSUANCE_TYPES)}))::text AS "issuance",
+         WHERE type::text IN (${list(ISSUANCE_TYPES)}))::text AS "issuance",
       ((SELECT COALESCE(SUM("bridgeFeeLeaves"), 0) FROM ${q("Offer")} WHERE ${OFFER_HELD_SQL})
        + (SELECT COALESCE(SUM("bridgeFeeLeaves"), 0) FROM ${q("TradeRequest")}
             WHERE status IN (${list(LIVE_TRADE_STATUSES)})))::text AS "held"`

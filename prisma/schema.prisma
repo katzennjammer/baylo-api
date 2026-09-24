@@ -178,7 +178,7 @@ model User {
   // raw table in live until it was finally modelled here.
   achievements    UserAchievement[]
 
-  // -- Organisation / SMME accounts -------------------------------------------
+  // -- Organisation / MSME accounts -------------------------------------------
   //
   // TRUE ON A SYNTHETIC ROW THAT IS NOT A PERSON. An Organization is backed by
   // a User row so that every FK already pointing at User -- Item.userId,
@@ -526,6 +526,31 @@ model Item {
   /// everything"; see matchesFor() in @/lib/category-match.
   lookingForCategories Category[]
 
+  // -- Featured boosts ---------------------------------------------------------
+  //
+  // An owner pays BOOST_COST_LEAVES to put a listing in the Home screen's
+  // Featured section for BOOST_HOURS. All three are false/null on every row
+  // that has never been boosted. See @/lib/featured.
+
+  /// The sweep's flag. NOT the source of truth for "is it featured right now":
+  /// every read also requires `featuredUntil > now()`, so a sweep that has not
+  /// run cannot keep a lapsed boost on screen. expireFeaturedItems() flips it
+  /// back to false once the window has passed.
+  isFeatured Boolean @default(false)
+
+  /// When the paid window ends. Kept after the sweep clears the flag, so the
+  /// last boost is still answerable from the row.
+  featuredUntil DateTime?
+
+  /// When the current boost was bought. NOT the rotation key: the section
+  /// shuffles hourly (featuredRotation() in @/lib/featured), so boosting later
+  /// buys no better placement. Used only to pick deterministically which
+  /// boosts are considered if a category ever exceeds FEATURED_SCAN_CAP.
+  featuredAt DateTime?
+
+  /// The Featured section's candidate scan: one category's active boosts.
+  @@index([isFeatured, category, featuredAt])
+
   /// The perishable sweep: unexpired perishables, oldest first. Partial on the
   /// flag would be tighter, which Prisma cannot declare -- the composite is
   /// what it can express, and it is enough.
@@ -590,6 +615,13 @@ model TradeRequest {
   message   String?     @db.Text
   createdAt DateTime    @default(now())
   updatedAt DateTime    @updatedAt
+  /// The moment settlement committed -- written once, inside the completion
+  /// transaction in confirm/submit, and never touched again. `updatedAt` is
+  /// NOT this: any later write to the row (a hide flag, a meetup field) moves
+  /// it, which is how an old trade could count toward TODAY's trade quest.
+  /// NULL on every trade completed before 25 Sep 2026, when the column was
+  /// added; nothing backfills it, and nothing that reads it needs the past.
+  completedAt DateTime?
 
   hiddenBySender   Boolean @default(false)
   hiddenByReceiver Boolean @default(false)
@@ -1206,6 +1238,19 @@ enum NotificationType {
    * is the listing itself.
    */
   CATEGORY_MATCH
+
+  /**
+   * An organisation owner invited the recipient to its staff. Before 25 Sep
+   * 2026 an invitation made a PENDING row and told nobody: the invitee's only
+   * way to find it was to open Settings for some other reason.
+   *
+   * The actor is the OWNER who sent it, not the organisation's backing row --
+   * a person asked, and the recipient should see who. entityType "org_invite",
+   * entityId the OrganizationMember id, so the tap can open the invitation.
+   * Withdrawing, accepting or declining deletes the row: a notification about
+   * an invitation that no longer exists points at nothing.
+   */
+  ORG_INVITE
 }
 
 enum FollowStatus {
@@ -1414,6 +1459,11 @@ enum LeafTxType {
   // A completed weekly quest -- 5/10/20 Leaves for Easy/Medium/Hard. See
   // completeQuest() in @/lib/quests, which is the only writer.
   QUEST_REWARD
+  // A SINK. The owner pays to feature a listing; the Leaves leave User.leaves
+  // and go to nobody, so this row has no partner. SUM(User.leaves) ==
+  // SUM(amount) still holds because the debit and this row commit together.
+  // See boostItem() in @/lib/featured.
+  FEATURE_BOOST
 }
 
 // Each row is one atomic Leaf movement (credit or debit).
@@ -1424,13 +1474,18 @@ enum LeafTxType {
 //   - a TASK_REWARD, written in the same transaction that increments both
 //     leaves and lifetimeLeaves, and rate-limited by WEEKLY_TASK_LEAF_CAP;
 //   - a bridging fee HOLD / RELEASE / PAID triple, see LeafTxType;
-//   - a TRADE_REWARD, issuance on completion, see LeafTxType.
+//   - a TRADE_REWARD, issuance on completion, see LeafTxType;
+//   - a QUEST_REWARD, issuance for a completed quest, see LeafTxType
+//     (TIER_DAILY_GRANT is retired issuance: counted, never written);
+//   - a FEATURE_BOOST, a sink with no partner row, see LeafTxType.
 //
 // THE RECONCILIATION, in full, as scripts/lib/ledger-invariant.ts checks it:
 //   SUM(User.leaves) == SUM(amount)                      every row, signed
 //   SUM(User.leaves) + escrow == issuance                nothing minted outside
 //     escrow   = -(HOLD + RELEASE + PAID)                the issuance types
 //     issuance =  SIGNUP_GRANT + TASK_REWARD + TRADE_REWARD + TRADE_REWARD_REVERSAL
+//                 + QUEST_REWARD + TIER_DAILY_GRANT
+//                 + FEATURE_BOOST (negative: a sink)
 //   escrow == SUM(bridgeFeeLeaves on live offers/trades) the ledger agrees with
 //                                                        the rows it points at
 //
@@ -2407,7 +2462,7 @@ model UserAchievement {
   @@index([achievementId])
 }
 
-// ── Organisations / SMMEs ────────────────────────────────────────────────────
+// ── Organisations / MSMEs ────────────────────────────────────────────────────
 
 /**
  * What kind of business it is. A CLOSED LIST, and deliberately not `Category`.
@@ -2474,7 +2529,7 @@ enum OrgMemberStatus {
 }
 
 /**
- * An organisation or SMME account.
+ * An organisation or MSME (Micro, Small and Medium Enterprise, the DTI term) account.
  *
  * ── IT IS A User ROW, AND THAT IS THE WHOLE DESIGN ──────────────────────────
  *
@@ -2533,6 +2588,34 @@ model Organization {
    * rather than initials.
    */
   logoUrl String? @db.Text
+
+  /**
+   * The wide cover image across the top of the storefront profile. PUBLIC, and
+   * uploaded through POST /api/upload like a listing photo -- the opposite of
+   * businessDocUrl below, which must never take that path. Null renders a
+   * token-coloured band, so an org that never sets one does not look broken.
+   */
+  bannerUrl String? @db.Text
+
+  /**
+   * The shop's own one-paragraph pitch, shown under the category line. A
+   * separate column from the backing row's User.bio on purpose: that is a
+   * person's field on a person's edit screen, and this is edited by whichever
+   * OWNER is signed in, from the shop's.
+   */
+  description String? @db.VarChar(500)
+
+  /**
+   * The DTI business-name registration number, AS TYPED by the applicant.
+   *
+   * Stored and shown to the reviewer beside the document; never checked
+   * against any DTI registry. Its only job is to let a reviewer compare the
+   * number on the photograph with the number the applicant claims. Nullable
+   * because organisations created before the field existed have none, and
+   * unlike businessDocUrl it is NOT destroyed on decision -- a registration
+   * number is a public business identifier, not a document about a person.
+   */
+  dtiRegistrationNumber String? @db.VarChar(64)
 
   businessCategory BusinessCategory
 
