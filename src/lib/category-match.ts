@@ -226,7 +226,7 @@ export function matchMessage(newCategory: string, theirCategory: string, mutual:
  * made posting an item as slow as the slowest of twenty-five network calls.
  * Call it with `void`.
  *
- * The notification rows go in ONE createMany — twenty-five round trips to write
+ * New notification rows go in ONE createMany — twenty-five round trips to write
  * twenty-five rows is the shape this deliberately avoids — and the Pusher calls
  * then fan out, each catching its own failure. A dropped push is a notification
  * the client picks up on its next poll; a dropped row is one that never existed.
@@ -244,29 +244,73 @@ export function notifyCategoryMatchesAsync(input: {
     const matches = await findCategoryMatches(prisma, input)
     if (matches.length === 0) return
 
-    await prisma.notification.createMany({
-      data: matches.map((m) => ({
-        userId: m.ownerId,
-        type: "CATEGORY_MATCH" as const,
-        message: matchMessage(input.category, m.category, m.mutual),
-        // The NEW listing, which is the only useful destination. "item" is a
-        // new routing token — not "trade", not "conversation"; see the note on
-        // Notification.entityType.
-        entityType: "item",
-        entityId: input.itemId,
-        // NO ACTOR. `actorId` is "the person who did this to you", and nobody
-        // did anything to the recipient — they posted an item to the
-        // marketplace. Setting it would put the poster's face on a
-        // notification they did not send, and would let one account spam a
-        // recipient's actor-grouped list by posting repeatedly.
-        link: `/listings/${input.itemId}`,
-      })),
-      // The recipient may already have been told about this exact listing if a
-      // retry reaches here twice. There is no unique constraint to lean on, so
-      // this is a cheap guard and not a guarantee; the cap above is what bounds
-      // the damage of a genuine double-send.
-      skipDuplicates: true,
+    const rows = matches.map((m) => ({
+      userId: m.ownerId,
+      type: "CATEGORY_MATCH" as const,
+      message: matchMessage(input.category, m.category, m.mutual),
+      // The NEW listing, which is the only useful destination. "item" is a
+      // new routing token — not "trade", not "conversation"; see the note on
+      // Notification.entityType.
+      entityType: "item",
+      entityId: input.itemId,
+      // NO ACTOR. `actorId` is "the person who did this to you", and nobody
+      // did anything to the recipient — they posted an item to the
+      // marketplace. Setting it would put the poster's face on a
+      // notification they did not send, and would let one account spam a
+      // recipient's actor-grouped list by posting repeatedly.
+      link: `/listings/${input.itemId}`,
+    }))
+
+    // ── ONE UNREAD ROW PER SENTENCE, NOT ONE PER LISTING ─────────────────
+    //
+    // A shop that posts nine Food listings in ten minutes used to hand every
+    // Food-wanter nine rows reading "New Food listing — you have a Food
+    // listing", identical down to the timestamp bucket (24 Sep 2026: nine on
+    // one real account). Each row was individually correct and the list was
+    // spam. So when the recipient already has an UNREAD match notification
+    // with the same text, that row is moved to the newest listing and brought
+    // back to the top instead of a sibling being added beside it. Once they
+    // have read it, the next listing earns a new row as before.
+    //
+    // Keyed on the message, not a category column, because the message IS
+    // what the recipient sees twice — and it already encodes both categories
+    // and the mutual flag. Two posts racing past this check can still both
+    // insert; that is the rare case and the cap still bounds it.
+    const unread = await prisma.notification.findMany({
+      where: {
+        type: "CATEGORY_MATCH",
+        read: false,
+        userId: { in: rows.map((r) => r.userId) },
+        message: { in: [...new Set(rows.map((r) => r.message))] },
+      },
+      select: { id: true, userId: true, message: true },
+      orderBy: { createdAt: "desc" },
     })
+    const matchKey = (n: { userId: string; message: string }) => `${n.userId}:${n.message}`
+    const existing = new Map<string, string>()
+    for (const n of unread) {
+      if (!existing.has(matchKey(n))) existing.set(matchKey(n), n.id)
+    }
+
+    const fresh = rows.filter((r) => !existing.has(matchKey(r)))
+    const bumped = rows.flatMap((r) => {
+      const id = existing.get(matchKey(r))
+      return id ? [{ id, entityId: r.entityId, link: r.link }] : []
+    })
+
+    if (fresh.length > 0) {
+      await prisma.notification.createMany({ data: fresh })
+    }
+    if (bumped.length > 0) {
+      await prisma.$transaction(
+        bumped.map((b) =>
+          prisma.notification.update({
+            where: { id: b.id },
+            data: { entityId: b.entityId, link: b.link, createdAt: new Date() },
+          }),
+        ),
+      )
+    }
 
     for (const m of matches) {
       pusher

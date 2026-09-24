@@ -5,6 +5,8 @@ import prisma from "@/lib/prisma"
 import { parseBody } from "@/lib/validation"
 import { ok, unauthenticated, invalid, conflict, forbidden, notFound } from "@/lib/v1/envelope"
 import { isOrgOwner } from "@/lib/organizations"
+import { isBlockedEitherWay } from "@/lib/blocking"
+import pusher from "@/lib/pusher"
 
 export const dynamic = "force-dynamic"
 
@@ -31,6 +33,14 @@ export const dynamic = "force-dynamic"
  * That split is what stops an organisation adding someone's account to itself
  * without asking. An org is a public identity that posts and trades; being
  * silently made staff of one is being made to appear to endorse it.
+ *
+ * ── AND THE INVITED PERSON IS TOLD ──────────────────────────────────────────
+ *
+ * An ORG_INVITE notification, from the owner who sent it. Until 25 Sep 2026
+ * the PENDING row was the whole of it, and the only place it surfaced was a
+ * Settings section the invitee had no reason to open. The row is written
+ * AFTER the membership and never fails the request, so a failed notification
+ * leaves a working invitation rather than a notification pointing at nothing.
  */
 
 const inviteSchema = z.strictObject({
@@ -104,12 +114,24 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   // The same answer whether the address has no account or the account is gone.
   // Distinguishing them turns this endpoint into an oracle that answers "is
   // this email registered on Baylo?" for any address somebody cares to type.
+  //
+  // Invitations are to EXISTING accounts only -- there is no pending-invite-by-
+  // email that activates on signup. The message says what to do about that,
+  // because "not found" alone reads like the invite broke.
   if (!invitee || invitee.deletedAt) {
-    return notFound("No Baylo account uses that email address.")
+    return notFound(
+      "No Baylo account uses that email address. Ask them to sign up first, then invite them again.",
+    )
   }
   // An organisation is not a member of itself, and not of another one either.
   if (invitee.isOrgAccount) {
     return invalid("That is an organisation account, not a person.")
+  }
+  // An invitation is one person reaching for another, and now it sends a
+  // notification with the owner's face on it. Same text either direction; see
+  // enforceNotBlocked() for why the wire never says who blocked whom.
+  if (await isBlockedEitherWay(session.user.id, invitee.id)) {
+    return forbidden("You cannot invite this person.")
   }
 
   // The @@unique([organizationId, userId]) makes a repeat invitation a no-op
@@ -134,8 +156,30 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       role: parsed.data.role ?? "STAFF",
       status: "PENDING",
     },
-    select: { id: true, role: true, invitedAt: true },
+    select: { id: true, role: true, invitedAt: true, organization: { select: { name: true } } },
   })
+
+  // Best-effort: the invitation above is the thing that matters, and it still
+  // shows in the invitee's Settings if this fails -- including on a database
+  // that has not yet taken 20260925000001_org_invite_notification.
+  try {
+    await prisma.notification.create({
+      data: {
+        userId: invitee.id,
+        type: "ORG_INVITE",
+        // Mid-sentence: the client puts the actor's name in front of it.
+        message: `invited you to join ${member.organization.name} as ${member.role === "OWNER" ? "an owner" : "staff"}`,
+        actorId: session.user.id,
+        entityType: "org_invite",
+        entityId: member.id,
+      },
+    })
+    pusher
+      .trigger(`private-user-${invitee.id}`, "notification-created", { type: "ORG_INVITE" })
+      .catch(() => {})
+  } catch (err) {
+    console.error("ORG_INVITE notification failed; the invitation stands", err)
+  }
 
   return ok({
     membershipId: member.id,

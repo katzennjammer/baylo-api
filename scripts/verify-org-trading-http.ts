@@ -28,6 +28,7 @@
 import prisma from "../src/lib/prisma"
 import { createOrganization } from "../src/lib/organizations"
 import { signAccessToken } from "../src/lib/auth-tokens"
+import { requireScratchSchema } from "./lib/live-guard"
 
 const BASE = process.env.BAYLO_BASE_URL ?? "http://localhost:3000"
 
@@ -75,6 +76,7 @@ async function poll<T>(read: () => Promise<T>, ok: (v: T) => boolean, ms = 8000)
 }
 
 async function main() {
+  requireScratchSchema("scripts/verify-org-trading-http.ts")
   try {
     await fetch(`${BASE}/api/v1/hubs`, { method: "GET" })
   } catch {
@@ -223,7 +225,16 @@ async function main() {
     await prisma.tradeRequest.deleteMany({ where: { OR: [{ senderId: { in: ids } }, { receiverId: { in: ids } }] } })
     await prisma.offer.deleteMany({ where: { OR: [{ senderId: { in: ids } }, { receiverId: { in: ids } }] } })
     await prisma.message.deleteMany({ where: { OR: [{ senderId: { in: ids } }, { receiverId: { in: ids } }] } })
-    await prisma.notification.deleteMany({ where: { OR: [{ userId: { in: ids } }, { actorId: { in: ids } }] } })
+    // Match notifications land on OTHER people's accounts -- anyone whose
+    // listing wants what this posted -- so deleting by our own user ids misses
+    // exactly the ones that matter. Delete by the listing they point at, BEFORE
+    // the listings go (24 Sep 2026: nine orphans on a real account).
+    const postedIds = (
+      await prisma.item.findMany({ where: { userId: { in: ids } }, select: { id: true } })
+    ).map((i) => i.id)
+    await prisma.notification.deleteMany({
+      where: { OR: [{ userId: { in: ids } }, { actorId: { in: ids } }, { entityType: "item", entityId: { in: postedIds } }] },
+    })
     await prisma.item.deleteMany({ where: { userId: { in: ids } } })
     await prisma.organization.deleteMany({ where: { id: { in: created.orgs } } })
     await prisma.user.deleteMany({ where: { id: { in: ids } } })

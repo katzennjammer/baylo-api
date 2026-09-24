@@ -25,6 +25,7 @@ import prisma from "../src/lib/prisma"
 import { createOrganization, orgPostingRefusal } from "../src/lib/organizations"
 import { signAccessToken } from "../src/lib/auth-tokens"
 import { ORG_WELCOME_LEAVES } from "../src/lib/task-constants"
+import { requireScratchSchema } from "./lib/live-guard"
 
 const BASE = process.env.BAYLO_BASE_URL ?? "http://localhost:3000"
 
@@ -76,6 +77,7 @@ async function call(
 }
 
 async function main() {
+  requireScratchSchema("scripts/verify-org-http.ts")
   // Fail fast and clearly rather than 35 confusing connection errors.
   try {
     await fetch(`${BASE}/api/v1/hubs`, { method: "GET" })
@@ -623,6 +625,17 @@ async function main() {
     await prisma.adminAction.deleteMany({
       where: { OR: [{ actorId: { in: created.users } }, { targetId: { in: created.orgs } }] },
     })
+    // Match notifications land on OTHER people's accounts -- anyone whose
+    // listing wants what this posted -- so deleting by our own user ids misses
+    // exactly the ones that matter. Delete by the listing they point at, BEFORE
+    // the listings go (24 Sep 2026: nine orphans on a real account).
+    const orgItemIds = (
+      await prisma.item.findMany({
+        where: { OR: [{ id: { in: created.items } }, { userId: { in: created.users } }] },
+        select: { id: true },
+      })
+    ).map((i) => i.id)
+    await prisma.notification.deleteMany({ where: { entityType: "item", entityId: { in: orgItemIds } } })
     await prisma.item.deleteMany({ where: { id: { in: created.items } } })
     await prisma.item.deleteMany({ where: { userId: { in: created.users } } })
     await prisma.organization.deleteMany({ where: { id: { in: created.orgs } } })

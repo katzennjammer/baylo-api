@@ -13,8 +13,8 @@ export const dynamic = "force-dynamic"
  *
  * ── TWO CALLERS WITH DIFFERENT RIGHTS, ON ONE ROW ───────────────────────────
  *
- *   the INVITED PERSON   may accept their own invitation, and may leave.
- *                        Nothing else. They may not promote themselves, and
+ *   the INVITED PERSON   may accept or decline their own invitation, and
+ *                        may leave. Nothing else. They may not promote themselves, and
  *                        they may not touch anyone else's row.
  *   an OWNER             may change a role and may remove anybody. May not
  *                        accept an invitation on somebody's behalf — that is
@@ -33,11 +33,26 @@ export const dynamic = "force-dynamic"
  */
 
 const patchSchema = z.strictObject({
-  /** The invited person accepting. The only value they may send. */
-  action: z.enum(["accept", "leave"]).optional(),
+  /** The invited person answering, or leaving. The only values they may send. */
+  action: z.enum(["accept", "decline", "leave"]).optional(),
   /** An owner changing a role. */
   role: z.enum(["OWNER", "STAFF"]).optional(),
 })
+
+/**
+ * The ORG_INVITE notification for this membership, once the invitation is
+ * answered or withdrawn. Left in place it would open Settings onto an
+ * invitation that is no longer there -- the dead-end tap the notification
+ * exists to avoid. Keyed on the "org_invite" token alone, which nothing else
+ * writes -- NOT on `type`, because comparing against 'ORG_INVITE' is an
+ * error on a database that has not taken 20260925000001 yet, and that would
+ * turn every accept, decline and withdrawal into a 500.
+ */
+function clearInviteNotification(memberId: string) {
+  return prisma.notification.deleteMany({
+    where: { entityType: "org_invite", entityId: memberId },
+  })
+}
 
 async function activeOwnerCount(organizationId: string, excludingMemberId?: string) {
   return prisma.organizationMember.count({
@@ -89,7 +104,21 @@ export async function PATCH(
         data: { status: "ACTIVE", joinedAt: new Date() },
       })
       if (updated.count !== 1) return conflict("That invitation is no longer open.")
+      await clearInviteNotification(memberId)
       return ok({ membershipId: memberId, status: "ACTIVE" })
+    }
+
+    // Declining. Its own verb rather than "leave" on a PENDING row, so a
+    // decline that races an accept on another device cannot delete the
+    // membership the accept just made ACTIVE. A hard delete, like withdrawal:
+    // a tombstone would block the org from ever asking again.
+    if (action === "decline") {
+      const declined = await prisma.organizationMember.deleteMany({
+        where: { id: memberId, status: "PENDING" },
+      })
+      if (declined.count !== 1) return conflict("That invitation is no longer open.")
+      await clearInviteNotification(memberId)
+      return ok({ membershipId: memberId, removed: true })
     }
 
     // Leaving. An owner leaving is subject to the last-owner rule like any
@@ -156,5 +185,6 @@ export async function DELETE(
   // userId]) means a tombstone would permanently block re-inviting somebody
   // who once said no -- see the note on OrgMemberStatus.
   await prisma.organizationMember.delete({ where: { id: memberId } })
+  if (member.status === "PENDING") await clearInviteNotification(memberId)
   return ok({ membershipId: memberId, removed: true })
 }

@@ -1238,6 +1238,19 @@ enum NotificationType {
    * is the listing itself.
    */
   CATEGORY_MATCH
+
+  /**
+   * An organisation owner invited the recipient to its staff. Before 25 Sep
+   * 2026 an invitation made a PENDING row and told nobody: the invitee's only
+   * way to find it was to open Settings for some other reason.
+   *
+   * The actor is the OWNER who sent it, not the organisation's backing row --
+   * a person asked, and the recipient should see who. entityType "org_invite",
+   * entityId the OrganizationMember id, so the tap can open the invitation.
+   * Withdrawing, accepting or declining deletes the row: a notification about
+   * an invitation that no longer exists points at nothing.
+   */
+  ORG_INVITE
 }
 
 enum FollowStatus {

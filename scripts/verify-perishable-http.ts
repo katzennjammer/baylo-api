@@ -30,6 +30,7 @@ import { signAccessToken } from "../src/lib/auth-tokens"
 import { valueCap } from "../src/lib/trade-rules"
 import { bracketOf } from "../src/lib/brackets"
 import { decideItemValue } from "../src/lib/valuation-server"
+import { requireScratchSchema } from "./lib/live-guard"
 
 const BASE = process.env.BAYLO_BASE_URL ?? "http://localhost:3000"
 
@@ -66,6 +67,7 @@ async function waitFor<T>(
 }
 
 async function main() {
+  requireScratchSchema("scripts/verify-perishable-http.ts")
   try {
     await fetch(`${BASE}/api/v1/hubs`)
   } catch {
@@ -332,7 +334,16 @@ async function main() {
       `status ${tooManyWants.status}`,
     )
   } finally {
-    await prisma.notification.deleteMany({ where: { userId: { in: users } } })
+    // Match notifications land on OTHER people's accounts -- anyone whose
+    // listing wants what this posted -- so deleting by our own user ids misses
+    // exactly the ones that matter. Delete by the listing they point at, BEFORE
+    // the listings go (24 Sep 2026: nine orphans on a real account).
+    const postedIds = (
+      await prisma.item.findMany({ where: { userId: { in: users } }, select: { id: true } })
+    ).map((i) => i.id)
+    await prisma.notification.deleteMany({
+      where: { OR: [{ userId: { in: users } }, { entityType: "item", entityId: { in: postedIds } }] },
+    })
     await prisma.item.deleteMany({ where: { userId: { in: users } } })
     await prisma.user.deleteMany({ where: { id: { in: users } } })
     await prisma.$disconnect()
