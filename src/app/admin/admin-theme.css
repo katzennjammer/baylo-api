@@ -218,7 +218,31 @@
 .admin-root .adm-body { display: flex; gap: 28px; align-items: flex-start; min-width: 0; }
 @media (max-width: 1023px) { .admin-root .adm-body { gap: 24px; } }
 
-.admin-root .adm-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 32px; overflow-x: hidden; }
+/*
+ * color: #17201b (NOT a --adm-* var, deliberately) restores the old
+ * layout.tsx's hardcoded dark-text default for whatever a not-yet-redesigned
+ * page leaves unstyled.
+ *
+ * Pages redesigned so far (dashboard, reports, audit, access) explicitly set
+ * `color: var(--adm-text)` (or a tone token) on every piece of text, so this
+ * never applies to them -- an element's own declared color always wins over
+ * an inherited one, regardless of which selector is more specific.
+ *
+ * Pages NOT yet redesigned (id-verification, review-queue/anomalies,
+ * appeals, users, listings, hubs, achievements) still have their original
+ * hardcoded white cards/tables (`background: "#fff"`), and plenty of their
+ * text relies on INHERITING the default color rather than setting its own.
+ * Before this rule, that inherited default was `.admin-root`'s
+ * `color: var(--adm-text)` -- correct for the redesigned dark shell, but
+ * wrong for a page whose surfaces never stopped being white: in dark mode
+ * that resolves to near-white, i.e. white text quietly landing on a still-
+ * white card. It read fine in light mode by coincidence (dark-on-white),
+ * which is why this only ever showed up after the theme toggle existed.
+ * Fix as each page is redesigned, by giving its text explicit colors the
+ * same way dashboard/reports/audit/access already do -- then this fallback
+ * stops applying to it, the same way it already doesn't for those four.
+ */
+.admin-root .adm-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 32px; overflow-x: hidden; color: #17201b; }
 
 .admin-root .adm-topbar { display: flex; align-items: center; gap: 16px; flex-wrap: nowrap; min-width: 0; }
 

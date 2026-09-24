@@ -162,6 +162,21 @@ Restyled to `DESIGN_SPEC.md` §4.1's shape (main column + "Needs attention" side
 - [ ] Confirm a deleted user's row appears visibly dimmed and its controls stay disabled regardless of reason text.
 - [ ] Toggle light/dark theme — panel, rows, pills and the search/reason inputs should all read correctly.
 
+## Bug fix: unredesigned pages' text going invisible in dark mode
+
+Reported across ID Verification, Review Queue, Appeals, Users, Listings, Safe-Zone Hubs and Achievements — none of which have been redesigned yet.
+
+**Root cause:** the old `layout.tsx` had a hardcoded `color: "#17201b"` (dark) on its wrapper, so any text on any page that didn't set its own `color` fell back to dark, which read fine against those pages' still-hardcoded white cards/tables. When the shell was rebuilt (Step 3), that hardcoded fallback was replaced by `.admin-root`'s theme-reactive `color: var(--adm-text)` — correct for pages that explicitly color every element (dashboard/reports/audit/access all do), but wrong for the seven pages that still have plenty of unstyled text relying on inheritance. In dark mode that inherited default resolves to near-white, landing on cards whose background is still hardcoded `#fff` — invisible white-on-white. It looked fine in light mode by coincidence (dark-on-white), which is why this only surfaced once the toggle existed. Confirmed concretely on `/admin/id-verification`: `<h1>ID verification</h1>`, the applicant name `<span>`, and a `<strong>` count all have no explicit `color`.
+
+**Fix:** `.admin-root .adm-main` (the content area only, not the shell/rail/topbar) now carries a fixed, non-`--adm-*` `color: #17201b` as its default. An element's own explicit color always wins over an inherited one regardless of selector specificity, so this is a no-op for the four already-redesigned pages (everything there sets its own color already) and a real fix for the seven that don't. As each remaining page gets redesigned and its text gets explicit `var(--adm-text)`/tone colors (the same way dashboard/reports/audit/access already do), this fallback simply stops applying to it — no further change needed there when that day comes.
+
+**Not fully covered by this fix:** `FilterChips`'s `.admin-chip` class sets its OWN explicit color (not inherited), so it was never literally invisible — it's a small dark pill with correctly-paired white text, just visually inconsistent sitting on an otherwise still-white, unredesigned page. That's an expected, known state of an incremental rollout, not a legibility bug, and will resolve naturally as each page using it gets redesigned.
+
+**Manual test steps:**
+- [ ] Toggle dark mode. Open `/admin/id-verification`, `/admin/review-queue`, `/admin/appeals`, `/admin/users`, `/admin/listings`, `/admin/hubs`, `/admin/achievements` — confirm every page title, row label, and count is legible (dark text, matching their still-light card backgrounds) rather than invisible/near-white.
+- [ ] Re-check the four already-redesigned pages (`/admin/dashboard`, `/admin/reports`, `/admin/audit`, `/admin/access`) in both themes — confirm nothing regressed (their text should be completely unaffected, since it's all explicitly colored already).
+- [ ] Toggle back to light mode and confirm the seven unredesigned pages look exactly as they did before this fix (dark text was already correct there).
+
 ## Baseline (recorded before any redesign changes)
 
 - `npx tsc --noEmit`: fails, but only on pre-existing errors in `scripts/seed-demo-appeal.ts`, `scripts/verify-id-verification.ts`, `scripts/verify-moderation.ts` (Role union type mismatches — `"SUPER_ADMIN"`/`"MODERATOR"` not in the current `Role` enum). None touch `src/app/admin` or `src/components/admin`.
