@@ -131,8 +131,8 @@ export default async function OrganizationQueuePage({ searchParams }: Props) {
 
       <p style={{ fontSize: 13, color: "#666", marginTop: 6, maxWidth: 760 }}>
         Verifying puts the checkmark on that organisation&rsquo;s profile.{" "}
-        <strong>They can already post and trade either way</strong> — a rejection removes a badge,
-        not an account. Either decision destroys the uploaded document and writes an audit row
+        <strong>Only a verified organisation can post as itself</strong>; pending and rejected ones
+        can still trade, and a rejection removes no account. Either decision destroys the uploaded document and writes an audit row
         naming you.
       </p>
 

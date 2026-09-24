@@ -5,7 +5,7 @@ import { ORG_DOC_URL_TTL_S, signOrgDocumentUrl } from "@/lib/org-document"
 import {
   ORG_REJECTION_LABEL,
   ORG_REJECTION_REASONS,
-} from "@/app/api/admin/organizations/[id]/route"
+} from "@/lib/organizations"
 import { BUSINESS_CATEGORY_LABEL } from "@/app/api/v1/organizations/route"
 import OrgDecisionActions from "./OrgDecisionActions"
 

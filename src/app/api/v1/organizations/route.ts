@@ -253,9 +253,9 @@ export async function POST(req: NextRequest) {
     throw err
   }
 
-  // PENDING, and the org can already post and trade. What it does not have yet
-  // is the checkmark — see the note on orgBadge(). Saying so here is what stops
-  // the client rendering this as a wall.
+  // PENDING: the org exists and can trade, but posting as it waits for the
+  // review (see orgPostingRefusal). Saying so here, at creation, is what stops
+  // the first refused post from being a surprise.
   return ok(
     {
       organizationId: created.organizationId,
@@ -263,8 +263,8 @@ export async function POST(req: NextRequest) {
       verificationStatus: "PENDING",
       verified: false,
       notice:
-        "Your organisation is live and can post and trade now. " +
-        "The verified badge appears once we have checked your document.",
+        "Your organisation is set up. You can post as it once we have checked " +
+        "your business document, and the verified badge appears then too.",
     },
     { created: true },
   )

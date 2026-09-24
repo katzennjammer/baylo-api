@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { headers } from "next/headers"
 import { resolveSession } from "@/lib/api-auth"
-import { ORG_CONTEXT_HEADER, resolveActingIdentity } from "@/lib/organizations"
+import { ORG_CONTEXT_HEADER, orgPostingRefusal, resolveActingIdentity } from "@/lib/organizations"
 import { decidePerishableValue } from "@/lib/perishable"
 import { notifyCategoryMatchesAsync } from "@/lib/category-match"
 import prisma from "@/lib/prisma"
@@ -96,36 +96,11 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
-    // ── The ID gate ─────────────────────────────────────────────────────────
-    //
-    // One of exactly two places this gate exists; the other is POST
-    // /api/v1/contracts. Listing an item is the act that puts something in
-    // front of other people to trade for, so it is the act that has to be
-    // attached to a real, once-usable government ID.
-    //
-    // FIRST, BEFORE THE BODY IS EVEN PARSED. A 403 that arrives after the
-    // valuation model has run and the hub ids have been resolved is the same
-    // 403 with extra queries behind it, and the wizard has by then uploaded
-    // photos it will have to throw away.
-    //
-    // NOTE WHAT IS NOT GATED, one function down and elsewhere in the tree: GET
-    // on this route, browsing, searching, messaging, and accepting a trade. See
-    // the header of @/lib/id-verification for why the accept path is
-    // deliberately open — blocking it strands a counterparty in a trade they
-    // did not cause.
-    const unverified = await enforceIdVerifiedLegacy(session.user.id, "post")
-    if (unverified) return unverified
-
-    const parsed = await parseBody(req, createItemSchema)
-    if (!parsed.ok) return parsed.response
-    const body = parsed.data
-
     // ── Acting as an organisation ───────────────────────────────────────────
     //
-    // AFTER the ID gate, deliberately. The gate is about the PERSON — a real,
-    // once-usable government ID behind the act of listing — and acting as an
-    // organisation does not launder that requirement. Staff who have not
-    // verified their own ID cannot post, for the org or for themselves.
+    // FIRST, because it decides which gate applies below. It reads only a
+    // header and one indexed row, so the ID gate still refuses before the body
+    // is parsed.
     //
     // The membership is re-read from the database here, on this request; it is
     // not a claim on the token. See the header of @/lib/organizations for why.
@@ -146,6 +121,70 @@ export async function POST(req: NextRequest) {
         { status: 403 },
       )
     }
+
+    // ── The ID gate ─────────────────────────────────────────────────────────
+    //
+    // One of exactly two places this gate exists; the other is POST
+    // /api/v1/contracts. Listing an item is the act that puts something in
+    // front of other people to trade for, so it is the act that has to be
+    // attached to something a person has checked.
+    //
+    // WHICH CHECK DEPENDS ON WHO IS POSTING (changed 24 Sep 2026):
+    //
+    //   as a VERIFIED organisation  the org's own review is the check. A
+    //                               moderator has matched its DTI/SEC or permit
+    //                               document, so the listing is attached to a
+    //                               verified business, and the staff member's
+    //                               personal ID is NOT consulted. A shop's
+    //                               staff should not need a government ID on
+    //                               file to list the shop's stock.
+    //   as a PENDING or REJECTED    REFUSED, whatever the staff member's own ID
+    //   organisation                says. A person's ID is not a stand-in for
+    //                               an unreviewed or failed business review, so
+    //                               there is no fallback. The 403 carries the
+    //                               sentence from orgPostingRefusal(), which is
+    //                               the same one the phone shows up front.
+    //   as oneself                  the PERSON'S government ID, exactly as
+    //                               before, whatever state their orgs are in.
+    //
+    // The org's status comes from resolveActingIdentity() above, re-read on
+    // this request, so a status change takes effect at once.
+    //
+    // BEFORE THE BODY IS EVEN PARSED. A 403 that arrives after the valuation
+    // model has run and the hub ids have been resolved is the same 403 with
+    // extra queries behind it, and the wizard has by then uploaded photos it
+    // will have to throw away.
+    //
+    // NOTE WHAT IS NOT GATED, one function down and elsewhere in the tree: GET
+    // on this route, browsing, searching, messaging, and accepting a trade. See
+    // the header of @/lib/id-verification for why the accept path is
+    // deliberately open — blocking it strands a counterparty in a trade they
+    // did not cause.
+    const actingOrg = acting.acting.organization
+    if (actingOrg) {
+      const refusal = orgPostingRefusal(actingOrg.verificationStatus, actingOrg.rejectionReason)
+      if (refusal) {
+        return NextResponse.json(
+          {
+            error: refusal.message,
+            code: refusal.code,
+            organization: {
+              id: actingOrg.id,
+              verificationStatus: actingOrg.verificationStatus,
+              rejectionReason: refusal.rejectionReason,
+            },
+          },
+          { status: 403 },
+        )
+      }
+    } else {
+      const unverified = await enforceIdVerifiedLegacy(session.user.id, "post")
+      if (unverified) return unverified
+    }
+
+    const parsed = await parseBody(req, createItemSchema)
+    if (!parsed.ok) return parsed.response
+    const body = parsed.data
     // The AUTHOR. The org's backing row when acting as one, the person
     // otherwise — the same `userId` column either way, which is the whole
     // reason an organisation is a User row.

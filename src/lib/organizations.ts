@@ -95,9 +95,9 @@ export interface OrgBadge {
  *
  * `verified` is derived here and nowhere else, so that "Verified MSME" cannot
  * come to mean "an Organization row exists". A PENDING org is a real account
- * that can post and trade — it simply has no checkmark yet, and a client that
- * renders one off the mere presence of this object would be claiming a review
- * that has not happened.
+ * that can trade — it has no checkmark yet and cannot post (see
+ * orgPostingRefusal), and a client that renders a badge off the mere presence
+ * of this object would be claiming a review that has not happened.
  */
 export function orgBadge(row: OrgPublicRow): OrgBadge {
   return {
@@ -130,6 +130,109 @@ export function identityBadge(
     : { kind: "person", trustTier }
 }
 
+// ── Why a review said no, and what posting as the org is allowed to do ───────
+
+export const ORG_REJECTION_REASONS = [
+  "BLURRY_DOCUMENT",
+  "NAME_MISMATCH",
+  "EXPIRED_REGISTRATION",
+  "WRONG_DOCUMENT_TYPE",
+  "NOT_A_BUSINESS_DOCUMENT",
+] as const
+
+export type OrgRejectionReason = (typeof ORG_REJECTION_REASONS)[number]
+
+export const ORG_REJECTION_LABEL: Record<OrgRejectionReason, string> = {
+  BLURRY_DOCUMENT: "Too blurry to read",
+  NAME_MISMATCH: "Name does not match the account",
+  EXPIRED_REGISTRATION: "Registration has expired",
+  WRONG_DOCUMENT_TYPE: "Not a document we accept",
+  NOT_A_BUSINESS_DOCUMENT: "Not a business document",
+}
+
+/**
+ * What the applicant is told, per reason. The FIX, not the verdict.
+ *
+ * Same rule as REJECTION_FIX next door: "rejected" tells somebody nothing they
+ * can act on, and the entire value of a closed reason list is that each value
+ * maps to a sentence describing what to do about it.
+ */
+export const ORG_REJECTION_FIX: Record<OrgRejectionReason, string> = {
+  BLURRY_DOCUMENT:
+    "We could not read your business document. Retake the photo in good light with the whole page in frame.",
+  NAME_MISMATCH:
+    "The name on the document does not match your organisation's name on Baylo. Update one to match the other and send it again.",
+  EXPIRED_REGISTRATION:
+    "That registration has expired. Send a current DTI/SEC registration or barangay permit.",
+  WRONG_DOCUMENT_TYPE:
+    "We accept a DTI or SEC registration, or a barangay business permit. Send one of those.",
+  NOT_A_BUSINESS_DOCUMENT:
+    "That does not look like a business document. Send your DTI/SEC registration or barangay permit.",
+}
+
+export type OrgVerificationStatus = "PENDING" | "VERIFIED" | "REJECTED"
+
+/** The two refusal codes a client branches on. See orgPostingRefusal(). */
+export const ORG_VERIFICATION_PENDING = "ORG_VERIFICATION_PENDING"
+export const ORG_VERIFICATION_REJECTED = "ORG_VERIFICATION_REJECTED"
+
+export interface OrgPostingRefusal {
+  code: typeof ORG_VERIFICATION_PENDING | typeof ORG_VERIFICATION_REJECTED
+  /** Shown to the person verbatim, on the phone before the wizard and in the 403. */
+  message: string
+  /** The reviewer's closed reason, for a REJECTED org that has one. */
+  rejectionReason: OrgRejectionReason | null
+}
+
+/**
+ * Whether a listing may be posted AS this organisation, and if not, what to
+ * tell the person trying.
+ *
+ * ── ONLY A VERIFIED ORG POSTS ───────────────────────────────────────────────
+ *
+ * Posting as an org puts a business's name on a listing, so it is the business
+ * that has to have been checked. A PENDING org has not been; a REJECTED one was
+ * checked and failed. Neither may post, and a staff member's own verified ID is
+ * NOT a way around that: a person's ID says who they are, not that the shop
+ * they claim is real. (A VERIFIED org, conversely, needs no personal ID from
+ * its staff at all. See POST /api/items.)
+ *
+ * Posting AS ONESELF never comes through here. Somebody whose shop is still in
+ * review lists their own things under the personal ID rule exactly as before.
+ *
+ * ONE function for both the enforcement and the explanation: the 403 from POST
+ * /api/items and the sentence the phone shows before the wizard opens are the
+ * same string, so they cannot drift.
+ *
+ * The REJECTED sentence says "contact support to resubmit" rather than just
+ * "resubmit" because there is no resubmission flow yet: the only way from
+ * REJECTED back to PENDING today is a person doing it by hand.
+ */
+export function orgPostingRefusal(
+  status: OrgVerificationStatus,
+  rejectionReason: string | null,
+): OrgPostingRefusal | null {
+  if (status === "VERIFIED") return null
+  if (status === "PENDING") {
+    return {
+      code: ORG_VERIFICATION_PENDING,
+      message:
+        "Your business verification is still under review — you'll be able to post once it's approved.",
+      rejectionReason: null,
+    }
+  }
+  const reason = (ORG_REJECTION_REASONS as readonly string[]).includes(rejectionReason ?? "")
+    ? (rejectionReason as OrgRejectionReason)
+    : null
+  return {
+    code: ORG_VERIFICATION_REJECTED,
+    message: reason
+      ? `Your business verification was not approved (${ORG_REJECTION_LABEL[reason]}). ${ORG_REJECTION_FIX[reason]} Contact support to resubmit your documents.`
+      : "Your business verification was not approved. Contact support to resubmit your documents.",
+    rejectionReason: reason,
+  }
+}
+
 // ── Acting as an organisation ────────────────────────────────────────────────
 
 export type OrgMemberRole = "OWNER" | "STAFF"
@@ -146,7 +249,14 @@ export type OrgMemberRole = "OWNER" | "STAFF"
 export interface ActingIdentity {
   actingUserId: string
   humanUserId: string
-  organization: { id: string; name: string; role: OrgMemberRole; verified: boolean } | null
+  organization: {
+    id: string
+    name: string
+    role: OrgMemberRole
+    verified: boolean
+    verificationStatus: OrgVerificationStatus
+    rejectionReason: string | null
+  } | null
 }
 
 export type ActingResult =
@@ -177,7 +287,9 @@ export async function resolveActingIdentity(
     select: {
       role: true,
       status: true,
-      organization: { select: { id: true, name: true, orgUserId: true, verificationStatus: true } },
+      organization: {
+        select: { id: true, name: true, orgUserId: true, verificationStatus: true, rejectionReason: true },
+      },
     },
   })
 
@@ -198,6 +310,8 @@ export async function resolveActingIdentity(
         name: org.name,
         role: membership.role as OrgMemberRole,
         verified: org.verificationStatus === "VERIFIED",
+        verificationStatus: org.verificationStatus as OrgVerificationStatus,
+        rejectionReason: org.rejectionReason ?? null,
       },
     },
   }
@@ -221,12 +335,18 @@ export async function activeOrgsFor(
   logoUrl: string | null
   role: OrgMemberRole
   verified: boolean
+  verificationStatus: OrgVerificationStatus
+  /**
+   * Non-null when this org may not post: why, in the sentence to show. The
+   * phone reads it to stop somebody before the post wizard rather than after.
+   */
+  postingRefusal: { code: OrgPostingRefusal["code"]; message: string } | null
 }[]> {
   const rows = await db.organizationMember.findMany({
     where: { userId, status: "ACTIVE" },
     select: {
       role: true,
-      organization: { select: { ...ORG_PUBLIC_SELECT, orgUserId: true } },
+      organization: { select: { ...ORG_PUBLIC_SELECT, orgUserId: true, rejectionReason: true } },
     },
     orderBy: { joinedAt: "asc" },
   })
@@ -237,7 +357,63 @@ export async function activeOrgsFor(
     logoUrl: r.organization.logoUrl,
     role: r.role as OrgMemberRole,
     verified: r.organization.verificationStatus === "VERIFIED",
+    verificationStatus: r.organization.verificationStatus as OrgVerificationStatus,
+    postingRefusal: (() => {
+      const refusal = orgPostingRefusal(
+        r.organization.verificationStatus as OrgVerificationStatus,
+        r.organization.rejectionReason ?? null,
+      )
+      return refusal ? { code: refusal.code, message: refusal.message } : null
+    })(),
   }))
+}
+
+/**
+ * Has this person EVER done anything on Baylo as themselves, as opposed to as
+ * one of their organisations?
+ *
+ * The Profile tab reads this, beside the membership list, to decide whether a
+ * shop owner or staff member needs a personal profile at all. Somebody who has
+ * only ever listed and traded for a shop gets the shop, and a separate
+ * "personal profile" with an empty shelf would just confuse them.
+ *
+ * ── WHAT COUNTS ─────────────────────────────────────────────────────────────
+ *
+ * Any Item row they authored, in ANY status, and any TradeRequest or Offer they
+ * sent or received as themselves. Rows the org made carry the org's backing id,
+ * never the person's, so they do not count. Items are never hard-deleted
+ * (withdrawal is a status), so one personal listing, even a withdrawn one,
+ * keeps the personal profile reachable for good.
+ *
+ * ── WHAT DELIBERATELY DOES NOT COUNT ────────────────────────────────────────
+ *
+ *   TaskCompletion FIRST_LISTING  paid to the HUMAN even when they posted for
+ *                                 the org (see POST /api/items), so it says
+ *                                 nothing about personal activity.
+ *   LeafTransaction rows          the signup grant and VERIFY_ACCOUNT land on
+ *                                 every verified person with no activity.
+ *   User.totalTrades              completed trades only; an open offer is
+ *                                 activity too.
+ *
+ * Three existence probes (`findFirst` on an id, each served by the FK index)
+ * rather than counts, because only yes or no is needed.
+ */
+export async function hasPersonalActivity(
+  db: Pick<PrismaClient, "item" | "tradeRequest" | "offer">,
+  userId: string,
+): Promise<boolean> {
+  const [item, trade, offer] = await Promise.all([
+    db.item.findFirst({ where: { userId }, select: { id: true } }),
+    db.tradeRequest.findFirst({
+      where: { OR: [{ senderId: userId }, { receiverId: userId }] },
+      select: { id: true },
+    }),
+    db.offer.findFirst({
+      where: { OR: [{ senderId: userId }, { receiverId: userId }] },
+      select: { id: true },
+    }),
+  ])
+  return item !== null || trade !== null || offer !== null
 }
 
 /**
@@ -336,8 +512,8 @@ export async function createOrganization(
         businessDocUrl: input.businessDocUrl ?? null,
         businessDocPublicId: input.businessDocPublicId ?? null,
         dtiRegistrationNumber: input.dtiRegistrationNumber ?? null,
-        // PENDING by default. The org can post and trade while it waits; what
-        // it does not have yet is the checkmark.
+        // PENDING by default. The org can trade while it waits, but it cannot
+        // post until it is VERIFIED (see orgPostingRefusal).
         members: {
           create: {
             userId: input.founderUserId,

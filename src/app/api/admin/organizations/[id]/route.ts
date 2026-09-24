@@ -6,6 +6,8 @@ import { writeAudit } from "@/lib/moderation"
 import { ok, notFound, conflict } from "@/lib/v1/envelope"
 import { parseJsonBody } from "@/lib/v1/body"
 import { destroyOrgDocument } from "@/lib/org-document"
+import { ORG_WELCOME_LEAVES } from "@/lib/task-constants"
+import { ORG_REJECTION_FIX, ORG_REJECTION_REASONS } from "@/lib/organizations"
 
 export const dynamic = "force-dynamic"
 
@@ -33,8 +35,8 @@ export const dynamic = "force-dynamic"
  * ── WHAT REJECTION DOES NOT DO ──────────────────────────────────────────────
  *
  * It does not delete the organisation, suspend it, or hide its listings. A
- * REJECTED org keeps trading exactly as a PENDING one does; what it loses is
- * the checkmark it never had. That is the whole difference between this gate
+ * REJECTED org keeps trading exactly as a PENDING one does, and the listings
+ * it already has stay up; what it loses is the checkmark it never had. That is the whole difference between this gate
  * and the ID gate, and it is deliberate: an ID verifies a PERSON and unlocks
  * the right to post at all, while this verifies a CLAIM ABOUT A BUSINESS and
  * unlocks a badge. Refusing a badge is not grounds to take away an account,
@@ -44,45 +46,12 @@ export const dynamic = "force-dynamic"
  *
  * There is no attempt cap for the same reason. An applicant may fix the photo
  * and ask again; nothing is at stake that a cap would protect.
- */
-
-export const ORG_REJECTION_REASONS = [
-  "BLURRY_DOCUMENT",
-  "NAME_MISMATCH",
-  "EXPIRED_REGISTRATION",
-  "WRONG_DOCUMENT_TYPE",
-  "NOT_A_BUSINESS_DOCUMENT",
-] as const
-
-export type OrgRejectionReason = (typeof ORG_REJECTION_REASONS)[number]
-
-export const ORG_REJECTION_LABEL: Record<OrgRejectionReason, string> = {
-  BLURRY_DOCUMENT: "Too blurry to read",
-  NAME_MISMATCH: "Name does not match the account",
-  EXPIRED_REGISTRATION: "Registration has expired",
-  WRONG_DOCUMENT_TYPE: "Not a document we accept",
-  NOT_A_BUSINESS_DOCUMENT: "Not a business document",
-}
-
-/**
- * What the applicant is told, per reason. The FIX, not the verdict.
  *
- * Same rule as REJECTION_FIX next door: "rejected" tells somebody nothing they
- * can act on, and the entire value of a closed reason list is that each value
- * maps to a sentence describing what to do about it.
+ * WHAT BOTH NON-VERIFIED STATES DO COST (24 Sep 2026): posting AS the org.
+ * POST /api/items refuses a PENDING or REJECTED org outright, whatever the
+ * staff member's own ID says. See orgPostingRefusal() in @/lib/organizations,
+ * which is also where the reason vocabulary below now lives.
  */
-export const ORG_REJECTION_FIX: Record<OrgRejectionReason, string> = {
-  BLURRY_DOCUMENT:
-    "We could not read your business document. Retake the photo in good light with the whole page in frame.",
-  NAME_MISMATCH:
-    "The name on the document does not match your organisation's name on Baylo. Update one to match the other and send it again.",
-  EXPIRED_REGISTRATION:
-    "That registration has expired. Send a current DTI/SEC registration or barangay permit.",
-  WRONG_DOCUMENT_TYPE:
-    "We accept a DTI or SEC registration, or a barangay business permit. Send one of those.",
-  NOT_A_BUSINESS_DOCUMENT:
-    "That does not look like a business document. Send your DTI/SEC registration or barangay permit.",
-}
 
 const decisionSchema = z.discriminatedUnion("decision", [
   z.strictObject({
@@ -153,7 +122,55 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
         businessDocUrl: null,
       },
     })
-    if (updated.count !== 1) return false
+    if (updated.count !== 1) return { moved: false as const, welcomeLeaves: 0 }
+
+    // ── The verified-MSME welcome grant ─────────────────────────────────────
+    //
+    // To the ORG'S OWN balance, its backing User row, because that is the
+    // account that lists and trades as the shop. Never to the owner who
+    // happens to be watching: the business passed the review, not them.
+    //
+    // IN THIS TRANSACTION, with the status flip. A shop that shows the badge
+    // but never got the grant, or got the grant for a decision that rolled
+    // back, is exactly the drift one transaction rules out. And the balance
+    // moves together with the ledger row that explains it, the same pairing
+    // claimSignupGrant() in @/lib/verification uses, so SUM(User.leaves) still
+    // equals SUM(LeafTransaction.amount).
+    //
+    // ONCE PER ORGANISATION, EVER. The PENDING-only update above already means
+    // one decision per review, but nothing today stops a future resubmit path
+    // from taking a REJECTED org back to PENDING and verifying it again. So the
+    // guard is the ledger itself: an existing SIGNUP_GRANT row on the backing
+    // row means it was paid. That row cannot come from the person-side grant,
+    // because an org's backing row is created with signupGrantClaimed = true.
+    // Concurrent approvals cannot both reach this line, because only one wins
+    // the conditional update above.
+    let welcomeLeaves = 0
+    if (verify && ORG_WELCOME_LEAVES > 0) {
+      const alreadyPaid = await tx.leafTransaction.findFirst({
+        where: { userId: row.orgUserId, type: "SIGNUP_GRANT" },
+        select: { id: true },
+      })
+      if (!alreadyPaid) {
+        await tx.user.update({
+          where: { id: row.orgUserId },
+          data: {
+            leaves: { increment: ORG_WELCOME_LEAVES },
+            lifetimeLeaves: { increment: ORG_WELCOME_LEAVES },
+          },
+        })
+        await tx.leafTransaction.create({
+          data: {
+            userId: row.orgUserId,
+            type: "SIGNUP_GRANT",
+            amount: ORG_WELCOME_LEAVES,
+            description: "Verified MSME welcome grant",
+            eventAt: now,
+          },
+        })
+        welcomeLeaves = ORG_WELCOME_LEAVES
+      }
+    }
 
     await writeAudit(tx, {
       actorId: actor.id,
@@ -164,7 +181,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       detail: {
         organizationName: row.name,
         orgUserId: row.orgUserId,
-        ...(verify ? {} : { rejectionReason: body.rejectionReason }),
+        ...(verify ? { welcomeLeaves } : { rejectionReason: body.rejectionReason }),
       },
     })
 
@@ -194,7 +211,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
             ? ("ID_VERIFICATION_APPROVED" as const)
             : ("ID_VERIFICATION_REJECTED" as const),
           message: verify
-            ? `${row.name} is now a verified organisation. The badge is on your profile.`
+            ? `${row.name} is now a verified organisation. The badge is on your profile` +
+              (welcomeLeaves > 0 ? `, and ${welcomeLeaves} welcome Leaves are in the shop's balance.` : ".")
             : ORG_REJECTION_FIX[body.rejectionReason],
           entityType: "organization",
           entityId: row.id,
@@ -203,10 +221,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       })
     }
 
-    return true
+    return { moved: true as const, welcomeLeaves }
   })
 
-  if (!moved) {
+  if (!moved.moved) {
     return conflict("Somebody else decided this one first.")
   }
 
@@ -232,6 +250,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     id: row.id,
     verificationStatus: verify ? "VERIFIED" : "REJECTED",
     rejectionReason: verify ? null : body.rejectionReason,
+    welcomeLeaves: moved.welcomeLeaves,
     documentDeleted,
   })
 }

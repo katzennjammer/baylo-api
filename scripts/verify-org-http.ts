@@ -9,10 +9,11 @@
  * verify-orgs-and-perishables.ts already exercises the libraries directly, and
  * it passes. What it cannot see is everything BETWEEN the client and them: the
  * X-Baylo-Org header actually being read, the 403 a revoked membership produces,
- * whether a staff member's listing really lands on the org's id, and whether
- * the ID gate still fires for somebody acting as a verified organisation. Those
- * are the parts most likely to be wrong and the only way to test them is to
- * make the requests.
+ * whether a staff member's listing really lands on the org's id, and which
+ * gate applies: the person's own ID when posting as themselves, the org's
+ * review ALONE when posting for a verified org, and a flat refusal when
+ * posting for a PENDING or REJECTED one (24 Sep 2026). Those are the parts most likely to be wrong and the only way
+ * to test them is to make the requests.
  *
  * The document upload is NOT exercised here: it needs Cloudinary credentials
  * and posting a real image, and a failure there is a credentials problem rather
@@ -21,8 +22,9 @@
  */
 
 import prisma from "../src/lib/prisma"
-import { createOrganization } from "../src/lib/organizations"
+import { createOrganization, orgPostingRefusal } from "../src/lib/organizations"
 import { signAccessToken } from "../src/lib/auth-tokens"
+import { ORG_WELCOME_LEAVES } from "../src/lib/task-constants"
 
 const BASE = process.env.BAYLO_BASE_URL ?? "http://localhost:3000"
 
@@ -91,8 +93,9 @@ async function main() {
         name: `${tag}-owner`,
         email: `${tag}-owner@test.invalid`,
         isVerified: true,
-        // The ID gate fires before the org context is read, so both actors need
-        // to be past it or every POST /api/items here is a 403 about IDs.
+        // Past the personal ID gate, so posting as themselves works. Posting
+        // for an org never consults it; the ID-less path is its own section
+        // further down.
         idVerifiedGrandfatheredAt: new Date(),
       },
       select: { id: true },
@@ -128,6 +131,14 @@ async function main() {
     })
     created.orgs.push(org.organizationId)
     created.users.push(org.orgUserId)
+    // VERIFIED straight away, by hand. Only a verified org may post as itself,
+    // and the header, invitation and revocation sections below are about the
+    // context, not the review. The review itself, and the welcome grant it
+    // pays, go through the real admin endpoint in the posting-gate section.
+    await prisma.organization.update({
+      where: { id: org.organizationId },
+      data: { verificationStatus: "VERIFIED" },
+    })
 
     const ownerToken = await signAccessToken(owner.id)
     const staffToken = await signAccessToken(staff.id)
@@ -310,7 +321,7 @@ async function main() {
       puser?.trustTier === null,
       `got ${JSON.stringify(puser?.trustTier)}`,
     )
-    check("it is not verified yet", (puser?.org as { verified?: boolean })?.verified === false)
+    check("it carries the verified badge", (puser?.org as { verified?: boolean })?.verified === true)
     check("the staff count is present", typeof pcounts?.staff === "number", String(pcounts?.staff))
 
     // ── the Organizations filter ──────────────────────────────────────────
@@ -333,6 +344,266 @@ async function main() {
       orgItems.some((i) => i.owner.id === org.orgUserId),
     )
 
+    // ── the posting gate, and the verified-MSME welcome grant ──────────────
+    console.log("\nthe posting gate and the welcome grant")
+
+    // A staff member with NO personal ID verification at all, and an admin to
+    // approve the org.
+    const idless = await prisma.user.create({
+      data: { name: `${tag}-idless`, email: `${tag}-idless@test.invalid`, isVerified: true },
+      select: { id: true },
+    })
+    created.users.push(idless.id)
+    const admin = await prisma.user.create({
+      data: { name: `${tag}-admin`, email: `${tag}-admin@test.invalid`, isVerified: true, role: "ADMIN" },
+      select: { id: true },
+    })
+    created.users.push(admin.id)
+    const idlessToken = await signAccessToken(idless.id)
+    const adminToken = await signAccessToken(admin.id)
+
+    // Two fresh orgs with the same owner: one to stay PENDING until the admin
+    // approves it, one the admin rejects.
+    const reviewOrg = await createOrganization({
+      founderUserId: owner.id,
+      name: `${tag} Review Store`,
+      businessCategory: "SARI_SARI",
+    })
+    created.orgs.push(reviewOrg.organizationId)
+    created.users.push(reviewOrg.orgUserId)
+    const rejectedOrg = await createOrganization({
+      founderUserId: owner.id,
+      name: `${tag} Rejected Store`,
+      businessCategory: "SARI_SARI",
+    })
+    created.orgs.push(rejectedOrg.organizationId)
+    created.users.push(rejectedOrg.orgUserId)
+
+    await prisma.organizationMember.create({
+      data: {
+        organizationId: reviewOrg.organizationId,
+        userId: idless.id,
+        role: "STAFF",
+        status: "ACTIVE",
+        joinedAt: new Date(),
+      },
+    })
+
+    const personalFlag = (c: Called) =>
+      (c.body as { data?: { hasPersonalActivity?: boolean } }).data?.hasPersonalActivity
+
+    const meBefore = await call("/api/v1/profile/me", { token: idlessToken })
+    check(
+      "a member with no activity reports hasPersonalActivity = false",
+      personalFlag(meBefore) === false,
+      `status ${meBefore.status}, got ${JSON.stringify(personalFlag(meBefore))}`,
+    )
+    const ownerMe = await call("/api/v1/profile/me", { token: ownerToken })
+    check(
+      "the owner, who posted as themselves above, reports hasPersonalActivity = true",
+      personalFlag(ownerMe) === true,
+      `got ${JSON.stringify(personalFlag(ownerMe))}`,
+    )
+
+    // ── PENDING: refused, whatever the poster's own ID says ──
+    const pendingMessage = orgPostingRefusal("PENDING", null)!.message
+    const pendingIdless = await call("/api/items", {
+      token: idlessToken,
+      orgId: reviewOrg.organizationId,
+      method: "POST",
+      body: { ...listing, title: `${tag} pending-org idless` },
+    })
+    check(
+      "PENDING org: ID-less staff are refused with ORG_VERIFICATION_PENDING",
+      pendingIdless.status === 403 && pendingIdless.body.code === "ORG_VERIFICATION_PENDING",
+      `status ${pendingIdless.status} code ${String(pendingIdless.body.code)}`,
+    )
+    const pendingVerifiedPerson = await call("/api/items", {
+      token: ownerToken,
+      orgId: reviewOrg.organizationId,
+      method: "POST",
+      body: { ...listing, title: `${tag} pending-org owner` },
+    })
+    check(
+      "PENDING org: an owner WITH a verified personal ID is refused too (no fallback)",
+      pendingVerifiedPerson.status === 403 &&
+        pendingVerifiedPerson.body.code === "ORG_VERIFICATION_PENDING",
+      `status ${pendingVerifiedPerson.status} code ${String(pendingVerifiedPerson.body.code)}`,
+    )
+    check(
+      "PENDING org: the refusal carries the under-review sentence",
+      pendingVerifiedPerson.body.error === pendingMessage,
+      String(pendingVerifiedPerson.body.error),
+    )
+    const pendingAsSelf = await call("/api/items", {
+      token: ownerToken,
+      method: "POST",
+      body: { ...listing, title: `${tag} pending-org owner as self` },
+    })
+    check(
+      "PENDING org: the same owner can still post AS THEMSELVES",
+      pendingAsSelf.status === 201,
+      `status ${pendingAsSelf.status}`,
+    )
+    if (pendingAsSelf.status === 201) created.items.push(String(pendingAsSelf.body.id))
+
+    const ownerOrgs = await call("/api/v1/organizations", { token: ownerToken })
+    const listedOrgs = ((ownerOrgs.body as { data?: { organizations?: unknown[] } }).data
+      ?.organizations ?? []) as { id: string; postingRefusal: { code: string; message: string } | null }[]
+    check(
+      "the org list tells the phone up front: the PENDING org carries its refusal",
+      listedOrgs.find((o) => o.id === reviewOrg.organizationId)?.postingRefusal?.message === pendingMessage,
+      JSON.stringify(listedOrgs.find((o) => o.id === reviewOrg.organizationId)?.postingRefusal),
+    )
+    check(
+      "and the VERIFIED org carries none",
+      listedOrgs.find((o) => o.id === org.organizationId)?.postingRefusal === null,
+    )
+
+    // ── REJECTED: refused, and told why ──
+    const reject = await call(`/api/admin/organizations/${rejectedOrg.organizationId}`, {
+      token: adminToken,
+      method: "POST",
+      body: { decision: "reject", reason: `${tag} rejected`, rejectionReason: "BLURRY_DOCUMENT" },
+    })
+    check("an admin can reject an org", reject.status === 200, `status ${reject.status}`)
+    const rejectedMessage = orgPostingRefusal("REJECTED", "BLURRY_DOCUMENT")!.message
+    const rejectedVerifiedPerson = await call("/api/items", {
+      token: ownerToken,
+      orgId: rejectedOrg.organizationId,
+      method: "POST",
+      body: { ...listing, title: `${tag} rejected-org owner` },
+    })
+    check(
+      "REJECTED org: an owner WITH a verified personal ID is refused with ORG_VERIFICATION_REJECTED",
+      rejectedVerifiedPerson.status === 403 &&
+        rejectedVerifiedPerson.body.code === "ORG_VERIFICATION_REJECTED",
+      `status ${rejectedVerifiedPerson.status} code ${String(rejectedVerifiedPerson.body.code)}`,
+    )
+    check(
+      "REJECTED org: the refusal names the stored reason and what to do",
+      rejectedVerifiedPerson.body.error === rejectedMessage &&
+        (rejectedVerifiedPerson.body.organization as { rejectionReason?: string } | undefined)
+          ?.rejectionReason === "BLURRY_DOCUMENT",
+      String(rejectedVerifiedPerson.body.error),
+    )
+    await prisma.organizationMember.create({
+      data: {
+        organizationId: rejectedOrg.organizationId,
+        userId: idless.id,
+        role: "STAFF",
+        status: "ACTIVE",
+        joinedAt: new Date(),
+      },
+    })
+    const rejectedIdless = await call("/api/items", {
+      token: idlessToken,
+      orgId: rejectedOrg.organizationId,
+      method: "POST",
+      body: { ...listing, title: `${tag} rejected-org idless` },
+    })
+    check(
+      "REJECTED org: ID-less staff are refused the same way",
+      rejectedIdless.status === 403 && rejectedIdless.body.code === "ORG_VERIFICATION_REJECTED",
+      `status ${rejectedIdless.status} code ${String(rejectedIdless.body.code)}`,
+    )
+    const rejectedGrant = await prisma.leafTransaction.count({
+      where: { userId: rejectedOrg.orgUserId, type: "SIGNUP_GRANT" },
+    })
+    check("a rejection pays no welcome grant", rejectedGrant === 0, `count=${rejectedGrant}`)
+
+    // ── Approval: the grant, and then ID-less staff may post ──
+    const orgUserBefore = await prisma.user.findUniqueOrThrow({
+      where: { id: reviewOrg.orgUserId },
+      select: { leaves: true, lifetimeLeaves: true },
+    })
+    const approve = await call(`/api/admin/organizations/${reviewOrg.organizationId}`, {
+      token: adminToken,
+      method: "POST",
+      body: { decision: "verify", reason: `${tag} approved` },
+    })
+    check("an admin can verify the org", approve.status === 200, `status ${approve.status} ${JSON.stringify(approve.body)}`)
+    check(
+      `the response reports ${ORG_WELCOME_LEAVES} welcome Leaves`,
+      (approve.body as { data?: { welcomeLeaves?: number } }).data?.welcomeLeaves === ORG_WELCOME_LEAVES,
+      JSON.stringify(approve.body),
+    )
+    const orgUserAfter = await prisma.user.findUniqueOrThrow({
+      where: { id: reviewOrg.orgUserId },
+      select: { leaves: true, lifetimeLeaves: true },
+    })
+    check(
+      "THE ORG'S OWN BALANCE rose by the welcome grant",
+      orgUserAfter.leaves - orgUserBefore.leaves === ORG_WELCOME_LEAVES &&
+        orgUserAfter.lifetimeLeaves - orgUserBefore.lifetimeLeaves === ORG_WELCOME_LEAVES,
+      `${orgUserBefore.leaves} -> ${orgUserAfter.leaves}`,
+    )
+    const grantRows = await prisma.leafTransaction.findMany({
+      where: { userId: reviewOrg.orgUserId, type: "SIGNUP_GRANT" },
+      select: { amount: true },
+    })
+    check(
+      "exactly one SIGNUP_GRANT ledger row explains it",
+      grantRows.length === 1 && grantRows[0].amount === ORG_WELCOME_LEAVES,
+      JSON.stringify(grantRows),
+    )
+    const ownerLedger = await prisma.leafTransaction.count({
+      where: { userId: owner.id, type: "SIGNUP_GRANT" },
+    })
+    check("the owner's own balance got nothing", ownerLedger === 0, `count=${ownerLedger}`)
+
+    const again = await call(`/api/admin/organizations/${reviewOrg.organizationId}`, {
+      token: adminToken,
+      method: "POST",
+      body: { decision: "verify", reason: `${tag} again` },
+    })
+    const grantRowsAfter = await prisma.leafTransaction.count({
+      where: { userId: reviewOrg.orgUserId, type: "SIGNUP_GRANT" },
+    })
+    check(
+      "a second approval is a conflict and pays nothing",
+      again.status === 409 && grantRowsAfter === 1,
+      `status ${again.status}, rows ${grantRowsAfter}`,
+    )
+
+    const verifiedOrgPost = await call("/api/items", {
+      token: idlessToken,
+      orgId: reviewOrg.organizationId,
+      method: "POST",
+      body: { ...listing, title: `${tag} verified-org idless` },
+    })
+    check(
+      "ID-LESS STAFF CAN POST FOR A VERIFIED ORG",
+      verifiedOrgPost.status === 201,
+      `status ${verifiedOrgPost.status} ${JSON.stringify(verifiedOrgPost.body)}`,
+    )
+    if (verifiedOrgPost.status === 201) {
+      created.items.push(String(verifiedOrgPost.body.id))
+      check(
+        "and the listing belongs to the org",
+        authorOf(verifiedOrgPost.body) === reviewOrg.orgUserId,
+        `author ${authorOf(verifiedOrgPost.body)}`,
+      )
+    }
+
+    const idlessSelfPost = await call("/api/items", {
+      token: idlessToken,
+      method: "POST",
+      body: { ...listing, title: `${tag} idless self` },
+    })
+    check(
+      "but posting AS THEMSELVES still needs their own ID",
+      idlessSelfPost.status === 403 && idlessSelfPost.body.code === "ID_VERIFICATION_REQUIRED",
+      `status ${idlessSelfPost.status}`,
+    )
+
+    const meAfter = await call("/api/v1/profile/me", { token: idlessToken })
+    check(
+      "posting for the org does not count as personal activity",
+      personalFlag(meAfter) === false,
+      `got ${JSON.stringify(personalFlag(meAfter))}`,
+    )
+
     // ── an organisation cannot log in ─────────────────────────────────────
     console.log("\nthe backing row")
 
@@ -347,6 +618,11 @@ async function main() {
     })
     check("an org account cannot log in", login.status === 401, `status ${login.status}`)
   } finally {
+    // The approval's audit rows. AdminAction.actor has no cascade, so the
+    // admin row cannot be deleted while they exist.
+    await prisma.adminAction.deleteMany({
+      where: { OR: [{ actorId: { in: created.users } }, { targetId: { in: created.orgs } }] },
+    })
     await prisma.item.deleteMany({ where: { id: { in: created.items } } })
     await prisma.item.deleteMany({ where: { userId: { in: created.users } } })
     await prisma.organization.deleteMany({ where: { id: { in: created.orgs } } })

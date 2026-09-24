@@ -16,6 +16,7 @@ import { V1_ITEM_SELECT, V1_ITEM_OWNER_SELECT, v1ItemStatsSelect, v1Item, type V
 import { taskLabel } from "@/lib/v1/taxonomy"
 import { loadStanding, publicStanding } from "@/lib/reputation-gate"
 import { loadIdVerificationState, publicIdVerification } from "@/lib/id-verification"
+import { hasPersonalActivity } from "@/lib/organizations"
 
 /** What the owner's own shelf lists. See the note at step 2. */
 const SHELF_STATUSES: ItemStatus[] = [
@@ -212,6 +213,10 @@ export async function GET(req: NextRequest) {
   // nothing a client reports about its own verification is read back.
   const idVerification = await loadIdVerificationState(viewerId)
 
+  // ── 9 ── whether this person has ever acted as THEMSELVES. Up to three more
+  // existence probes. See hasPersonalActivity() for what counts.
+  const personalActivity = await hasPersonalActivity(prisma, viewerId)
+
   // Impact. computeImpactData() returns everything except the two derived
   // figures, which are computed here from the same trade set — no extra query.
   const base = computeImpactData(viewerId, trades)
@@ -293,6 +298,12 @@ export async function GET(req: NextRequest) {
       // NOT the same thing as `user.isVerified` two blocks up, which is the
       // email check — see the header of @/lib/id-verification.
       idVerification: publicIdVerification(idVerification),
+      // False for somebody who has only ever posted or traded for an
+      // organisation. The client combines it with their memberships: no
+      // personal activity plus at least one shop means the Profile tab shows
+      // the shop instead of an empty personal profile. It is recomputed on
+      // every read, so the first personal listing brings the person back.
+      hasPersonalActivity: personalActivity,
       impact: {
         co2Avoided: Math.round(base.co2Avoided * 10) / 10,
         waterSaved: Math.round(base.waterSaved),
