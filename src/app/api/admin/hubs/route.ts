@@ -2,13 +2,15 @@ import { NextRequest } from "next/server"
 import { z } from "zod"
 import { requireRole } from "@/lib/api-auth"
 import prisma from "@/lib/prisma"
-import { ok, conflict } from "@/lib/v1/envelope"
+import { ok, conflict, invalid } from "@/lib/v1/envelope"
 import { parseJsonBody } from "@/lib/v1/body"
 import { parseQuery } from "@/lib/v1/query"
 import { writeAudit } from "@/lib/moderation"
 import {
   SAFE_ZONE_HUB_SELECT,
   SAFE_ZONE_TYPE_VALUES,
+  NULL_ISLAND_MESSAGE,
+  isNullIsland,
   v1Hub,
   type SafeZoneHubRow,
 } from "@/lib/safe-zones"
@@ -127,6 +129,13 @@ export async function POST(req: NextRequest) {
   const parsed = await parseJsonBody(req, createSchema)
   if (!parsed.ok) return parsed.response
   const { reason, ...hub } = parsed.data
+
+  // (0, 0) passes every range check above and is still not a location. See
+  // isNullIsland() in @/lib/safe-zones for why the sentinel check lives in the
+  // shared module rather than here — PATCH applies the identical rule.
+  if (isNullIsland(hub.latitude, hub.longitude)) {
+    return invalid(NULL_ISLAND_MESSAGE, { rule: "NULL_ISLAND" })
+  }
 
   // Two hubs with the same name in the same city are almost always a second
   // admin adding one that already exists, and the cost of the false positive is

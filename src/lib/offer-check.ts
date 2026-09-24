@@ -1,6 +1,7 @@
 import type { PrismaClient } from "@/generated/prisma/client"
 import { bracketOf, type Bracket } from "@/lib/brackets"
 import { offerTerms, type FeePayer, type OfferLegality } from "@/lib/trade-rules"
+import { isPremium, isVip } from "@/lib/premium"
 
 /**
  * Everything the server checks about the two ITEMS of an offer, from the
@@ -28,7 +29,7 @@ import { offerTerms, type FeePayer, type OfferLegality } from "@/lib/trade-rules
  * that out from the brackets itself.
  */
 
-type CheckDb = Pick<PrismaClient, "item">
+type CheckDb = Pick<PrismaClient, "item" | "user">
 
 export type OfferRefusal =
   | "ITEM_NOT_FOUND"
@@ -118,8 +119,26 @@ export async function assessOffer(
 
   const offeredBracket = bracketOf(offered.valueLeaves)
   const targetBracket = bracketOf(target.valueLeaves)
-  const terms = offerTerms(offeredBracket, targetBracket)
   const brackets = { offeredBracket, targetBracket }
+
+  // Who the payer WOULD be, from the brackets alone -- offerTerms() decides
+  // this before it can price the fee, so it is called once here just for
+  // `.payer`, the result of THIS call's `.fee` is not the answer. Only then
+  // do we know whose subscription actually prices the bridge: the proposer's
+  // on an up-bridge, the receiver's (the listing owner's) on a down-bridge.
+  // Nobody pays on "same", so there is nothing to look up.
+  const provisional = offerTerms(offeredBracket, targetBracket)
+  let premiumPayer = false
+  if (provisional.payer === "proposer" || provisional.payer === "receiver") {
+    const payerId = provisional.payer === "proposer" ? proposerId : target.userId
+    const payer = await db.user.findUnique({
+      where: { id: payerId },
+      select: { premiumUntil: true, vipUntil: true },
+    })
+    premiumPayer = isPremium(payer?.premiumUntil) || isVip(payer?.vipUntil)
+  }
+
+  const terms = offerTerms(offeredBracket, targetBracket, premiumPayer)
 
   if (terms.legality === "tooLow") {
     return refuse(

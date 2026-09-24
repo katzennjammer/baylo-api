@@ -1,9 +1,9 @@
 import { NextRequest } from "next/server"
-import { bracketOf, valueNeedsPremium } from "@/lib/brackets"
+import { bracketOf, valueNeedsPremium, valueNeedsVip } from "@/lib/brackets"
 import { valueCap } from "@/lib/trade-rules"
 import { valueRejectionSentence } from "@/lib/value-rejection"
 import { ownerAppealState } from "@/lib/appeals"
-import { isPremium } from "@/lib/premium"
+import { isPremium, isVip } from "@/lib/premium"
 import { z } from "zod"
 import { resolveSession } from "@/lib/api-auth"
 import prisma from "@/lib/prisma"
@@ -206,7 +206,7 @@ export async function GET(
         }),
     prisma.user.findUnique({
       where: { id: viewerId },
-      select: { leaves: true, premiumUntil: true },
+      select: { leaves: true, premiumUntil: true, vipUntil: true },
     }),
     // The same function the contract gates enforce with, so the badge on this
     // screen can never promise something the server would then refuse.
@@ -248,21 +248,28 @@ export async function GET(
       // An owner cannot offer on their own listing, and neither can anyone once
       // it has left AVAILABLE.
       canOffer: !isOwner && item.status === "AVAILABLE",
-      // Why the offer control is LOCKED for this viewer, when it is. The only
-      // value today is "premium": the listing sits in PREMIUM_MIN_BRACKET or
-      // above and the viewer has no live subscription. Sent as a reason rather
-      // than folded into `canOffer` because the two draw different controls --
-      // `canOffer: false` is an inert button ("not available"), a lock is an
-      // explanation with the listing left fully in view. Advisory: the same
-      // check runs in enforcePremiumForListing() on every POST /api/offers.
+      // Why the offer control is LOCKED for this viewer, when it is. "vip": the
+      // listing sits in VIP_MIN_BRACKET or above and the viewer has no live VIP
+      // subscription (Premium alone does not clear this one). "premium": the
+      // listing sits in PREMIUM_MIN_BRACKET or above and the viewer has neither
+      // subscription live. Sent as a reason rather than folded into `canOffer`
+      // because the two draw different controls -- `canOffer: false` is an
+      // inert button ("not available"), a lock is an explanation with the
+      // listing left fully in view. Advisory: the same check, in the same
+      // order, runs in enforcePremiumForListing() on every POST /api/offers.
       //
       // Not computed for the owner. A person cannot offer on their own listing
       // whatever bracket it is in, and a padlock on your own item would read as
       // a claim about you.
       offerLock:
-        !isOwner && valueNeedsPremium(item.valueLeaves) && !isPremium(viewerRow?.premiumUntil)
-          ? ("premium" as const)
-          : null,
+        !isOwner && valueNeedsVip(item.valueLeaves) && !isVip(viewerRow?.vipUntil)
+          ? ("vip" as const)
+          : !isOwner &&
+              valueNeedsPremium(item.valueLeaves) &&
+              !isPremium(viewerRow?.premiumUntil) &&
+              !isVip(viewerRow?.vipUntil)
+            ? ("premium" as const)
+            : null,
       leaves: viewerRow?.leaves ?? 0,
       tradeableItems: tradeable.map((t) => ({
         id: t.id,

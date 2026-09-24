@@ -1,8 +1,10 @@
 import { NextResponse } from "next/server"
 import prisma from "@/lib/prisma"
 import { getTrustTier, getTierLimits, type TrustTier, type TierLimits } from "@/lib/reputation"
-import { bracketOf, bracketRange, PREMIUM_MIN_BRACKET, valueNeedsPremium } from "@/lib/brackets"
-import { isPremium } from "@/lib/premium"
+import {
+  bracketOf, bracketRange, PREMIUM_MIN_BRACKET, VIP_MIN_BRACKET, valueNeedsPremium, valueNeedsVip,
+} from "@/lib/brackets"
+import { isPremium, isVip } from "@/lib/premium"
 
 /**
  * Server-side enforcement of the reputation tiers.
@@ -46,6 +48,18 @@ export interface TraderStanding {
   limits: TierLimits
   /** isPremium(User.premiumUntil) at load time. See @/lib/premium. */
   premium: boolean
+  /** isVip(User.vipUntil) at load time. See @/lib/premium. A superset of premium. */
+  vip: boolean
+  /**
+   * The raw column values, DISPLAY-ONLY -- "your Premium expires 18 Oct 2026"
+   * on the membership screen, or "expired 3 Sep 2026" for a lapsed one. Never
+   * used to decide access: `premium`/`vip` above are what every enforcement
+   * check reads, and a client must compare this date to "now" itself to know
+   * which sentence it is looking at rather than trust a flag that could go
+   * stale between page load and the moment it renders.
+   */
+  premiumUntil: Date | null
+  vipUntil: Date | null
 }
 
 /**
@@ -62,7 +76,7 @@ export async function loadStanding(userId: string): Promise<TraderStanding> {
   const [user, completedTrades] = await Promise.all([
     prisma.user.findUnique({
       where: { id: userId },
-      select: { rating: true, premiumUntil: true },
+      select: { rating: true, premiumUntil: true, vipUntil: true },
     }),
     prisma.tradeRequest.count({
       where: { status: "COMPLETED", OR: [{ senderId: userId }, { receiverId: userId }] },
@@ -71,12 +85,17 @@ export async function loadStanding(userId: string): Promise<TraderStanding> {
 
   const rating = user?.rating ?? 0
   const premium = isPremium(user?.premiumUntil)
+  const vip = isVip(user?.vipUntil)
   // completedTrades, not User.totalTrades. The counter has drifted above the
   // real count on live data (two users sit one and two trades high), and a gate
   // that opens early is not a gate.
   const tier = getTrustTier(completedTrades, rating)
 
-  return { userId, rating, completedTrades, tier, limits: getTierLimits(tier), premium }
+  return {
+    userId, rating, completedTrades, tier, limits: getTierLimits(tier), premium, vip,
+    premiumUntil: user?.premiumUntil ?? null,
+    vipUntil: user?.vipUntil ?? null,
+  }
 }
 
 /** 403 in the shape the pre-v1 routes use: `{ error }`. */
@@ -84,11 +103,12 @@ function forbidden(message: string, extra: Record<string, unknown> = {}) {
   return NextResponse.json({ error: message, ...extra }, { status: 403 })
 }
 
-// ── The premium bracket gate ─────────────────────────────────────────────────
+// ── The premium/VIP bracket gate ─────────────────────────────────────────────
 
 /**
  * Refuses a non-subscriber ACQUIRING an item in bracket PREMIUM_MIN_BRACKET or
- * above -- on either path.
+ * above -- on either path -- and, within that range, refuses a Premium-only
+ * subscriber an item at VIP_MIN_BRACKET or above.
  *
  * Both paths, for the same reason the tier cap runs on both: it is a rule
  * about what a person takes in, and a rule that only bound proposers would be
@@ -100,6 +120,14 @@ function forbidden(message: string, extra: Record<string, unknown> = {}) {
  * gated belongs to the side that receives it. (Until 11 Sep 2026 this was
  * propose-only, with the accept side left open as "a toll on selling"; that
  * reading missed that the acceptor is also the one receiving.)
+ *
+ * VIP checked FIRST, ahead of premium. VIP_MIN_BRACKET sits inside the range
+ * PREMIUM_MIN_BRACKET already covers, so a bracket-9 item is caught by
+ * `valueNeedsPremium` too -- checking premium first would tell a Premium-only
+ * subscriber they are refused for lacking premium on an item premium was
+ * never going to unlock, which is not what happened. A live VIP subscription
+ * short-circuits the whole function, since VIP passes every premium bracket
+ * as well.
  *
  * Ordered BEFORE the tier cap, deliberately. The lock is a property of the
  * ITEM -- everyone sees the same padlock on the same tile -- while the tier cap
@@ -121,15 +149,34 @@ export async function enforcePremiumForListing(
   itemIds: string[],
   path: "propose" | "accept" = "propose",
 ): Promise<NextResponse | null> {
-  if (standing.premium) return null
-
   const ids = itemIds.filter(Boolean)
   if (ids.length === 0) return null
+  if (standing.vip) return null
 
   const rows = await prisma.item.findMany({
     where: { id: { in: ids } },
     select: { id: true, title: true, valueLeaves: true },
   })
+
+  const vipGated = rows.find((r) => valueNeedsVip(r.valueLeaves))
+  if (vipGated) {
+    const lead =
+      `Trading at bracket ${VIP_MIN_BRACKET} and above needs a VIP subscription, ` +
+      `which is coming soon. `
+    const tail =
+      path === "accept"
+        ? `"${vipGated.title}" is in that bracket, so accepting it is locked. The offer stays where it is.`
+        : `"${vipGated.title}" stays visible; only proposing on it is locked.`
+    return forbidden(lead + tail, {
+      code: "VIP_REQUIRED",
+      bracket: bracketOf(vipGated.valueLeaves as number),
+      minBracket: VIP_MIN_BRACKET,
+      path,
+    })
+  }
+
+  if (standing.premium) return null
+
   const gated = rows.find((r) => valueNeedsPremium(r.valueLeaves))
   if (!gated) return null
 
@@ -283,6 +330,11 @@ export function publicStanding(standing: TraderStanding) {
     tier: standing.tier,
     /** isPremium(premiumUntil). Advisory here; enforced by enforcePremiumForListing(). */
     premium: standing.premium,
+    /** isVip(vipUntil). Advisory here; enforced by enforcePremiumForListing(). */
+    vip: standing.vip,
+    /** DISPLAY-ONLY. See the field comment on TraderStanding. ISO or null. */
+    premiumUntil: standing.premiumUntil?.toISOString() ?? null,
+    vipUntil: standing.vipUntil?.toISOString() ?? null,
     completedTrades: standing.completedTrades,
     rating: standing.rating,
     limits: {

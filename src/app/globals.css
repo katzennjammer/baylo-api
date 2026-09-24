@@ -100,44 +100,8 @@ img { display: block; max-width: 100%; }
 
 .wrap { width: 100%; max-width: var(--maxw); margin: 0 auto; padding-inline: var(--gut); }
 
-.hub-location-map {
-  height: 280px;
-  width: 100%;
-  border: 1px solid rgba(0,0,0,.14);
-  border-radius: 9px;
-  overflow: hidden;
-  background: #e8eee9;
-}
-
-.admin-hub-marker-host {
-  background: transparent;
-  border: 0;
-}
-
-.admin-hub-marker {
-  width: 38px;
-  height: 38px;
-  filter: drop-shadow(0 2px 3px rgba(20, 35, 26, .28));
-  cursor: grab;
-}
-
-.admin-hub-marker:active {
-  cursor: grabbing;
-  filter: drop-shadow(0 4px 5px rgba(20, 35, 26, .38));
-}
-
-.admin-hub-marker svg {
-  display: block;
-  width: 100%;
-  height: 100%;
-}
-
-.hub-location-help {
-  margin-top: 6px;
-  color: #6b756e;
-  font-size: 11px;
-  line-height: 1.35;
-}
+/* .hub-location-map, .admin-hub-marker* and .hub-location-help moved to
+   src/app/admin/admin-theme.css (admin-only; confirmed unused outside /admin). */
 
 /* ---------- Display type scale ---------- */
 .display {
@@ -514,6 +478,9 @@ image-slot { color: var(--muted) !important; }
   [data-reveal-delay="5"] { transition-delay: 0.40s; }
 }
 body[data-motion="off"] [data-reveal] { opacity: 1 !important; transform: none !important; }
+
+/* Admin console motion + micro-interaction utilities moved to
+   src/app/admin/admin-theme.css (admin-only; confirmed unused outside /admin). */
 
 /* clip mask reveal for big headlines */
 .line-mask { overflow: hidden; display: block; }

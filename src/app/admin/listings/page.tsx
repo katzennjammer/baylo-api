@@ -5,6 +5,10 @@ import { bracketOf } from "@/lib/brackets"
 import { valueCap } from "@/lib/trade-rules"
 import { VALUE_REJECTION_REASONS } from "@/lib/value-rejection"
 import ListingActions from "./ListingActions"
+import { TakedownDisclosure } from "./TakedownDisclosure"
+import { FilterChips } from "@/components/admin/FilterChips"
+import { StaggerGroup, StaggerItem } from "@/components/admin/Stagger"
+import UrlSyncedForm from "@/components/admin/primitives/UrlSyncedForm"
 
 export const dynamic = "force-dynamic"
 export const revalidate = 0
@@ -33,13 +37,6 @@ function moderationLabel(status: string, hidden: boolean): { text: string; color
   return { text: "Not listed", color: "#666" }
 }
 
-function chip(active: boolean): React.CSSProperties {
-  return {
-    padding: "6px 12px", borderRadius: 999, fontSize: 13, fontWeight: 600,
-    textDecoration: "none", border: `1px solid ${active ? "#4CAF50" : "rgba(0,0,0,.14)"}`,
-    background: active ? "rgba(76,175,80,.12)" : "#fff", color: active ? "#2e7d32" : "#555",
-  }
-}
 
 export default async function ListingsPage({ searchParams }: Props) {
   const sp = await searchParams
@@ -83,23 +80,26 @@ export default async function ListingsPage({ searchParams }: Props) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
       <div>
-        <h1 style={{ fontSize: 24, fontWeight: 800 }}>Listings</h1>
-        <p style={{ fontSize: 13, color: "#777", marginTop: 4 }}>
+        <h1 style={{ fontSize: 24, fontWeight: 800, color: "var(--adm-text)" }}>Listings</h1>
+        <p style={{ fontSize: 13, color: "var(--adm-text-secondary)", marginTop: 4 }}>
           Search listings, decide value reviews, and manage moderator takedowns without opening a report.
         </p>
       </div>
-      <form action="/admin/listings" style={{ display: "flex", gap: 8, maxWidth: 620 }}>
+      <UrlSyncedForm action="/admin/listings" style={{ display: "flex", gap: 8, maxWidth: 620 }}>
         <input name="q" defaultValue={q} placeholder="Search title or owner" style={{ flex: 1, padding: "10px 12px", borderRadius: 9, border: "1px solid rgba(0,0,0,.16)", fontSize: 14 }} />
         <button type="submit" style={{ padding: "10px 16px", border: 0, borderRadius: 9, background: "#17201b", color: "#fff", fontWeight: 700 }}>Search</button>
-      </form>
-      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-        <Link href={href({ status: undefined })} style={chip(!status)}>All</Link>
-        {STATUSES.map((value) => (
-          <Link key={value} href={href({ status: status === value ? undefined : value })} style={chip(status === value)}>
-            {value.replace("_", " ")[0].toUpperCase() + value.replace("_", " ").slice(1)}
-          </Link>
-        ))}
-      </div>
+      </UrlSyncedForm>
+      <FilterChips
+        groupId="status"
+        options={[
+          { key: "all", label: "All", href: href({ status: undefined }) },
+          ...STATUSES.map((value) => ({
+            key: value,
+            label: value.replace("_", " ")[0].toUpperCase() + value.replace("_", " ").slice(1),
+            href: href({ status: status === value ? undefined : value }),
+          })),
+        ]}
+      />
       {listings.length === 0 ? (
         <p style={{ padding: 32, textAlign: "center", background: "#fff", borderRadius: 14, color: "#888" }}>No listings found.</p>
       ) : (
@@ -112,8 +112,8 @@ export default async function ListingsPage({ searchParams }: Props) {
               <th style={{ padding: "12px 14px" }}>Created</th>
               <th style={{ padding: "12px 14px" }}>Moderation</th>
             </tr></thead>
-            <tbody>
-              {listings.map((listing) => {
+            <StaggerGroup as="tbody">
+              {listings.map((listing, index) => {
                 const hidden = listing.moderationHiddenAt !== null
                 const inReview = listing.status === "PENDING_REVIEW"
                 const label = moderationLabel(listing.status, hidden)
@@ -121,7 +121,13 @@ export default async function ListingsPage({ searchParams }: Props) {
                 const suggested = listing.suggestedLeaves
                 const cap = suggested === null ? null : valueCap(suggested).maxBracketWithoutReview
                 return (
-                  <tr key={listing.id} style={{ borderTop: "1px solid rgba(0,0,0,.06)", verticalAlign: "top" }}>
+                  <StaggerItem
+                    as="tr"
+                    index={index}
+                    key={listing.id}
+                    className="admin-row-hover"
+                    style={{ borderTop: "1px solid rgba(0,0,0,.06)", verticalAlign: "top" }}
+                  >
                     <td style={{ padding: "14px" }}>
                       <Link href={`/listings/${listing.id}`} style={{ color: "#21643d", fontWeight: 700 }}>{listing.title}</Link>
                       {/*
@@ -172,22 +178,19 @@ export default async function ListingsPage({ searchParams }: Props) {
                             Review value in queue →
                           </Link>
                           {canAct ? (
-                            <details>
-                              <summary style={{ fontSize: 12, color: "#777", cursor: "pointer" }}>Moderation takedown…</summary>
-                              <div style={{ marginTop: 6 }}>
-                                <ListingActions listingId={listing.id} hidden={hidden} canAct={canAct} />
-                              </div>
-                            </details>
+                            <TakedownDisclosure>
+                              <ListingActions listingId={listing.id} hidden={hidden} canAct={canAct} />
+                            </TakedownDisclosure>
                           ) : null}
                         </div>
                       ) : (
                         <ListingActions listingId={listing.id} hidden={hidden} canAct={canAct} />
                       )}
                     </td>
-                  </tr>
+                  </StaggerItem>
                 )
               })}
-            </tbody>
+            </StaggerGroup>
           </table>
         </div>
       )}

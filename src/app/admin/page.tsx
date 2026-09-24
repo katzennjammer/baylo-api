@@ -11,6 +11,8 @@ import {
   type ReportCategoryWire,
   type ReportTargetWire,
 } from "@/lib/moderation"
+import { FilterChips } from "@/components/admin/FilterChips"
+import { StaggerGroup, StaggerItem } from "@/components/admin/Stagger"
 
 export const dynamic = "force-dynamic"
 export const revalidate = 0
@@ -33,19 +35,6 @@ const STATUSES = ["OPEN", "REVIEWING", "ACTIONED", "DISMISSED"] as const
 
 interface Props {
   searchParams: Promise<{ status?: string; targetType?: string; category?: string }>
-}
-
-function chipStyle(active: boolean): React.CSSProperties {
-  return {
-    padding: "6px 12px",
-    borderRadius: 999,
-    fontSize: 13,
-    fontWeight: 600,
-    textDecoration: "none",
-    border: `1px solid ${active ? "#4CAF50" : "rgba(0,0,0,.14)"}`,
-    background: active ? "rgba(76,175,80,.12)" : "#fff",
-    color: active ? "#2e7d32" : "#555",
-  }
 }
 
 const STATUS_COLOR: Record<string, string> = {
@@ -105,8 +94,8 @@ export default async function AdminQueuePage({ searchParams }: Props) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
       <div>
-        <h1 style={{ fontSize: 24, fontWeight: 800, letterSpacing: "-.02em" }}>Report queue</h1>
-        <p style={{ fontSize: 13, color: "#777", marginTop: 4 }}>
+        <h1 style={{ fontSize: 24, fontWeight: 800, letterSpacing: "-.02em", color: "var(--adm-text)" }}>Report queue</h1>
+        <p style={{ fontSize: 13, color: "var(--adm-text-secondary)", marginTop: 4 }}>
           {countBy.OPEN ?? 0} open · {countBy.REVIEWING ?? 0} in review ·{" "}
           {countBy.ACTIONED ?? 0} actioned · {countBy.DISMISSED ?? 0} dismissed
         </p>
@@ -116,32 +105,35 @@ export default async function AdminQueuePage({ searchParams }: Props) {
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
           <span style={{ fontSize: 12, color: "#999", width: 64 }}>Status</span>
-          <Link href={href({ status: undefined })} style={chipStyle(!status)}>All</Link>
-          {STATUSES.map((s) => (
-            <Link key={s} href={href({ status: status === s ? undefined : s })} style={chipStyle(status === s)}>
-              {s} ({countBy[s] ?? 0})
-            </Link>
-          ))}
+          <FilterChips
+            groupId="report-status"
+            options={[
+              { key: "all", label: "All", href: href({ status: undefined }) },
+              ...STATUSES.map((s) => ({ key: s, label: `${s} (${countBy[s] ?? 0})`, href: href({ status: status === s ? undefined : s }) })),
+            ]}
+          />
         </div>
 
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
           <span style={{ fontSize: 12, color: "#999", width: 64 }}>Type</span>
-          <Link href={href({ targetType: undefined })} style={chipStyle(!targetType)}>All</Link>
-          {REPORT_TARGET_TYPES.map((t) => (
-            <Link key={t} href={href({ targetType: targetType === t ? undefined : t })} style={chipStyle(targetType === t)}>
-              {t}
-            </Link>
-          ))}
+          <FilterChips
+            groupId="report-target"
+            options={[
+              { key: "all", label: "All", href: href({ targetType: undefined }) },
+              ...REPORT_TARGET_TYPES.map((t) => ({ key: t, label: t, href: href({ targetType: targetType === t ? undefined : t }) })),
+            ]}
+          />
         </div>
 
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
           <span style={{ fontSize: 12, color: "#999", width: 64 }}>Reason</span>
-          <Link href={href({ category: undefined })} style={chipStyle(!category)}>All</Link>
-          {REPORT_CATEGORIES.map((c) => (
-            <Link key={c} href={href({ category: category === c ? undefined : c })} style={chipStyle(category === c)}>
-              {CATEGORY_LABEL[c]}
-            </Link>
-          ))}
+          <FilterChips
+            groupId="report-category"
+            options={[
+              { key: "all", label: "All", href: href({ category: undefined }) },
+              ...REPORT_CATEGORIES.map((c) => ({ key: c, label: CATEGORY_LABEL[c], href: href({ category: category === c ? undefined : c }) })),
+            ]}
+          />
         </div>
       </div>
 
@@ -163,9 +155,9 @@ export default async function AdminQueuePage({ searchParams }: Props) {
                 <th style={{ padding: "12px 16px" }} />
               </tr>
             </thead>
-            <tbody>
-              {reports.map((r) => (
-                <tr key={r.id} style={{ borderTop: "1px solid rgba(0,0,0,.06)" }}>
+            <StaggerGroup as="tbody">
+              {reports.map((r, index) => (
+                <StaggerItem as="tr" index={index} key={r.id} className="admin-row-hover" style={{ borderTop: "1px solid rgba(0,0,0,.06)" }}>
                   <td style={{ padding: "12px 16px", whiteSpace: "nowrap", color: "#666" }}>
                     {r.createdAt.toLocaleString()}
                   </td>
@@ -188,9 +180,9 @@ export default async function AdminQueuePage({ searchParams }: Props) {
                       Review →
                     </Link>
                   </td>
-                </tr>
+                </StaggerItem>
               ))}
-            </tbody>
+            </StaggerGroup>
           </table>
         </div>
       )}

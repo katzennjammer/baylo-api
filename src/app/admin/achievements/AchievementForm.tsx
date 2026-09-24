@@ -3,6 +3,7 @@
 import { useRef, useState } from "react"
 import { useRouter } from "next/navigation"
 import toast from "react-hot-toast"
+import { Modal } from "@/components/admin/Modal"
 
 /**
  * The achievement editor.
@@ -42,6 +43,8 @@ const CRITERIA: { value: string; label: string; counted: boolean }[] = [
   { value: "LIFETIME_LEAVES", label: "Lifetime Leaves earned", counted: true },
   { value: "SAFEZONE_MEETUPS", label: "Safe-Zone meetups", counted: true },
   { value: "REPORTS_FILED", label: "Reports filed", counted: true },
+  { value: "BRIDGE_COMPLETED", label: "Completed trades with a bridge fee paid", counted: true },
+  { value: "PREMIUM_SUBSCRIBER", label: "Premium subscriber (current or ever)", counted: false },
 ]
 
 const CRITERIA_BY_VALUE = new Map(CRITERIA.map((c) => [c.value, c]))
@@ -55,6 +58,7 @@ export interface AchievementFormValues {
   imageUrl: string | null
   criterion: string
   threshold: number
+  points: number
   sortOrder: number
 }
 
@@ -66,6 +70,7 @@ const emptyValues: AchievementFormValues = {
   imageUrl: null,
   criterion: "VERIFIED_ACCOUNT",
   threshold: 1,
+  points: 0,
   sortOrder: 0,
 }
 
@@ -92,7 +97,13 @@ export default function AchievementForm({
   mode: "create" | "edit"
 }) {
   const router = useRouter()
-  const [open, setOpen] = useState(mode === "edit")
+  // ALWAYS starts closed, same fix as HubForm.tsx: `useState(mode === "edit")`
+  // opened every edit-mode row's form immediately, so every achievement row
+  // rendered its full editor -- key, name, description, art uploader,
+  // criterion, threshold, points, sort order, reason, buttons -- permanently
+  // expanded, which is what made this table look like it had "too much
+  // space" too.
+  const [open, setOpen] = useState(false)
   const [values, setValues] = useState<AchievementFormValues>(initial ?? emptyValues)
   const [reason, setReason] = useState("")
   const [backfill, setBackfill] = useState(true)
@@ -105,6 +116,21 @@ export default function AchievementForm({
 
   function update<K extends keyof AchievementFormValues>(key: K, value: AchievementFormValues[K]) {
     setValues((current) => ({ ...current, [key]: value }))
+  }
+
+  /**
+   * Closing returns the form to what it was when opened, the same rule
+   * HubForm.tsx's closeAndReset() follows and for the same reason: this
+   * component stays mounted between opens (one per row), so an edit typed
+   * and then cancelled would otherwise still be sitting in `values` the next
+   * time this row's form is reopened -- and `reason` carrying over would mean
+   * a stale audit-log justification is one click from being reused for an
+   * unrelated change.
+   */
+  function closeAndReset() {
+    setValues(initial ?? emptyValues)
+    setReason("")
+    setOpen(false)
   }
 
   async function pickImage(file: File) {
@@ -143,6 +169,7 @@ export default function AchievementForm({
               imageUrl: values.imageUrl,
               criterion: values.criterion,
               threshold: counted ? values.threshold : 1,
+              points: values.points,
               sortOrder: values.sortOrder,
               backfill,
               reason: reason.trim(),
@@ -154,6 +181,7 @@ export default function AchievementForm({
               imageUrl: values.imageUrl,
               criterion: values.criterion,
               threshold: counted ? values.threshold : 1,
+              points: values.points,
               sortOrder: values.sortOrder,
               reason: reason.trim(),
             }
@@ -189,20 +217,67 @@ export default function AchievementForm({
     }
   }
 
-  if (!open) {
-    return (
-      <button
-        type="button"
-        onClick={() => setOpen(true)}
-        style={{ padding: "9px 14px", border: 0, borderRadius: 9, background: "#17201b", color: "#fff", fontWeight: 700 }}
-      >
-        {mode === "create" ? "Create achievement" : "Edit"}
-      </button>
-    )
-  }
-
   return (
-    <div style={{ display: "grid", gap: 8, padding: 14, borderRadius: 10, background: "#f7f9f7", minWidth: 340 }}>
+    <div>
+      {!open ? (
+        <button
+          type="button"
+          onClick={() => setOpen(true)}
+          className="admin-btn-press"
+          style={{ padding: "9px 14px", border: 0, borderRadius: 9, background: "#17201b", color: "#fff", fontWeight: 700 }}
+        >
+          {mode === "create" ? "Create achievement" : "Edit"}
+        </button>
+      ) : null}
+      <Modal open={open} onClose={closeAndReset}>
+        <AchievementFormPanel
+          values={values}
+          update={update}
+          mode={mode}
+          uploading={uploading}
+          fileInput={fileInput}
+          pickImage={pickImage}
+          counted={counted}
+          backfill={backfill}
+          setBackfill={setBackfill}
+          reason={reason}
+          setReason={setReason}
+          busy={busy}
+          submit={submit}
+          closeAndReset={closeAndReset}
+        />
+      </Modal>
+    </div>
+  )
+}
+
+function AchievementFormPanel({
+  values, update, mode, uploading, fileInput, pickImage, counted, backfill, setBackfill,
+  reason, setReason, busy, submit, closeAndReset,
+}: {
+  values: AchievementFormValues
+  update: <K extends keyof AchievementFormValues>(key: K, value: AchievementFormValues[K]) => void
+  mode: "create" | "edit"
+  uploading: boolean
+  fileInput: React.RefObject<HTMLInputElement | null>
+  pickImage: (file: File) => Promise<void>
+  counted: boolean
+  backfill: boolean
+  setBackfill: (value: boolean) => void
+  reason: string
+  setReason: (value: string) => void
+  busy: boolean
+  submit: () => void
+  closeAndReset: () => void
+}) {
+  return (
+    <div
+      style={{
+        display: "grid", gap: 10, padding: 20, borderRadius: 14,
+        background: "#f7f9f7", width: "min(92vw, 560px)",
+        boxShadow: "0 24px 60px rgba(15,20,17,.28)",
+      }}
+    >
       <Field label="Key (stable id)">
         <input
           value={values.key}
@@ -288,6 +363,16 @@ export default function AchievementForm({
         </p>
       )}
 
+      <Field label="Points">
+        <input
+          type="number"
+          min={0}
+          value={values.points}
+          onChange={(e) => update("points", Math.max(0, Number(e.target.value) || 0))}
+          style={input}
+        />
+      </Field>
+
       <Field label="Sort order (lower shows first)">
         <input
           type="number"
@@ -323,11 +408,12 @@ export default function AchievementForm({
           type="button"
           onClick={submit}
           disabled={busy || uploading}
+          className="admin-btn-press"
           style={{ ...smallButton, background: "#4CAF50", color: "#fff", opacity: busy || uploading ? 0.6 : 1 }}
         >
           {busy ? "Saving…" : mode === "create" ? "Create" : "Save"}
         </button>
-        <button type="button" onClick={() => setOpen(false)} disabled={busy} style={smallButton}>
+        <button type="button" onClick={closeAndReset} disabled={busy} className="admin-btn-press" style={smallButton}>
           Cancel
         </button>
       </div>
@@ -344,8 +430,12 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   )
 }
 
+// `width: "100%"` for the same reason as HubForm.tsx's `input`: without it a
+// bare <input>/<select> keeps the browser's small intrinsic width while the
+// grid column widens to fit a sibling (the description textarea), leaving a
+// dead strip beside every short field.
 const input: React.CSSProperties = {
-  padding: "8px 9px", borderRadius: 7, border: "1px solid rgba(0,0,0,.16)",
+  width: "100%", padding: "8px 9px", borderRadius: 7, border: "1px solid rgba(0,0,0,.16)",
   fontSize: 12, background: "#fff", color: "#111", fontFamily: "inherit",
 }
 const smallButton: React.CSSProperties = {

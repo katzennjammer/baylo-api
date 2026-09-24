@@ -1,10 +1,24 @@
 import type { ReactNode } from "react"
-import Link from "next/link"
 import { redirect } from "next/navigation"
+import { Plus_Jakarta_Sans, JetBrains_Mono } from "next/font/google"
 import { auth } from "@root/auth"
 import prisma from "@/lib/prisma"
 import { suspensionState } from "@/lib/moderation"
-import AccountMenu from "./AccountMenu"
+import AdminShell from "./AdminShell"
+import "./admin-theme.css"
+
+const admSans = Plus_Jakarta_Sans({
+  subsets: ["latin"],
+  weight: ["400", "500", "600", "700", "800"],
+  variable: "--font-adm-sans",
+  display: "swap",
+})
+const admMono = JetBrains_Mono({
+  subsets: ["latin"],
+  weight: ["400", "500"],
+  variable: "--font-adm-mono",
+  display: "swap",
+})
 
 export const dynamic = "force-dynamic"
 export const revalidate = 0
@@ -43,68 +57,8 @@ export default async function AdminLayout({ children }: { children: ReactNode })
   if (me.role !== "ADMIN") redirect("/dashboard")
 
   return (
-    <div style={{ minHeight: "100vh", background: "#f4f6f5", color: "#17201b", fontFamily: "var(--ff-body)" }}>
-      <header
-        style={{
-          position: "sticky",
-          top: 0,
-          zIndex: 10,
-          background: "rgba(255,255,255,.94)",
-          backdropFilter: "blur(16px)",
-          borderBottom: "1px solid rgba(23,32,27,.10)",
-          padding: "0 28px",
-          minHeight: 72,
-          display: "flex",
-          alignItems: "center",
-          gap: 28,
-        }}
-      >
-        <Link href="/admin" style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 190 }}>
-          <span style={{ width: 34, height: 34, borderRadius: 10, display: "grid", placeItems: "center", background: "#1f6b43", color: "#fff", fontWeight: 800, fontSize: 17 }}>B</span>
-          <span>
-            <strong style={{ display: "block", fontSize: 16, letterSpacing: "-.02em" }}>Baylo</strong>
-            <span style={{ display: "block", marginTop: 1, fontSize: 10, fontWeight: 700, letterSpacing: ".12em", textTransform: "uppercase", color: "#77827b" }}>Admin console</span>
-          </span>
-        </Link>
-        <nav aria-label="Admin navigation" style={{ display: "flex", alignItems: "center", gap: 4, flex: 1, height: "100%", overflowX: "auto" }}>
-          <AdminLink href="/admin/dashboard" label="Overview" />
-          <AdminLink href="/admin" label="Reports" />
-          {/* Two queues behind one entry: government IDs and business
-              documents, switched by the tab strip on both pages. They are one
-              job — "is this document real" — with different retention rules
-              and different consequences, which is why they are separate routes
-              rather than one filtered list. See DocumentQueueTabs. */}
-          <AdminLink href="/admin/id-verification" label="Documents" />
-          <AdminLink href="/admin/review-queue" label="Review queue" />
-          <AdminLink href="/admin/appeals" label="Appeals" />
-          <AdminLink href="/admin/users" label="Users" />
-          <AdminLink href="/admin/listings" label="Listings" />
-          <AdminLink href="/admin/hubs" label="Hubs" />
-          <AdminLink href="/admin/achievements" label="Achievements" />
-          <AdminLink href="/admin/audit" label="Audit log" />
-          <AdminLink href="/admin/access" label="Access" />
-        </nav>
-        <AccountMenu name={me.name} role={me.role} />
-      </header>
-      <main style={{ padding: "34px 28px 56px", maxWidth: 1280, margin: "0 auto" }}>{children}</main>
-    </div>
-  )
-}
-
-function AdminLink({ href, label }: { href: string; label: string }) {
-  return (
-    <Link
-      href={href}
-      style={{
-        color: "#536159",
-        fontSize: 13,
-        fontWeight: 700,
-        padding: "12px 14px",
-        borderRadius: 9,
-        whiteSpace: "nowrap",
-      }}
-    >
-      {label}
-    </Link>
+    <AdminShell name={me.name} role={me.role} fontVariables={`${admSans.variable} ${admMono.variable}`}>
+      {children}
+    </AdminShell>
   )
 }

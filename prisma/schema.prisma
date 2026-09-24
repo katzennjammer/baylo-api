@@ -81,6 +81,17 @@ model User {
   // giving one away.
   premiumUntil DateTime?
 
+  // VIP subscription (23 Sep 2026). Same shape and same caveats as
+  // premiumUntil -- a date, not a boolean, set by hand today via
+  // scripts/set-premium.ps1 and read by ONE place, isVip() in @/lib/premium.
+  //
+  // VIP is a SUPERSET of Premium, not a sibling of it: it gates acquiring an
+  // item at VIP_MIN_BRACKET or above (see @/lib/brackets), and it ALSO passes
+  // everything premiumUntil alone would -- a VIP subscriber never needs both
+  // columns set. enforcePremiumForListing() checks vip before premium for
+  // exactly that reason.
+  vipUntil DateTime?
+
   items                   Item[]
   sentRequests            TradeRequest[]           @relation("SentRequests")
   receivedRequests        TradeRequest[]           @relation("ReceivedRequests")
@@ -104,6 +115,7 @@ model User {
   leafTransactions        LeafTransaction[]
   swapConfirmationCodes   SwapConfirmationCode[]
   taskCompletions         TaskCompletion[]
+  questAssignments        QuestAssignment[]
   refreshTokens           RefreshToken[]
   emailVerificationTokens EmailVerificationToken[]
 
@@ -927,6 +939,70 @@ enum TaskKind {
   FIRST_TRADE
 }
 
+// ── Daily quests (23 Sep 2026, moved weekly -> daily 24 Sep 2026) ────────────
+//
+// Five quests a day: 2 Easy (2 Leaves each), 2 Medium (3 each), 1 Hard (5) --
+// 15 Leaves/day if every one is completed. Assigned fresh each UTC calendar
+// day (`periodStart`) and reconciled against real DB state the same way
+// TaskCompletion is -- see reconcileQuests() in @/lib/quests. Every quest is
+// an existing, already-tracked platform action (send an offer, list an item,
+// complete a trade); none of it is a new engagement metric like time-in-app,
+// which is deliberate -- the manuscript frames Baylo's Point System as a
+// reward system rather than gamification, and a metric with no real-world
+// action behind it would contradict that.
+//
+// ONE ROW PER (user, day, quest), not per tier: unlike the original weekly
+// shape (one quest per tier), Easy and Medium each place TWO quests a day, so
+// the tier alone no longer identifies a row -- `quest` does, and the pools
+// are built so a QuestKind is never assigned twice in the same day.
+// `rewardLeaves` is snapshotted at assignment time so a later change to
+// QUEST_REWARDS never rewrites what a past day actually paid.
+//
+// STACKS ON TOP OF WEEKLY_TASK_LEAF_CAP, DELIBERATELY. Quests write
+// QUEST_REWARD ledger rows, not TASK_REWARD, so the existing 100/week task
+// cap never sums them -- 15/day of quests is a second, separate allowance on
+// top of it, not a share of it. A conscious product decision, not an
+// oversight: see the header of @/lib/quests.
+model QuestAssignment {
+  id           String    @id @default(cuid())
+  periodStart  DateTime
+  tier         QuestTier
+  quest        QuestKind
+  rewardLeaves Int
+  /// Non-null means paid -- the same "row's existence/non-null column is the
+  /// fact" shape as UserAchievement.unlockedAt. Credits Leaves exactly once;
+  /// see the claim guard in completeQuest() in @/lib/quests.
+  completedAt  DateTime?
+  createdAt    DateTime  @default(now())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, periodStart, quest])
+  @@index([userId, periodStart])
+}
+
+enum QuestTier {
+  EASY
+  MEDIUM
+  HARD
+}
+
+enum QuestKind {
+  // ── EASY pool ──
+  SEND_OFFER
+  FOLLOW_TRADER
+  LEAVE_REVIEW
+  // ── MEDIUM pool ──
+  LIST_ITEM
+  RECEIVE_OFFER
+  SEND_BRIDGE_OFFER
+  // ── HARD pool ──
+  COMPLETE_TRADE
+  COMPLETE_BRIDGE_TRADE
+  COMPLETE_SAFEZONE_TRADE
+}
+
 model SwapConfirmationCode {
   id       String       @id @default(cuid())
   tradeId  String
@@ -1353,6 +1429,16 @@ enum LeafTxType {
   // negative, and is the only thing that ever decrements lifetimeLeaves.
   TRADE_REWARD
   TRADE_REWARD_REVERSAL
+  // RETIRED (24 Sep 2026). Was the daily free-Leaves allowance for a live
+  // Premium or VIP subscriber; dropped from the Premium perk list before it
+  // ever paid out (zero rows of this type exist on the live ledger). The
+  // value stays, per this file's own convention for a retired concept (see
+  // TaskKind.VERIFIED_SWAP), rather than being removed -- Postgres cannot
+  // drop an enum value cheaply, and there is nothing to award with it now.
+  TIER_DAILY_GRANT
+  // A completed weekly quest -- 5/10/20 Leaves for Easy/Medium/Hard. See
+  // completeQuest() in @/lib/quests, which is the only writer.
+  QUEST_REWARD
   // A SINK. The owner pays to feature a listing; the Leaves leave User.leaves
   // and go to nobody, so this row has no partner. SUM(User.leaves) ==
   // SUM(amount) still holds because the debit and this row commit together.
@@ -1369,6 +1455,8 @@ enum LeafTxType {
 //     leaves and lifetimeLeaves, and rate-limited by WEEKLY_TASK_LEAF_CAP;
 //   - a bridging fee HOLD / RELEASE / PAID triple, see LeafTxType;
 //   - a TRADE_REWARD, issuance on completion, see LeafTxType;
+//   - a QUEST_REWARD, issuance for a completed quest, see LeafTxType
+//     (TIER_DAILY_GRANT is retired issuance: counted, never written);
 //   - a FEATURE_BOOST, a sink with no partner row, see LeafTxType.
 //
 // THE RECONCILIATION, in full, as scripts/lib/ledger-invariant.ts checks it:
@@ -1376,6 +1464,7 @@ enum LeafTxType {
 //   SUM(User.leaves) + escrow == issuance                nothing minted outside
 //     escrow   = -(HOLD + RELEASE + PAID)                the issuance types
 //     issuance =  SIGNUP_GRANT + TASK_REWARD + TRADE_REWARD + TRADE_REWARD_REVERSAL
+//                 + QUEST_REWARD + TIER_DAILY_GRANT
 //                 + FEATURE_BOOST (negative: a sink)
 //   escrow == SUM(bridgeFeeLeaves on live offers/trades) the ledger agrees with
 //                                                        the rows it points at
@@ -1526,17 +1615,14 @@ enum ContractStatus {
 // rather than later. It is not why they are shaped the way they are.
 
 /**
- * Privilege. See the long note on User.role: nothing in the API writes it.
- * MODERATOR and ADMIN are distinct even though every route below currently
- * accepts either. The split costs one enum value today and is the difference
- * between "revoke this person's moderation rights" and "there is one kind of
- * staff account" the first time somebody needs the former.
+ * Privilege. The current system is intentionally ADMIN-only.
+ * MODERATOR and SUPER_ADMIN were removed from the live role model to keep the
+ * permission model simple and avoid ambiguity: ordinary users are USER, and
+ * staff access is ADMIN only.
  */
 enum Role {
   USER
-  MODERATOR
   ADMIN
-  SUPER_ADMIN
 }
 
 enum ReportTargetType {
@@ -2252,6 +2338,23 @@ enum AchievementCriterion {
   SAFEZONE_MEETUPS
   /// Reports filed (a good-citizen badge, not a misconduct one). Counted.
   REPORTS_FILED
+  // ── ADDED BY THE SWAN BADGE SET (23 Sep 2026) ────────────────
+  //
+  // Appended by 20260923000000_achievement_points_and_bridge_criterion.
+  /// COMPLETED trades, either side, that carried a bridge fee (TradeRequest
+  /// .bridgeFeeLeaves > 0) -- the value gap between two unequal-bracket items
+  /// was bridged with Leaves, not just an even swap. Counted, same shape as
+  /// COMPLETED_TRADES; see progressFor() in @/lib/achievements.
+  BRIDGE_COMPLETED
+  // ── PREMIUM PERK #4 (24 Sep 2026) ─────────────────────────────
+  //
+  // Boolean, same shape as VERIFIED_ACCOUNT: isPremium(User.premiumUntil) OR
+  // isVip(User.vipUntil) at the moment evaluateAchievements() runs. Once
+  // granted it behaves like every other achievement here -- PERMANENT, never
+  // revoked -- so a lapsed subscription keeps the badge. That is not a special
+  // case coded in; it falls straight out of the engine's existing rule that
+  // nothing un-grants a UserAchievement row once written.
+  PREMIUM_SUBSCRIBER
 }
 
 model Achievement {
@@ -2278,6 +2381,11 @@ model Achievement {
 
   /// Admin ordering for the shelf; ties broken by name.
   sortOrder Int @default(0)
+
+  /// How much this badge is worth. Purely a stored number today -- nothing
+  /// gates on it and it does not move Leaves -- summed client-side (or by a
+  /// future route) into a user's total across their unlocked badges.
+  points Int @default(0)
 
   /// DEACTIVATE, NEVER DELETE. A UserAchievement row points here, and deleting
   /// the definition would cascade away every copy a user earned. Inactive

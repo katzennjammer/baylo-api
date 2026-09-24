@@ -26,7 +26,11 @@ export async function GET(_req: NextRequest) {
   if (!session?.user?.id) return unauthenticated()
 
   const achievements = await evaluateAchievements(session.user.id)
-  return ok({ achievements, maxProfileBadges: MAX_PROFILE_BADGES })
+  // Summed here rather than stored: it is a read-time derivation of unlocked
+  // badges' `points`, and any future backfill or deactivation stays correct
+  // without a second write path to keep in sync.
+  const totalPoints = achievements.reduce((sum, a) => sum + (a.unlocked ? a.points : 0), 0)
+  return ok({ achievements, totalPoints, maxProfileBadges: MAX_PROFILE_BADGES })
 }
 
 const displaySchema = z.object({

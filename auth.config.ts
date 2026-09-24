@@ -10,8 +10,8 @@ export const authConfig = {
   callbacks: {
     // Surfaces the sign-in-time role claim (see the jwt callback in auth.ts)
     // as `req.auth.user.role` so src/proxy.ts can keep the retired web pages
-    // to staff (ADMIN and MODERATOR). A copy, not the live column -- read the note in auth.ts before
-    // trusting it for anything beyond that.
+    // to staff (ADMIN only). A copy, not the live column -- read the note in
+    // auth.ts before trusting it for anything beyond that.
     session({ session, token }) {
       if (typeof token?.role === "string") {
         ;(session.user as { role?: string }).role = token.role

@@ -6,7 +6,7 @@
 # header) and re-encoded with PlantUML's custom base64 alphabet.
 #
 # Usage:  powershell -ExecutionPolicy Bypass -File render.ps1
-#         powershell -ExecutionPolicy Bypass -File render.ps1 use-case-moderator
+#         powershell -ExecutionPolicy Bypass -File render.ps1 use-case-admin
 
 param(
     [string]$Only = ""

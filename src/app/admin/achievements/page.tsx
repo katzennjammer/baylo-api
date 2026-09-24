@@ -2,6 +2,7 @@ import { auth } from "@root/auth"
 import prisma from "@/lib/prisma"
 import AchievementForm from "./AchievementForm"
 import AchievementToggle from "./AchievementToggle"
+import { StaggerGroup, StaggerItem } from "@/components/admin/Stagger"
 
 export const dynamic = "force-dynamic"
 export const revalidate = 0
@@ -41,11 +42,13 @@ const CRITERION_LABEL: Record<string, string> = {
   LIFETIME_LEAVES: "Lifetime Leaves",
   SAFEZONE_MEETUPS: "Safe-Zone meetups",
   REPORTS_FILED: "Reports filed",
+  BRIDGE_COMPLETED: "Trades with a bridge fee paid",
+  PREMIUM_SUBSCRIBER: "Premium subscriber",
 }
 
 function describeCriterion(criterion: string, threshold: number): string {
   const label = CRITERION_LABEL[criterion] ?? criterion
-  const counted = ["FIRST_LISTING", "COMPLETED_TRADES", "LIFETIME_LEAVES", "SAFEZONE_MEETUPS", "REPORTS_FILED"].includes(criterion)
+  const counted = ["FIRST_LISTING", "COMPLETED_TRADES", "LIFETIME_LEAVES", "SAFEZONE_MEETUPS", "REPORTS_FILED", "BRIDGE_COMPLETED"].includes(criterion)
   return counted ? `${label} ≥ ${threshold.toLocaleString()}` : label
 }
 
@@ -60,7 +63,7 @@ export default async function AdminAchievementsPage() {
     orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
     select: {
       id: true, key: true, name: true, description: true, icon: true, imageUrl: true,
-      criterion: true, threshold: true, sortOrder: true, isActive: true,
+      criterion: true, threshold: true, points: true, sortOrder: true, isActive: true,
       _count: { select: { unlocks: true } },
     },
   })
@@ -69,8 +72,8 @@ export default async function AdminAchievementsPage() {
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start", gap: 12, flexWrap: "wrap" }}>
         <div>
-          <h1 style={{ fontSize: 24, fontWeight: 800 }}>Achievements</h1>
-          <p style={{ fontSize: 13, color: "#777", marginTop: 4, maxWidth: "72ch", lineHeight: 1.6 }}>
+          <h1 style={{ fontSize: 24, fontWeight: 800, color: "var(--adm-text)" }}>Achievements</h1>
+          <p style={{ fontSize: 13, color: "var(--adm-text-secondary)", marginTop: 4, maxWidth: "72ch", lineHeight: 1.6 }}>
             Define what users can earn. A badge unlocks automatically when a user&apos;s activity meets its
             criterion — nothing here toggles a user&apos;s badge by hand. Deactivate rather than delete: users
             who already earned a badge keep it.
@@ -93,14 +96,21 @@ export default async function AdminAchievementsPage() {
                 <th style={{ padding: "12px 14px" }}>Badge</th>
                 <th style={{ padding: "12px 14px" }}>Key</th>
                 <th style={{ padding: "12px 14px" }}>Earned when</th>
+                <th style={{ padding: "12px 14px" }}>Points</th>
                 <th style={{ padding: "12px 14px" }}>Earned by</th>
                 <th style={{ padding: "12px 14px" }}>State</th>
                 <th style={{ padding: "12px 14px" }}>Manage</th>
               </tr>
             </thead>
-            <tbody>
-              {achievements.map((achievement) => (
-                <tr key={achievement.id} style={{ borderTop: "1px solid rgba(0,0,0,.06)", verticalAlign: "top" }}>
+            <StaggerGroup as="tbody">
+              {achievements.map((achievement, index) => (
+                <StaggerItem
+                  as="tr"
+                  index={index}
+                  key={achievement.id}
+                  className="admin-row-hover"
+                  style={{ borderTop: "1px solid rgba(0,0,0,.06)", verticalAlign: "top" }}
+                >
                   <td style={{ padding: "14px" }}>
                     <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
                       <div style={{ width: 42, height: 42, borderRadius: 12, display: "grid", placeItems: "center", background: "#E1F1E5", overflow: "hidden", flexShrink: 0 }}>
@@ -119,6 +129,7 @@ export default async function AdminAchievementsPage() {
                   </td>
                   <td style={{ padding: "14px", fontFamily: "monospace", color: "#555" }}>{achievement.key}</td>
                   <td style={{ padding: "14px" }}>{describeCriterion(achievement.criterion, achievement.threshold)}</td>
+                  <td style={{ padding: "14px", fontWeight: 700 }}>{achievement.points.toLocaleString()}</td>
                   <td style={{ padding: "14px", fontWeight: 700 }}>{achievement._count.unlocks.toLocaleString()}</td>
                   <td style={{ padding: "14px" }}>
                     <span style={{ color: achievement.isActive ? "#15803d" : "#b91c1c", fontWeight: 700 }}>
@@ -139,6 +150,7 @@ export default async function AdminAchievementsPage() {
                             imageUrl: achievement.imageUrl,
                             criterion: achievement.criterion,
                             threshold: achievement.threshold,
+                            points: achievement.points,
                             sortOrder: achievement.sortOrder,
                           }}
                         />
@@ -152,9 +164,9 @@ export default async function AdminAchievementsPage() {
                       <span style={{ color: "#888" }}>Admin-only</span>
                     )}
                   </td>
-                </tr>
+                </StaggerItem>
               ))}
-            </tbody>
+            </StaggerGroup>
           </table>
         </div>
       )}

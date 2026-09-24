@@ -3,6 +3,7 @@
 import { useState } from "react"
 import { useRouter } from "next/navigation"
 import toast from "react-hot-toast"
+import { StaggerGroup, StaggerItem } from "@/components/admin/Stagger"
 
 type User = { id: string; name: string; email: string; role: string; deletedAt: Date | null }
 
@@ -12,6 +13,11 @@ export default function AccessActions({ users }: { users: User[] }) {
   const [busy, setBusy] = useState<string | null>(null)
   const [query, setQuery] = useState("")
   const [draftRoles, setDraftRoles] = useState<Record<string, string>>({})
+  // Flashes green briefly after a save -- a role change updates the row in
+  // place rather than removing it, so the feedback is a highlight rather
+  // than the fade-and-collapse used where an action removes a row from a
+  // queue (see rowCollapse.ts).
+  const [justSaved, setJustSaved] = useState<string | null>(null)
   const filteredUsers = users.filter((user) => {
     const needle = query.trim().toLowerCase()
     return !needle || user.name.toLowerCase().includes(needle) || user.email.toLowerCase().includes(needle)
@@ -36,6 +42,8 @@ export default function AccessActions({ users }: { users: User[] }) {
         delete next[userId]
         return next
       })
+      setJustSaved(userId)
+      window.setTimeout(() => setJustSaved((current) => (current === userId ? null : current)), 900)
       router.refresh()
     } catch {
       toast.error("Role change failed.")
@@ -43,27 +51,108 @@ export default function AccessActions({ users }: { users: User[] }) {
       setBusy(null)
     }
   }
-  return <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-    <div style={{ background: "#fff", padding: 16, borderRadius: 10, border: "1px solid rgba(0,0,0,.08)" }}>
-      <strong>Assign an existing account</strong>
-      <p style={{ color: "#777", fontSize: 12, margin: "5px 0 12px" }}>Register the person first, then assign USER or ADMIN here.</p>
-      <div style={{ display: "flex", gap: 8 }}>
-        <input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Search name or email" style={{ flex: 1, padding: 10, borderRadius: 8, border: "1px solid #ccc" }} />
-        <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Reason required" style={{ flex: 1, padding: 10, borderRadius: 8, border: "1px solid #ccc" }} />
+  return <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+    <div style={{ background: "var(--adm-panel)", padding: 20, borderRadius: "var(--adm-radius-panel)", border: "1px solid var(--adm-border)" }}>
+      <div style={{ fontSize: 16, fontWeight: 700, color: "var(--adm-text)" }}>Assign an existing account</div>
+      <p style={{ color: "var(--adm-text-muted)", fontSize: 13, margin: "6px 0 14px" }}>Register the person first, then assign USER or ADMIN here.</p>
+      <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search name or email"
+          style={{ ...fieldStyle, flex: 1, minWidth: 200 }}
+        />
+        <input
+          value={reason}
+          onChange={(e) => setReason(e.target.value)}
+          placeholder="Reason required"
+          style={{ ...fieldStyle, flex: 1, minWidth: 200 }}
+        />
       </div>
     </div>
-    {filteredUsers.map((user) => {
+    <StaggerGroup as="div" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+    {filteredUsers.map((user, index) => {
       const selectedRole = draftRoles[user.id] ?? user.role
-      return <div key={user.id} style={{ background: "#fff", padding: 14, borderRadius: 10, display: "flex", gap: 12, alignItems: "center" }}>
-        <div style={{ flex: 1 }}><strong>{user.name}</strong><div style={{ color: "#777", fontSize: 12 }}>{user.email} · Current: {user.role}</div></div>
-        <select value={selectedRole} disabled={!!user.deletedAt || busy === user.id} onChange={(e) => setDraftRoles((current) => ({ ...current, [user.id]: e.target.value }))} style={{ padding: 8, borderRadius: 7 }}>
+      const roleTone = user.role === "ADMIN" ? { fg: "var(--adm-info)", bg: "var(--adm-info-bg)" } : { fg: "var(--adm-neutral)", bg: "var(--adm-neutral-bg)" }
+      return <StaggerItem as="div" index={index} key={user.id}>
+        <div
+          className="adm-row-hover"
+          style={{
+            background: justSaved === user.id ? "var(--adm-good-bg)" : "var(--adm-panel-flat)",
+            border: "1px solid var(--adm-border)",
+            padding: "14px 18px",
+            borderRadius: "var(--adm-radius-tile)",
+            display: "flex",
+            gap: 14,
+            alignItems: "center",
+            flexWrap: "wrap",
+            transition: "background 400ms ease-out",
+            opacity: user.deletedAt ? 0.55 : 1,
+          }}
+        >
+        <div style={{ flex: 1, minWidth: 200 }}>
+          <div style={{ fontWeight: 700, fontSize: 15, color: "var(--adm-text)" }}>{user.name}</div>
+          <div style={{ color: "var(--adm-text-muted)", fontSize: 12, marginTop: 2 }}>{user.email}</div>
+        </div>
+        <span
+          style={{
+            padding: "4px 10px",
+            borderRadius: 999,
+            background: roleTone.bg,
+            color: roleTone.fg,
+            fontSize: 11,
+            fontWeight: 800,
+            letterSpacing: "0.04em",
+            flexShrink: 0,
+          }}
+        >
+          {user.role}
+        </span>
+        <select
+          value={selectedRole}
+          disabled={!!user.deletedAt || busy === user.id}
+          onChange={(e) => setDraftRoles((current) => ({ ...current, [user.id]: e.target.value }))}
+          style={{ ...fieldStyle, width: "auto", padding: "9px 34px 9px 14px", borderRadius: 999, fontWeight: 600, flexShrink: 0 }}
+        >
           <option value="USER">USER</option><option value="ADMIN">ADMIN</option>
         </select>
-        <button type="button" disabled={!!user.deletedAt || busy === user.id || selectedRole === user.role || !reason.trim()} onClick={() => changeRole(user.id, user.role)} style={{ padding: "8px 12px", border: 0, borderRadius: 7, background: "#17201b", color: "#fff", fontWeight: 700, opacity: selectedRole === user.role || !reason.trim() ? 0.45 : 1 }}>
+        <button
+          type="button"
+          disabled={!!user.deletedAt || busy === user.id || selectedRole === user.role || !reason.trim()}
+          onClick={() => changeRole(user.id, user.role)}
+          className="admin-btn-press"
+          style={{
+            padding: "9px 16px",
+            border: 0,
+            borderRadius: 999,
+            background: "var(--adm-accent)",
+            color: "var(--adm-text-on-accent)",
+            fontWeight: 700,
+            fontSize: 13,
+            flexShrink: 0,
+            cursor: selectedRole === user.role || !reason.trim() ? "not-allowed" : "pointer",
+            opacity: selectedRole === user.role || !reason.trim() ? 0.45 : 1,
+          }}
+        >
           {busy === user.id ? "Saving..." : "Save"}
         </button>
-      </div>
+        </div>
+      </StaggerItem>
     })}
-    {filteredUsers.length === 0 && <p style={{ padding: 24, textAlign: "center", color: "#777" }}>No matching accounts.</p>}
+    </StaggerGroup>
+    {filteredUsers.length === 0 && (
+      <p style={{ padding: 32, textAlign: "center", color: "var(--adm-text-muted)", background: "var(--adm-panel-flat)", border: "1px dashed var(--adm-border-empty)", borderRadius: "var(--adm-radius-panel)" }}>
+        No matching accounts.
+      </p>
+    )}
   </div>
+}
+
+const fieldStyle: React.CSSProperties = {
+  padding: "10px 12px",
+  borderRadius: "var(--adm-radius-input)",
+  border: "1px solid var(--adm-border-input)",
+  background: "var(--adm-input)",
+  color: "var(--adm-text)",
+  fontSize: 13,
 }

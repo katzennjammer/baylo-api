@@ -1,8 +1,10 @@
 "use client"
 
 import { useRouter } from "next/navigation"
-import { useState } from "react"
+import { useRef, useState } from "react"
 import { VALUE_REJECTION_REASONS, VALUE_REJECTION_NOTE_MAX } from "@/lib/value-rejection"
+import { collapseRowThen } from "@/components/admin/rowCollapse"
+import { Expandable } from "@/components/admin/Expandable"
 
 /**
  * Approve or reject one value review. Shared by the Review queue and the
@@ -41,6 +43,7 @@ export function ValueReviewActions({ itemId }: { itemId: string }) {
   const [reason, setReason] = useState("")
   const [reasonCode, setReasonCode] = useState<string>("")
   const [note, setNote] = useState("")
+  const submitRef = useRef<HTMLButtonElement>(null)
 
   async function submit() {
     const body =
@@ -64,7 +67,7 @@ export function ValueReviewActions({ itemId }: { itemId: string }) {
       setReason("")
       setReasonCode("")
       setNote("")
-      router.refresh()
+      collapseRowThen(submitRef.current, () => router.refresh())
     } catch {
       setError("The request did not reach the server.")
     } finally {
@@ -87,6 +90,7 @@ export function ValueReviewActions({ itemId }: { itemId: string }) {
       <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
         <button
           type="button"
+          className="admin-btn-press"
           style={{ ...btn, borderColor: "#15803d", color: "#15803d", opacity: open === "reject" ? 0.5 : 1 }}
           disabled={busy}
           onClick={() => { setOpen(open === "approve" ? null : "approve"); setError(null) }}
@@ -95,6 +99,7 @@ export function ValueReviewActions({ itemId }: { itemId: string }) {
         </button>
         <button
           type="button"
+          className="admin-btn-press"
           style={{ ...btn, borderColor: "#b91c1c", color: "#b91c1c", opacity: open === "approve" ? 0.5 : 1 }}
           disabled={busy}
           onClick={() => { setOpen(open === "reject" ? null : "reject"); setError(null) }}
@@ -103,7 +108,7 @@ export function ValueReviewActions({ itemId }: { itemId: string }) {
         </button>
       </div>
 
-      {open === "approve" ? (
+      <Expandable open={open === "approve"}>
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           <input
             value={reason}
@@ -114,11 +119,11 @@ export function ValueReviewActions({ itemId }: { itemId: string }) {
             style={field}
             autoFocus
           />
-          <ConfirmRow busy={busy} canSubmit={canSubmit} color="#15803d" label="Publish at requested value" onSubmit={submit} onCancel={() => setOpen(null)} />
+          <ConfirmRow submitRef={submitRef} busy={busy} canSubmit={canSubmit} color="#15803d" label="Publish at requested value" onSubmit={submit} onCancel={() => setOpen(null)} />
         </div>
-      ) : null}
+      </Expandable>
 
-      {open === "reject" ? (
+      <Expandable open={open === "reject"}>
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           <select
             value={reasonCode}
@@ -140,9 +145,9 @@ export function ValueReviewActions({ itemId }: { itemId: string }) {
             disabled={busy}
             style={field}
           />
-          <ConfirmRow busy={busy} canSubmit={canSubmit} color="#b91c1c" label="Reject — owner is told" onSubmit={submit} onCancel={() => setOpen(null)} />
+          <ConfirmRow submitRef={submitRef} busy={busy} canSubmit={canSubmit} color="#b91c1c" label="Reject — owner is told" onSubmit={submit} onCancel={() => setOpen(null)} />
         </div>
-      ) : null}
+      </Expandable>
 
       {error ? <span style={{ fontSize: 11, color: "#b91c1c" }}>{error}</span> : null}
     </div>
@@ -150,17 +155,19 @@ export function ValueReviewActions({ itemId }: { itemId: string }) {
 }
 
 function ConfirmRow({
-  busy, canSubmit, color, label, onSubmit, onCancel,
+  busy, canSubmit, color, label, onSubmit, onCancel, submitRef,
 }: {
   busy: boolean; canSubmit: boolean; color: string; label: string
-  onSubmit: () => void; onCancel: () => void
+  onSubmit: () => void; onCancel: () => void; submitRef?: React.RefObject<HTMLButtonElement | null>
 }) {
   return (
     <div style={{ display: "flex", gap: 6 }}>
       <button
+        ref={submitRef}
         type="button"
         onClick={onSubmit}
         disabled={busy || !canSubmit}
+        className="admin-btn-press"
         style={{
           flex: 1, padding: "7px 10px", border: 0, borderRadius: 7, background: color, color: "#fff",
           fontWeight: 700, fontSize: 12, cursor: busy || !canSubmit ? "not-allowed" : "pointer",
@@ -173,6 +180,7 @@ function ConfirmRow({
         type="button"
         onClick={onCancel}
         disabled={busy}
+        className="admin-btn-press"
         style={{ padding: "7px 10px", border: "1px solid rgba(0,0,0,.12)", borderRadius: 7, background: "#fff", fontSize: 12, cursor: "pointer" }}
       >
         Cancel

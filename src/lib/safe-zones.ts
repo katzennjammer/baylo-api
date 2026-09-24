@@ -161,6 +161,40 @@ export function v1Hub(row: SafeZoneHubRow): V1Hub {
 
 // ── Validation ───────────────────────────────────────────────────────────────
 
+/**
+ * (0, 0) IS NOT A PLACE, IT IS THE ABSENCE OF ONE.
+ *
+ * Null Island is in the Gulf of Guinea, and no hub is ever there. In this table
+ * the pair is just the value an unfilled number input submits: a form that
+ * never got coordinates, or an admin who cleared the pin. A hub saved that way
+ * renders a marker in the Atlantic and sends two strangers to coordinates
+ * neither of them chose — the exact failure the module note says a moved hub is
+ * worse for, except nobody moved this one and the audit has nothing to show.
+ *
+ * WHY HERE AND NOT ONLY IN THE FORM. The admin page is one caller. The route is
+ * the contract, and it can be reached by a curl, a script or a future client
+ * that never renders HubForm at all. A guard only the happy-path UI observes is
+ * not a guard, it is a habit — so the rule lives next to the data it protects
+ * and both POST and PATCH apply it.
+ *
+ * WHY NOT A GEOGRAPHIC BOX: see the createSchema note in the route. Range
+ * checking is validation; (0, 0) is not caught by a range, it is caught by
+ * knowing what the point means. The check is deliberately exact — `0°N, 0°E` is
+ * the sentinel, and a coordinate pair one ten-thousandth of a degree off it is a
+ * real place somebody may want.
+ */
+export function isNullIsland(latitude: number, longitude: number): boolean {
+  return latitude === 0 && longitude === 0
+}
+
+/**
+ * The message both routes return. One string, so a client branching on it — or
+ * a person reading two error screens — sees the same sentence either way.
+ */
+export const NULL_ISLAND_MESSAGE =
+  "Hub coordinates (0, 0) are not a real location — set a latitude and " +
+  "longitude before saving."
+
 type HubDb = Pick<PrismaClient, "safeZoneHub">
 
 export type HubResolution =

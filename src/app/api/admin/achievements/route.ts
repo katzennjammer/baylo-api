@@ -60,6 +60,7 @@ const criterionSchema = z.enum([
   "LIFETIME_LEAVES",
   "SAFEZONE_MEETUPS",
   "REPORTS_FILED",
+  "BRIDGE_COMPLETED",
 ])
 
 /**
@@ -87,6 +88,9 @@ const imageUrlSchema = z
 
 const thresholdSchema = z.number().int().min(1).max(1_000_000)
 
+/** A stored score, nothing more -- see the `points` doc comment on the model. */
+const pointsSchema = z.number().int().min(0).max(1_000)
+
 // ── GET ──────────────────────
 
 export async function GET() {
@@ -104,6 +108,7 @@ export async function GET() {
       imageUrl: true,
       criterion: true,
       threshold: true,
+      points: true,
       sortOrder: true,
       isActive: true,
       createdAt: true,
@@ -125,6 +130,7 @@ export async function GET() {
       imageUrl: row.imageUrl,
       criterion: row.criterion,
       threshold: row.threshold,
+      points: row.points,
       sortOrder: row.sortOrder,
       isActive: row.isActive,
       earnedCount: row._count.unlocks,
@@ -157,6 +163,7 @@ const createSchema = z.strictObject({
   imageUrl: imageUrlSchema.optional().default(null),
   criterion: criterionSchema,
   threshold: thresholdSchema.default(1),
+  points: pointsSchema.default(0),
   sortOrder: z.number().int().min(0).max(10_000).default(0),
   backfill: z.boolean().default(true),
   reason: z
@@ -205,6 +212,7 @@ export async function POST(req: NextRequest) {
         name: row.name,
         criterion: row.criterion,
         threshold: row.threshold,
+        points: row.points,
         imageUrl: row.imageUrl,
       },
     })
@@ -227,6 +235,7 @@ export async function POST(req: NextRequest) {
       imageUrl: created.imageUrl,
       criterion: created.criterion,
       threshold: created.threshold,
+      points: created.points,
       sortOrder: created.sortOrder,
       isActive: created.isActive,
       earnedCount: granted,
