@@ -2,6 +2,8 @@ import Link from "next/link"
 import prisma from "@/lib/prisma"
 import { ID_TYPE_LABEL, REJECTION_LABEL, toWireIdType, toWireRejectionReason } from "@/lib/id-verification"
 import { sweepUndeletedIdImages } from "@/lib/id-verification-image"
+import { FilterChips } from "@/components/admin/FilterChips"
+import { StaggerGroup, StaggerItem } from "@/components/admin/Stagger"
 
 export const dynamic = "force-dynamic"
 export const revalidate = 0
@@ -33,19 +35,6 @@ const STATUSES = ["PENDING", "APPROVED", "REJECTED"] as const
 
 interface Props {
   searchParams: Promise<{ status?: string }>
-}
-
-function chipStyle(active: boolean): React.CSSProperties {
-  return {
-    padding: "6px 12px",
-    borderRadius: 999,
-    fontSize: 13,
-    fontWeight: 600,
-    textDecoration: "none",
-    border: `1px solid ${active ? "#4CAF50" : "rgba(0,0,0,.14)"}`,
-    background: active ? "rgba(76,175,80,.12)" : "#fff",
-    color: active ? "#2e7d32" : "#555",
-  }
 }
 
 const STATUS_COLOR: Record<string, string> = {
@@ -141,16 +130,19 @@ export default async function IdVerificationQueuePage({ searchParams }: Props) {
         </div>
       )}
 
-      <div style={{ display: "flex", gap: 8, margin: "16px 0", flexWrap: "wrap" }}>
-        {STATUSES.map((s) => (
-          <Link
-            key={s}
-            href={`/admin/id-verification?status=${s}`}
-            style={chipStyle(status === s)}
-          >
-            {s[0] + s.slice(1).toLowerCase()} ({countFor(s)})
-          </Link>
-        ))}
+      <div style={{ margin: "16px 0" }}>
+        <FilterChips
+          groupId="id-status"
+          options={STATUSES.map((s) => ({
+            key: s,
+            label: `${s[0] + s.slice(1).toLowerCase()} (${countFor(s)})`,
+            // Always the explicit ?status=, matching the dashboard's "Pending ID
+            // checks" card link -- so that link's target state highlights
+            // correctly, at the cost of the chip not pre-highlighting on the
+            // one path that lands here with no query at all (nav link).
+            href: `/admin/id-verification?status=${s}`,
+          }))}
+        />
       </div>
 
       {rows.length === 0 ? (
@@ -168,14 +160,16 @@ export default async function IdVerificationQueuePage({ searchParams }: Props) {
             overflow: "hidden",
           }}
         >
+          <StaggerGroup as="div">
           {rows.map((r, i) => {
             const accountAgeDays = Math.floor(
               (Date.now() - r.user.createdAt.getTime()) / 86_400_000,
             )
             return (
+              <StaggerItem as="div" index={i} key={r.id}>
               <Link
-                key={r.id}
                 href={`/admin/id-verification/${r.id}`}
+                className="admin-row-hover"
                 style={{
                   display: "flex",
                   gap: 14,
@@ -219,8 +213,10 @@ export default async function IdVerificationQueuePage({ searchParams }: Props) {
                       : `by ${r.reviewedBy?.name ?? "—"}`}
                 </span>
               </Link>
+              </StaggerItem>
             )
           })}
+          </StaggerGroup>
         </div>
       )}
     </div>

@@ -8,6 +8,8 @@ import { writeAudit } from "@/lib/moderation"
 import {
   SAFE_ZONE_HUB_SELECT,
   SAFE_ZONE_TYPE_VALUES,
+  NULL_ISLAND_MESSAGE,
+  isNullIsland,
   v1Hub,
   type SafeZoneHubRow,
 } from "@/lib/safe-zones"
@@ -116,6 +118,22 @@ export async function PATCH(
     select: { ...SAFE_ZONE_HUB_SELECT, _count: { select: { items: true } } },
   })
   if (!before) return notFound("Safe-Zone hub not found")
+
+  // (0, 0) — the SAME rule POST applies, checked against the pair the row would
+  // END UP with rather than the pair this request happened to carry.
+  //
+  // The distinction matters because PATCH is partial. A body sending only
+  // `latitude: 0` against a hub already at longitude 0 carries no (0, 0) of its
+  // own, and checking `changes` alone would let it through and land the row on
+  // Null Island one field at a time. coordinatePairIntact() above already
+  // refuses half a pair, so in practice both halves arrive together and the
+  // merge is a formality — but the check should not depend on a second guard
+  // happening to make it safe.
+  const effectiveLatitude = changes.latitude ?? before.latitude
+  const effectiveLongitude = changes.longitude ?? before.longitude
+  if (isNullIsland(effectiveLatitude, effectiveLongitude)) {
+    return invalid(NULL_ISLAND_MESSAGE, { rule: "NULL_ISLAND" })
+  }
 
   // Which of the three verbs this is. A toggle of isActive is the interesting
   // one and gets its own audit action, because "who closed this hub, and why"

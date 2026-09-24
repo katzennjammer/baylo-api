@@ -109,11 +109,12 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     /**
      * `token.role` is a COPY of User.role taken at sign-in, and it exists for
      * exactly one reader: src/proxy.ts, which keeps the retired web app to
-     * staff (ADMIN and MODERATOR) and has no database to ask. It is NOT what /admin trusts -- that layout
-     * and every /api/admin route read the column on each request, so a revoked
-     * moderator loses /admin the moment the row changes. What a stale claim
-     * can leak is the retired USER dashboard, a UI over the same API the phone
-     * already gives every account; nobody gains a permission from it.
+     * staff (ADMIN only) and has no database to ask. It is NOT what /admin
+     * trusts -- that layout and every /api/admin route read the column on each
+     * request, so a revoked admin loses /admin the moment the row changes.
+     * What a stale claim can leak is the retired USER dashboard, a UI over the
+     * same API the phone already gives every account; nobody gains a permission
+     * from it.
      *
      * Backfilled when the claim is missing, so tokens issued before the claim
      * existed repair themselves on the next session fetch instead of sending

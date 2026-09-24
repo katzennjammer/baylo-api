@@ -1,5 +1,6 @@
 import Link from "next/link"
 import prisma from "@/lib/prisma"
+import { OverviewCards, type OverviewMetric } from "./OverviewCards"
 
 export const dynamic = "force-dynamic"
 export const revalidate = 0
@@ -39,15 +40,15 @@ export default async function AdminDashboardPage() {
     ])
 
   const reports = Object.fromEntries(reportCounts.map((row) => [row.status, row._count.id]))
-  const metrics = [
-    { label: "Open reports", value: (reports.OPEN ?? 0) + (reports.REVIEWING ?? 0), href: "/admin" },
-    { label: "Pending ID checks", value: pendingIds, href: "/admin/id-verification?status=PENDING" },
-    { label: "Suspended users", value: suspendedUsers, href: "/admin/users?status=suspended" },
-    { label: "Hidden listings", value: hiddenListings, href: "/admin/listings?status=hidden" },
-    { label: "Inactive hubs", value: inactiveHubs, href: "/admin/hubs?status=inactive" },
-    { label: "Values in review", value: defaults, href: "/admin/review-queue" },
-    { label: "Open appeals", value: openAppeals, href: "/admin/appeals" },
-    { label: "Achievements", value: activeAchievements, href: "/admin/achievements" },
+  const metrics: OverviewMetric[] = [
+    { label: "Open reports", value: (reports.OPEN ?? 0) + (reports.REVIEWING ?? 0), href: "/admin", tone: "queue" },
+    { label: "Pending ID checks", value: pendingIds, href: "/admin/id-verification?status=PENDING", tone: "queue" },
+    { label: "Suspended users", value: suspendedUsers, href: "/admin/users?status=suspended", tone: "warn" },
+    { label: "Hidden listings", value: hiddenListings, href: "/admin/listings?status=hidden", tone: "warn" },
+    { label: "Inactive hubs", value: inactiveHubs, href: "/admin/hubs?status=inactive", tone: "warn" },
+    { label: "Values in review", value: defaults, href: "/admin/review-queue", tone: "queue" },
+    { label: "Open appeals", value: openAppeals, href: "/admin/appeals", tone: "queue" },
+    { label: "Achievements", value: activeAchievements, href: "/admin/achievements", tone: "good" },
   ]
 
   return (
@@ -58,15 +59,7 @@ export default async function AdminDashboardPage() {
           A quick view of the moderation and safety queues that need attention.
         </p>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))", gap: 12 }}>
-        {metrics.map((metric) => (
-          <Link key={metric.label} href={metric.href} style={{ ...cardStyle, textDecoration: "none", color: "#17201b" }}>
-            <div style={{ color: "#77827b", fontSize: 12, fontWeight: 700 }}>{metric.label}</div>
-            <div style={{ fontSize: 30, fontWeight: 800, marginTop: 8 }}>{metric.value}</div>
-            <div style={{ color: "#4CAF50", fontSize: 12, marginTop: 8 }}>View queue →</div>
-          </Link>
-        ))}
-      </div>
+      <OverviewCards metrics={metrics} />
       <section style={cardStyle}>
         <div style={{ display: "flex", justifyContent: "space-between", gap: 12, alignItems: "baseline" }}>
           <h2 style={{ fontSize: 17, fontWeight: 800 }}>Recent audit actions</h2>

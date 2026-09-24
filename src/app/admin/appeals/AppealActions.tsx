@@ -1,7 +1,9 @@
 "use client"
 
 import { useRouter } from "next/navigation"
-import { useState } from "react"
+import { useRef, useState } from "react"
+import { collapseRowThen } from "@/components/admin/rowCollapse"
+import { Expandable } from "@/components/admin/Expandable"
 
 /**
  * Uphold or overturn one appeal.
@@ -25,6 +27,7 @@ export function AppealActions({ appealId, sameReviewer }: { appealId: string; sa
   const [armed, setArmed] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const submitRef = useRef<HTMLButtonElement>(null)
 
   async function submit() {
     if (sameReviewer && !armed) {
@@ -47,7 +50,7 @@ export function AppealActions({ appealId, sameReviewer }: { appealId: string; sa
       setOpen(null)
       setReason("")
       setArmed(false)
-      router.refresh()
+      collapseRowThen(submitRef.current, () => router.refresh())
     } catch {
       setError("The request did not reach the server.")
     } finally {
@@ -72,6 +75,7 @@ export function AppealActions({ appealId, sameReviewer }: { appealId: string; sa
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
         <button
           type="button"
+          className="admin-btn-press"
           style={{ ...btn, borderColor: "#7c2d12", color: "#7c2d12", opacity: open === "overturn" ? 0.5 : 1 }}
           disabled={busy}
           onClick={() => { setOpen(open === "uphold" ? null : "uphold"); setArmed(false); setError(null) }}
@@ -80,6 +84,7 @@ export function AppealActions({ appealId, sameReviewer }: { appealId: string; sa
         </button>
         <button
           type="button"
+          className="admin-btn-press"
           style={{ ...btn, borderColor: "#15803d", color: "#15803d", opacity: open === "uphold" ? 0.5 : 1 }}
           disabled={busy}
           onClick={() => { setOpen(open === "overturn" ? null : "overturn"); setArmed(false); setError(null) }}
@@ -87,7 +92,7 @@ export function AppealActions({ appealId, sameReviewer }: { appealId: string; sa
           Overturn
         </button>
       </div>
-      {open ? (
+      <Expandable open={open !== null}>
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           <input
             value={reason}
@@ -100,9 +105,11 @@ export function AppealActions({ appealId, sameReviewer }: { appealId: string; sa
           />
           <div style={{ display: "flex", gap: 6 }}>
             <button
+              ref={submitRef}
               type="button"
               onClick={submit}
               disabled={busy || !canSubmit}
+              className="admin-btn-press"
               style={{
                 flex: 1, padding: "7px 10px", border: 0, borderRadius: 7, background: armed ? "#b45309" : color, color: "#fff",
                 fontWeight: 700, fontSize: 12, cursor: busy || !canSubmit ? "not-allowed" : "pointer", opacity: busy || !canSubmit ? 0.55 : 1,
@@ -120,13 +127,14 @@ export function AppealActions({ appealId, sameReviewer }: { appealId: string; sa
               type="button"
               onClick={() => { setOpen(null); setArmed(false) }}
               disabled={busy}
+              className="admin-btn-press"
               style={{ padding: "7px 10px", border: "1px solid rgba(0,0,0,.12)", borderRadius: 7, background: "#fff", fontSize: 12, cursor: "pointer" }}
             >
               Cancel
             </button>
           </div>
         </div>
-      ) : null}
+      </Expandable>
       {error ? <span style={{ fontSize: 11, color: "#b91c1c" }}>{error}</span> : null}
     </div>
   )

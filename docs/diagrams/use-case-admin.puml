@@ -1,10 +1,22 @@
 
 @startuml use-case-admin
 ' ============================================================================
-'  Baylo - Admin Console: ADMIN use cases
-'  ADMIN inherits every Moderator use case and adds account controls.
-'  The Users page is hidden from MODERATOR in layout.tsx, and the suspend
-'  route is gated by requireRole("ADMIN").
+'  Baylo - Admin Console: the ADMIN use cases.
+'
+'  TWO ROLES EXIST: USER and ADMIN (see Role in @/lib/api-auth.ts:127).
+'  There is no MODERATOR and no SUPER_ADMIN tier. "Moderator" appears in prose
+'  comments only; it is never a stored role value.
+'
+'  Every /api/admin route is gated by requireRole("ADMIN"); the /admin layout
+'  re-reads the role from the database on every request and redirects a
+'  non-ADMIN to /dashboard.
+'
+'  A plain USER has no use case inside this system: the console is the whole
+'  difference between the two roles.
+'
+'  NAMING: one verb + one noun per use case, no "and". Where a use case has two
+'  verbs it is drawn as two use cases. The buttons are the <<include>> steps,
+'  not the use cases themselves.
 ' ============================================================================
 
 left to right direction
@@ -33,48 +45,163 @@ skinparam rectangle {
   FontColor #17201b
 }
 
-title Baylo Admin Console - ADMIN
-
-actor "Moderator" as MOD
+title Baylo Admin Console - ADMIN use cases
 actor "Admin" as ADM
-MOD <|-- ADM
+rectangle "Baylo Admin Console (ADMIN only)" {
 
-rectangle "Baylo Admin Console" {
-  package "Accounts (Admin only)" {
-    usecase "Search / inspect users\n(activity, state, ID status)" as UC_USERS
-    usecase "Suspend / unsuspend account\n(timed or indefinite)" as UC_SUSPEND
+  package "1. Access & Account" {
+    usecase "UC-01\nVerify Admin Session" as UC01
+    usecase "UC-02\nAssign User Role" as UC02
+    usecase "UC-03\nSign Out" as UC03
   }
-  package "Shared staff console (inherited from Moderator)" {
-    usecase "Moderate reports\n(queue, inspect, action/dismiss)" as UC_MOD
-    usecase "Manage listings\n(hide / restore)" as UC_LIST
-    usecase "Review ID checks\n(approve / reject)" as UC_ID
-    usecase "Handle value anomalies\n(approve / reject value)" as UC_VAL
-    usecase "Decide appeals\n(uphold / overturn)" as UC_APPEAL
-    usecase "Manage Safe-Zone hubs" as UC_HUB
-    usecase "Reverse trade reward" as UC_REV
-    usecase "Read audit log & dashboard" as UC_AUD
+
+  package "2. Monitoring" {
+    usecase "UC-04\nView Dashboard" as UC04
+    usecase "UC-05\nView Audit Log" as UC05
+    usecase "UC-06\nView Review Queue" as UC06
+    usecase "UC-42\nView Overall Report" as UC42
+    usecase "UC-43\nExport Report" as UC43
+  }
+
+  package "3. Reports" {
+    usecase "UC-07\nView Report Queue" as UC07
+    usecase "UC-08\nClaim Report" as UC08
+    usecase "UC-09\nMark Report Actioned" as UC09
+    usecase "UC-10\nDismiss Report" as UC10
+    usecase "UC-11\nView Report Evidence" as UC11
+  }
+
+  package "4. ID Verification" {
+    usecase "UC-12\nView ID Verification Queue" as UC12
+    usecase "UC-13\nApprove ID Verification" as UC13
+    usecase "UC-14\nReject ID Verification" as UC14
+  }
+
+  package "5. Listings" {
+    usecase "UC-15\nView Listings" as UC15
+    usecase "UC-16\nHide Listing" as UC16
+    usecase "UC-17\nRestore Listing" as UC17
+    usecase "UC-18\nApprove Listing Value" as UC18
+    usecase "UC-19\nReject Listing Value" as UC19
+  }
+
+  package "6. Appeals" {
+    usecase "UC-20\nView Appeals" as UC20
+    usecase "UC-21\nUphold Appeal" as UC21
+    usecase "UC-22\nOverturn Appeal" as UC22
+    usecase "UC-23\nCancel Appeal Decision" as UC23
+  }
+
+  package "7. Users" {
+    usecase "UC-24\nSearch Users" as UC24
+    usecase "UC-25\nFilter Users" as UC25
+    usecase "UC-26\nSuspend Account" as UC26
+    usecase "UC-27\nUnsuspend Account" as UC27
+  }
+
+  package "8. Safe-Zone Hubs" {
+    usecase "UC-28\nView Hubs" as UC28
+    usecase "UC-29\nSearch Hub Location" as UC29
+    usecase "UC-30\nPin Hub Location" as UC30
+    usecase "UC-31\nCreate Hub" as UC31
+    usecase "UC-32\nUpdate Hub" as UC32
+    usecase "UC-33\nCancel Hub Edit" as UC33
+  }
+
+  package "9. Achievements" {
+    usecase "UC-34\nView Achievements" as UC34
+    usecase "UC-35\nUpload Badge Image" as UC35
+    usecase "UC-36\nCreate Achievement" as UC36
+    usecase "UC-37\nUpdate Achievement" as UC37
+    usecase "UC-38\nDeactivate Achievement" as UC38
+    usecase "UC-39\nReactivate Achievement" as UC39
+    usecase "UC-40\nCancel Achievement Edit" as UC40
+  }
+
+  package "10. Trades" {
+    usecase "UC-41\nReverse Trade Reward" as UC41
   }
 }
 
-' Admin only
-ADM --> UC_USERS
-ADM --> UC_SUSPEND
-
-' Inherited from Moderator
-ADM --> UC_MOD
-ADM --> UC_LIST
-ADM --> UC_ID
-ADM --> UC_VAL
-ADM --> UC_APPEAL
-ADM --> UC_HUB
-ADM --> UC_REV
-ADM --> UC_AUD
+' -- Associations: the Admin actor reaches every use case ---------------------
+ADM --> UC01
+ADM --> UC02
+ADM --> UC03
+ADM --> UC04
+ADM --> UC05
+ADM --> UC06
+ADM --> UC07
+ADM --> UC08
+ADM --> UC09
+ADM --> UC10
+ADM --> UC11
+ADM --> UC12
+ADM --> UC13
+ADM --> UC14
+ADM --> UC15
+ADM --> UC16
+ADM --> UC17
+ADM --> UC18
+ADM --> UC19
+ADM --> UC20
+ADM --> UC21
+ADM --> UC22
+ADM --> UC23
+ADM --> UC24
+ADM --> UC25
+ADM --> UC26
+ADM --> UC27
+ADM --> UC28
+ADM --> UC29
+ADM --> UC30
+ADM --> UC31
+ADM --> UC32
+ADM --> UC33
+ADM --> UC34
+ADM --> UC35
+ADM --> UC36
+ADM --> UC37
+ADM --> UC38
+ADM --> UC39
+ADM --> UC40
+ADM --> UC41
+ADM --> UC42
+ADM --> UC43
+' -- The buttons, drawn as the steps the use cases <<include>> -----------------
+'  This is the reading that answers "is the system use case just the buttons?":
+'  no -- each button is a step INSIDE a use case, so the arrows run from the
+'  use case to the button, never the other way round.
+usecase "Save role\n(USER / ADMIN)" as S02
+usecase "Filter a status, type or reason" as S05
+usecase "Filter chips for lists" as S25
+usecase "Find (geocode search)" as S29
+usecase "Save hub" as S31
+usecase "Save achievement" as S36
+usecase "Export as PDF" as S43
+UC02 ..> S02 : <<include>>
+UC05 ..> S05 : <<include>>
+UC25 ..> S25 : <<include>>
+UC29 ..> S29 : <<include>>
+UC31 ..> S31 : <<include>>
+UC36 ..> S36 : <<include>>
+UC42 ..> S43 : <<include>>
 
 legend bottom right
-  ADMIN adds to Moderator:
-  - search & inspect users
-  - suspend / unsuspend accounts
-  ADMIN cannot: change staff roles (Super Admin only).
+  Two roles, one boundary:
+  - USER  : the Android app only. No use case in this console.
+  - ADMIN : everything in the rectangle above.
+  --
+  Every write needs a typed reason and writes an AdminAction audit row.
+  An ADMIN cannot be suspended through the API (manual DB action only).
+  Role assignment is the one endpoint that grants a role, with a reason
+  (UC-02, PATCH /api/admin/access).
+  --
+  43 use cases, verb + noun, no "and".
+  --
+  UC-42/UC-43 are read-only: the report page changes no record and so
+  writes no audit row. Export is drawn as a step of viewing the report,
+  not as a use case of its own -- it produces a file, it does not
+  change the system.
 endlegend
 
 @enduml

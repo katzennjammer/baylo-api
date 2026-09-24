@@ -37,26 +37,48 @@ export default function HubLocationPicker({ latitude, longitude, hubType, isActi
   const markerRef = useRef<Marker | null>(null)
   const onChangeRef = useRef(onChange)
   onChangeRef.current = onChange
-
   const hasCoordinates =
     Number.isFinite(latitude) &&
     Number.isFinite(longitude) &&
     !(latitude === 0 && longitude === 0)
   const center: [number, number] = hasCoordinates ? [latitude, longitude] : DEFAULT_CENTER
+  /**
+   * The coordinates to initialize at, read at INIT TIME rather than captured.
+   *
+   * This is the same trick as onChangeRef above, and it is here for the same
+   * reason: the mount effect below cannot depend on `center`. It runs once and
+   * then awaits `import("leaflet")`, which is a real network-and-parse hop —
+   * long enough that a search result can land, or a parent can re-render with
+   * fresh coordinates, before the promise resolves. Closing over `center`
+   * freezes the value from the render that started the import, so the map would
+   * come up centered on wherever the coordinates were when the user first
+   * opened the form, and the `[latitude, longitude]` effect below would find a
+   * marker already sitting at the stale spot and pan to the correct one a frame
+   * later — a visible jump, or, if the values arrived before the marker existed,
+   * no correction at all because that effect bails when markerRef is null.
+   *
+   * Reading through the ref means the init always uses the LATEST coordinates,
+   * whichever render is current when Leaflet finally resolves.
+   */
+  const centerRef = useRef<{ center: [number, number]; hasCoordinates: boolean }>({
+    center,
+    hasCoordinates,
+  })
+  centerRef.current = { center, hasCoordinates }
 
   useEffect(() => {
     let disposed = false
-
     void import("leaflet").then(({ default: L }) => {
       if (disposed || !elementRef.current || mapRef.current) return
-
-      const map = L.map(elementRef.current, { scrollWheelZoom: true }).setView(center, hasCoordinates ? 16 : DEFAULT_ZOOM)
+      // Read the ref, not the `center` this effect closed over. See above.
+      const { center: initialCenter, hasCoordinates: hasInitial } = centerRef.current
+      const map = L.map(elementRef.current, { scrollWheelZoom: true }).setView(initialCenter, hasInitial ? 16 : DEFAULT_ZOOM)
       L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", {
         attribution: "&copy; OpenStreetMap contributors",
         maxZoom: 19,
       }).addTo(map)
 
-      const marker = L.marker(center, {
+      const marker = L.marker(initialCenter, {
         draggable: true,
         icon: L.divIcon({
           className: "admin-hub-marker-host",
@@ -76,7 +98,17 @@ export default function HubLocationPicker({ latitude, longitude, hubType, isActi
 
       mapRef.current = map
       markerRef.current = marker
-      window.setTimeout(() => map.invalidateSize(), 0)
+      // 260ms, not 0. The panel this map lives in now opens via Expandable's
+      // 200ms height animation (see HubForm.tsx) rather than mounting already
+      // open, so at 0ms the container is still mid-animation and Leaflet
+      // measures whatever partial height it has that frame. invalidateSize()
+      // alone does not fix this -- it recomputes size but does not
+      // re-guarantee the marker sits at the container's true center once the
+      // size settles -- so the view is explicitly re-set afterwards too.
+      window.setTimeout(() => {
+        map.invalidateSize()
+        map.setView(initialCenter, hasInitial ? 16 : DEFAULT_ZOOM)
+      }, 260)
     })
 
     return () => {

@@ -2,6 +2,7 @@
 
 import { useState } from "react"
 import { signOut } from "next-auth/react"
+import { AnimatePresence, motion, useReducedMotion } from "framer-motion"
 
 export default function AccountMenu({
   name,
@@ -12,6 +13,7 @@ export default function AccountMenu({
 }) {
   const [open, setOpen] = useState(false)
   const displayName = name?.trim() || "Account"
+  const reduce = useReducedMotion()
 
   async function leaveAdmin() {
     await signOut({ callbackUrl: "/auth/login" })
@@ -41,30 +43,36 @@ export default function AccountMenu({
         </span>
         <span aria-hidden="true" style={{ fontSize: 12 }}>{open ? "▲" : "▼"}</span>
       </button>
-      {open && (
-        <div
-          role="menu"
-          style={{
-            position: "absolute",
-            top: "calc(100% + 8px)",
-            right: 0,
-            minWidth: 180,
-            padding: 6,
-            borderRadius: 10,
-            background: "#fff",
-            border: "1px solid rgba(0,0,0,.1)",
-            boxShadow: "0 12px 30px rgba(0,0,0,.14)",
-            zIndex: 20,
-          }}
-        >
-          <button type="button" role="menuitem" onClick={leaveAdmin} style={menuButtonStyle}>
-            Switch account
-          </button>
-          <button type="button" role="menuitem" onClick={leaveAdmin} style={{ ...menuButtonStyle, color: "#a12626" }}>
-            Sign out
-          </button>
-        </div>
-      )}
+      <AnimatePresence>
+        {open && (
+          <motion.div
+            role="menu"
+            initial={reduce ? false : { opacity: 0, y: -4, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={reduce ? { opacity: 0 } : { opacity: 0, y: -4, scale: 0.98 }}
+            transition={{ duration: 0.15, ease: [0, 0, 0.2, 1] }}
+            style={{
+              position: "absolute",
+              top: "calc(100% + 8px)",
+              right: 0,
+              minWidth: 180,
+              padding: 6,
+              borderRadius: 10,
+              background: "#fff",
+              border: "1px solid rgba(0,0,0,.1)",
+              boxShadow: "0 12px 30px rgba(0,0,0,.14)",
+              zIndex: 20,
+            }}
+          >
+            <button type="button" role="menuitem" onClick={leaveAdmin} className="admin-btn-press" style={menuButtonStyle}>
+              Switch account
+            </button>
+            <button type="button" role="menuitem" onClick={leaveAdmin} className="admin-btn-press" style={{ ...menuButtonStyle, color: "#a12626" }}>
+              Sign out
+            </button>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   )
 }

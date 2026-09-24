@@ -101,7 +101,7 @@ img { display: block; max-width: 100%; }
 .wrap { width: 100%; max-width: var(--maxw); margin: 0 auto; padding-inline: var(--gut); }
 
 .hub-location-map {
-  height: 280px;
+  height: 440px;
   width: 100%;
   border: 1px solid rgba(0,0,0,.14);
   border-radius: 9px;
@@ -514,6 +514,141 @@ image-slot { color: var(--muted) !important; }
   [data-reveal-delay="5"] { transition-delay: 0.40s; }
 }
 body[data-motion="off"] [data-reveal] { opacity: 1 !important; transform: none !important; }
+
+/* ============================================================
+   Admin console -- motion + micro-interactions
+   Refinement only: these utilities style feedback (press, hover,
+   loading, success) around the console's existing inline-styled
+   markup. They never set layout, color palette, or type.
+   ============================================================ */
+
+/* Press feedback for admin action buttons (Approve/Reject/Suspend/etc). */
+.admin-btn-press {
+  transition: transform 120ms ease-out, opacity 120ms ease-out;
+}
+.admin-btn-press:active:not(:disabled) { transform: scale(0.97); }
+
+/* Table row hover tint. */
+.admin-row-hover { transition: background 120ms ease-out; }
+.admin-row-hover:hover { background: rgba(31, 107, 67, .045); }
+
+/* Card hover lift. */
+.admin-card-hover { transition: transform 150ms ease-out, box-shadow 150ms ease-out; }
+.admin-card-hover:hover { transform: translateY(-2px); box-shadow: 0 10px 24px -12px rgba(23, 32, 27, .22); }
+
+/* Row success feedback: fade + settle, toggled via rowCollapse.ts right
+   after an action succeeds, then cleared before the data underneath
+   changes. See rowCollapse.ts for why it is a class and not React state. */
+.admin-row-collapsing {
+  transition: opacity 220ms ease-in, transform 220ms ease-in;
+  opacity: 0;
+  transform: scaleY(0.94);
+  transform-origin: top;
+}
+
+/* Skeleton loading rows (see AdminTableSkeleton.tsx). */
+.admin-skeleton {
+  position: relative;
+  overflow: hidden;
+  background: rgba(0, 0, 0, .07);
+  border-radius: 5px;
+}
+.admin-skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, .6), transparent);
+  animation: admin-shimmer 1.4s ease-in-out infinite;
+}
+@keyframes admin-shimmer { 100% { transform: translateX(100%); } }
+
+/* Pulsing "needs attention" dot -- one per card, not the whole card. */
+.admin-pulse-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  position: relative;
+}
+.admin-pulse-dot::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 999px;
+  background: inherit;
+  opacity: .55;
+  animation: admin-pulse 2s ease-out infinite;
+}
+@keyframes admin-pulse {
+  0% { transform: scale(.6); opacity: .55; }
+  70% { transform: scale(1.9); opacity: 0; }
+  100% { opacity: 0; }
+}
+
+/* Filter chips: base look; the active pill itself is a Framer Motion
+   layoutId span (see FilterChips.tsx) so it can slide between chips. */
+.admin-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 12px;
+  border-radius: 999px;
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+  border: 1px solid rgba(0, 0, 0, .14);
+  color: #555;
+  background: #fff;
+  overflow: hidden;
+  transition: border-color 150ms ease-out, color 150ms ease-out;
+}
+.admin-chip:hover { border-color: rgba(0, 0, 0, .28); color: #333; }
+.admin-chip[data-active="true"] { border-color: #4CAF50; color: #2e7d32; }
+.admin-chip[data-active="true"]:hover { border-color: #4CAF50; }
+.admin-chip-pill { position: absolute; inset: 0; z-index: 0; background: rgba(76, 175, 80, .12); border-radius: 999px; }
+.admin-chip-label { position: relative; z-index: 1; }
+
+/* Admin nav: active item's underline slides between items (layoutId, see AdminNav.tsx). */
+.admin-nav-link {
+  position: relative;
+  display: inline-flex;
+  color: #536159;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 12px 14px;
+  border-radius: 9px;
+  white-space: nowrap;
+  transition: color 150ms ease-out, background 150ms ease-out;
+}
+.admin-nav-link:hover { color: #17201b; background: rgba(23, 32, 27, .05); }
+.admin-nav-link[data-active="true"] { color: #17201b; }
+.admin-nav-underline {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: 4px;
+  height: 2px;
+  border-radius: 2px;
+  background: #1f6b43;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .admin-btn-press,
+  .admin-row-hover,
+  .admin-card-hover,
+  .admin-row-collapsing,
+  .admin-chip,
+  .admin-nav-link {
+    transition: none !important;
+  }
+  .admin-btn-press:active:not(:disabled) { transform: none; }
+  .admin-card-hover:hover { transform: none; }
+  .admin-skeleton::after,
+  .admin-pulse-dot::after {
+    animation: none;
+  }
+}
 
 /* clip mask reveal for big headlines */
 .line-mask { overflow: hidden; display: block; }

