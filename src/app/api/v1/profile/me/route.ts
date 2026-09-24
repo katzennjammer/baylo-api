@@ -11,6 +11,7 @@ import { ok, unauthenticated, invalid } from "@/lib/v1/envelope"
 import { parseQuery, paginationShape } from "@/lib/v1/query"
 import { decodeCursor, encodeCursor, olderThan, paginate } from "@/lib/v1/cursor"
 import { expirePerishableItems } from "@/lib/perishable"
+import { expireFeaturedItems } from "@/lib/featured"
 import { V1_ITEM_SELECT, V1_ITEM_OWNER_SELECT, v1ItemStatsSelect, v1Item, type V1ItemRow } from "@/lib/v1/item"
 import { taskLabel } from "@/lib/v1/taxonomy"
 import { loadStanding, publicStanding } from "@/lib/reputation-gate"
@@ -73,6 +74,10 @@ export async function GET(req: NextRequest) {
   // and it is also the one place a narrow sweep is the right sweep, because the
   // only rows this screen renders are theirs.
   await expirePerishableItems(prisma, { userId: viewerId })
+  // And the Featured flag, same scope. The wire field is computed from the
+  // window (see isFeaturedNow()), so this is hygiene for the flag, not what
+  // stops the shelf showing a lapsed boost as live.
+  await expireFeaturedItems(prisma, { userId: viewerId })
 
   // ── 1 ──
   const user = await prisma.user.findUnique({

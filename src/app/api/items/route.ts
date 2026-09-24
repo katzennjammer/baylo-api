@@ -325,7 +325,11 @@ export async function POST(req: NextRequest) {
       },
       { status: 201 },
     )
-  } catch {
+  } catch (e) {
+    // TEMPORARY (24 Sep 2026): a perishable post failed with nothing in the
+    // dev log, because this catch swallowed the exception whole. Remove once
+    // the cause is known.
+    console.error("[items POST] unhandled", e)
     return NextResponse.json({ error: "Internal server error" }, { status: 500 })
   }
 }

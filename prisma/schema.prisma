@@ -514,6 +514,31 @@ model Item {
   /// everything"; see matchesFor() in @/lib/category-match.
   lookingForCategories Category[]
 
+  // -- Featured boosts ---------------------------------------------------------
+  //
+  // An owner pays BOOST_COST_LEAVES to put a listing in the Home screen's
+  // Featured section for BOOST_HOURS. All three are false/null on every row
+  // that has never been boosted. See @/lib/featured.
+
+  /// The sweep's flag. NOT the source of truth for "is it featured right now":
+  /// every read also requires `featuredUntil > now()`, so a sweep that has not
+  /// run cannot keep a lapsed boost on screen. expireFeaturedItems() flips it
+  /// back to false once the window has passed.
+  isFeatured Boolean @default(false)
+
+  /// When the paid window ends. Kept after the sweep clears the flag, so the
+  /// last boost is still answerable from the row.
+  featuredUntil DateTime?
+
+  /// When the current boost was bought. NOT the rotation key: the section
+  /// shuffles hourly (featuredRotation() in @/lib/featured), so boosting later
+  /// buys no better placement. Used only to pick deterministically which
+  /// boosts are considered if a category ever exceeds FEATURED_SCAN_CAP.
+  featuredAt DateTime?
+
+  /// The Featured section's candidate scan: one category's active boosts.
+  @@index([isFeatured, category, featuredAt])
+
   /// The perishable sweep: unexpired perishables, oldest first. Partial on the
   /// flag would be tighter, which Prisma cannot declare -- the composite is
   /// what it can express, and it is enough.
@@ -1328,6 +1353,11 @@ enum LeafTxType {
   // negative, and is the only thing that ever decrements lifetimeLeaves.
   TRADE_REWARD
   TRADE_REWARD_REVERSAL
+  // A SINK. The owner pays to feature a listing; the Leaves leave User.leaves
+  // and go to nobody, so this row has no partner. SUM(User.leaves) ==
+  // SUM(amount) still holds because the debit and this row commit together.
+  // See boostItem() in @/lib/featured.
+  FEATURE_BOOST
 }
 
 // Each row is one atomic Leaf movement (credit or debit).
@@ -1338,13 +1368,15 @@ enum LeafTxType {
 //   - a TASK_REWARD, written in the same transaction that increments both
 //     leaves and lifetimeLeaves, and rate-limited by WEEKLY_TASK_LEAF_CAP;
 //   - a bridging fee HOLD / RELEASE / PAID triple, see LeafTxType;
-//   - a TRADE_REWARD, issuance on completion, see LeafTxType.
+//   - a TRADE_REWARD, issuance on completion, see LeafTxType;
+//   - a FEATURE_BOOST, a sink with no partner row, see LeafTxType.
 //
 // THE RECONCILIATION, in full, as scripts/lib/ledger-invariant.ts checks it:
 //   SUM(User.leaves) == SUM(amount)                      every row, signed
 //   SUM(User.leaves) + escrow == issuance                nothing minted outside
 //     escrow   = -(HOLD + RELEASE + PAID)                the issuance types
 //     issuance =  SIGNUP_GRANT + TASK_REWARD + TRADE_REWARD + TRADE_REWARD_REVERSAL
+//                 + FEATURE_BOOST (negative: a sink)
 //   escrow == SUM(bridgeFeeLeaves on live offers/trades) the ledger agrees with
 //                                                        the rows it points at
 //

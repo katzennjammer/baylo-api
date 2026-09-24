@@ -48,6 +48,14 @@ export interface UploadedOrgDocument {
   publicId: string
 }
 
+/** Whatever the Cloudinary SDK threw, as a sentence worth logging. */
+function describeError(err: unknown): string {
+  if (err instanceof Error) return err.message
+  const message = (err as { message?: unknown } | null)?.message
+  if (typeof message === "string" && message.length > 0) return message
+  return "unknown error"
+}
+
 /**
  * Upload one sanitised business document.
  *
@@ -103,14 +111,48 @@ export function signOrgDocumentUrl(publicId: string): string {
  */
 export async function destroyOrgDocument(publicId: string): Promise<boolean> {
   try {
-    const result = await cloudinary.uploader.destroy(publicId, {
+    const result = (await cloudinary.uploader.destroy(publicId, {
       type: "authenticated",
       resource_type: "image",
       // Purges the CDN edges too. Without it a cached copy can outlive the
       // destroy at an edge node, which is the whole failure being avoided.
       invalidate: true,
+    })) as { result?: string }
+
+    // "not found" counts as success. The asset is not there, which is the
+    // outcome being asked for — treating it as a failure would put the row in
+    // a retry loop that can never succeed.
+    return result.result === "ok" || result.result === "not found"
+  } catch (err) {
+    // LOGGED, not swallowed. This is the failure the sweep exists to retry,
+    // and a retention path whose only failure mode is silence is one where
+    // "the documents are still up there" is discovered by looking at
+    // Cloudinary's bill. destroyIdImage() logs for the same reason.
+    //
+    // The SDK rejects with a plain `{ message, http_code }`, not an Error, so
+    // the usual `instanceof Error` line prints "unknown error" for every real
+    // failure — which is the one case the log exists for. Verified against the
+    // live API: a bad signature arrives this way.
+    console.error("[organizations] Cloudinary destroy failed:", describeError(err))
+    return false
+  }
+}
+
+/**
+ * Asks Cloudinary whether a document still exists. For the acceptance harness.
+ *
+ * Not used by the application — nothing in a request path should need to ask.
+ * It exists so "deciding destroys the document" can be DEMONSTRATED rather than
+ * asserted, which is the only honest way to check a claim about a third party's
+ * servers. Mirrors idImageExists().
+ */
+export async function orgDocumentExists(publicId: string): Promise<boolean> {
+  try {
+    await cloudinary.api.resource(publicId, {
+      type: "authenticated",
+      resource_type: "image",
     })
-    return result?.result === "ok" || result?.result === "not found"
+    return true
   } catch {
     return false
   }
@@ -123,35 +165,47 @@ export async function destroyOrgDocument(publicId: string): Promise<boolean> {
  * which is what the @@index([verificationStatus, businessDocPublicId]) on
  * Organization exists for, and why businessDocPublicId is nulled only once
  * Cloudinary confirms rather than inside the decision transaction.
+ *
+ * NEVER THROWS, and that is not decoration: this runs on the admin queue's
+ * render (/admin/organizations), so an exception here is a 500 on the page a
+ * moderator opened to work the backlog — and the failure it would be raised by
+ * is "a document could not be deleted", which is precisely the condition the
+ * page must stay up in order to fix. destroyOrgDocument() already contains its
+ * own failures; this catch is for the Prisma calls around it.
  */
 export async function sweepUndeletedOrgDocuments(limit = 20): Promise<{ swept: number; failed: number }> {
-  const stranded = await prisma.organization.findMany({
-    where: {
-      verificationStatus: { in: ["VERIFIED", "REJECTED"] },
-      businessDocPublicId: { not: null },
-    },
-    select: { id: true, businessDocPublicId: true },
-    orderBy: { reviewedAt: "asc" },
-    take: limit,
-  })
-
   let swept = 0
   let failed = 0
-  for (const row of stranded) {
-    const gone = await destroyOrgDocument(row.businessDocPublicId!)
-    if (gone) {
-      await prisma.organization.update({
-        where: { id: row.id },
-        data: { businessDocPublicId: null, docDeletedAt: new Date(), docDeleteFailedAt: null },
-      })
-      swept++
-    } else {
-      await prisma.organization.update({
-        where: { id: row.id },
-        data: { docDeleteFailedAt: new Date() },
-      })
-      failed++
+  try {
+    const stranded = await prisma.organization.findMany({
+      where: {
+        verificationStatus: { in: ["VERIFIED", "REJECTED"] },
+        businessDocPublicId: { not: null },
+      },
+      select: { id: true, businessDocPublicId: true },
+      orderBy: { reviewedAt: "asc" },
+      take: limit,
+    })
+
+    for (const row of stranded) {
+      if (!row.businessDocPublicId) continue
+      const gone = await destroyOrgDocument(row.businessDocPublicId)
+      if (gone) {
+        await prisma.organization.update({
+          where: { id: row.id },
+          data: { businessDocPublicId: null, docDeletedAt: new Date(), docDeleteFailedAt: null },
+        })
+        swept++
+      } else {
+        await prisma.organization.update({
+          where: { id: row.id },
+          data: { docDeleteFailedAt: new Date() },
+        })
+        failed++
+      }
     }
+  } catch (err) {
+    console.error("[organizations] document sweep failed:", describeError(err))
   }
   return { swept, failed }
 }

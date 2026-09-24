@@ -234,7 +234,12 @@ export async function GET(req: NextRequest) {
     // every business still waiting on a review -- which is the state a business
     // is in for its first days, exactly when it most needs to be findable. The
     // badge on the card is what distinguishes verified from not.
-    ...(orgsOnly ? { user: { isOrgAccount: true } } : {}),
+    //
+    // In an AND, NOT as a `user` key. visibleItemWhere() above already owns
+    // `user` (the block and suspension filters), and a second `user` spread
+    // here replaced it outright: with the pill on, blocked and suspended
+    // owners' listings came back.
+    ...(orgsOnly ? { AND: [{ user: { is: { isOrgAccount: true } } }] } : {}),
   }
 
   const selection = {

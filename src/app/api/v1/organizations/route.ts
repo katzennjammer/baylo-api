@@ -5,7 +5,7 @@ import { enforceRateLimit } from "@/lib/rate-limit-config"
 import { sanitizeImage } from "@/lib/image-sanitize"
 import { ok, unauthenticated, invalid, conflict, forbidden } from "@/lib/v1/envelope"
 import { activeOrgsFor, createOrganization } from "@/lib/organizations"
-import { uploadOrgDocument } from "@/lib/org-document"
+import { destroyOrgDocument, uploadOrgDocument } from "@/lib/org-document"
 
 export const dynamic = "force-dynamic"
 
@@ -190,13 +190,36 @@ export async function POST(req: NextRequest) {
     return invalid("We could not store that document. Try again in a moment.")
   }
 
-  const created = await createOrganization({
-    founderUserId: userId,
-    name,
-    businessCategory: categoryRaw,
-    businessDocUrl: document.url,
-    businessDocPublicId: document.publicId,
-  })
+  // THE UPLOAD IS NOW AHEAD OF THE ROW, AND THAT WINDOW HAS TO BE CLOSED.
+  //
+  // createOrganization() is one transaction, so a failure here leaves no
+  // half-made organisation — but it does leave the document sitting in
+  // Cloudinary with nothing on Baylo pointing at it. That file cannot be
+  // swept: sweepUndeletedOrgDocuments() finds work by reading Organization
+  // rows, and the whole failure is that no Organization row exists. It would
+  // be a business registration, carrying somebody's name and address, retained
+  // indefinitely and invisibly.
+  //
+  // So the asset is destroyed on the way out and the error is re-thrown
+  // unchanged — the caller still gets its 500, and nothing is swallowed. The
+  // ID submission route makes exactly this call for exactly this reason.
+  let created: { organizationId: string; orgUserId: string }
+  try {
+    created = await createOrganization({
+      founderUserId: userId,
+      name,
+      businessCategory: categoryRaw,
+      businessDocUrl: document.url,
+      businessDocPublicId: document.publicId,
+    })
+  } catch (err) {
+    await destroyOrgDocument(document.publicId)
+    console.error(
+      "[organizations] create failed after upload; document destroyed:",
+      err instanceof Error ? err.message : "unknown error",
+    )
+    throw err
+  }
 
   // PENDING, and the org can already post and trade. What it does not have yet
   // is the checkmark — see the note on orgBadge(). Saying so here is what stops

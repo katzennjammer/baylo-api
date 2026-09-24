@@ -1,5 +1,6 @@
 import { resolvePickup, type PublicPickup } from "@/lib/item-visibility"
 import { getLeafRank } from "@/lib/task-constants"
+import { isFeaturedNow } from "@/lib/featured"
 import type { TrustTier } from "@/lib/reputation"
 import {
   SAFE_ZONE_HUB_SELECT,
@@ -68,6 +69,9 @@ export const V1_ITEM_SELECT = {
   // The matcher's input, and the owner's stated wants -- which the detail
   // screen renders as "looking for" chips. '{}' on every pre-column row.
   lookingForCategories: true,
+  // The Featured boost. Read to produce `featuredUntil`; see isFeaturedNow().
+  isFeatured: true,
+  featuredUntil: true,
   // Needed by resolvePickup(). The route resolves them; they never reach a body.
   pickupLat: true,
   pickupLng: true,
@@ -270,6 +274,13 @@ export interface V1Item {
     /** Already past its window but not yet swept. See expirePerishableItems(). */
     expired: boolean
   } | null
+  /**
+   * When this listing's paid Featured boost ends, or null when it is not
+   * featured right now. Null also for a boost whose window has passed but the
+   * sweep has not reached, so a client can draw "Featured" or "Boost" off this
+   * one field without doing its own clock arithmetic against a stale flag.
+   */
+  featuredUntil: Date | null
   /** The categories the owner will take in return. `[]` means none stated. */
   lookingFor: string[]
   lookingForLabels: string[]
@@ -328,6 +339,9 @@ export interface V1ItemRow {
   quantityUnit?: string | null
   tradeWithinHours?: number | null
   lookingForCategories?: string[]
+  /** Optional: rows from a select that predates 24 Sep 2026 still shape. */
+  isFeatured?: boolean
+  featuredUntil?: Date | null
   createdAt: Date
   userId: string
   pickupLat: number | null
@@ -399,6 +413,7 @@ export function v1Item(
               row.createdAt.getTime() + row.tradeWithinHours * 60 * 60 * 1000 < Date.now(),
           }
         : null,
+    featuredUntil: isFeaturedNow(row) ? row.featuredUntil! : null,
     lookingFor: row.lookingForCategories ?? [],
     lookingForLabels: (row.lookingForCategories ?? []).map(categoryLabel),
     pickup: resolvePickup(row, viewerId, tradeAccessIds),
