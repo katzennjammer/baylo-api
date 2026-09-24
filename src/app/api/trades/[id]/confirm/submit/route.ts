@@ -11,6 +11,7 @@ import { payBridgeFee } from "@/lib/bridge-fee"
 import { awardTradeRewards, rewardDenialCopy, type RewardOutcome } from "@/lib/trade-reward"
 import { resolveMeetupHub } from "@/lib/safe-zones"
 import { createSystemMessage } from "@/lib/system-message"
+import { settleQuestsAsync, TRADE_QUESTS } from "@/lib/quests"
 
 export async function POST(
   req: NextRequest,
@@ -291,7 +292,11 @@ export async function POST(
           if (!freshSender || freshSender.leaves < leaves) throw new Error("insufficient_leaves")
         }
 
-        await tx.tradeRequest.update({ where: { id: tradeId }, data: { status: "COMPLETED" } })
+        // completedAt is the moment settlement commits, written here and nowhere
+        // else. The daily trade quests read it; updatedAt would move on any
+        // later write to the row. See the column's note.
+        const completedAt = new Date()
+        await tx.tradeRequest.update({ where: { id: tradeId }, data: { status: "COMPLETED", completedAt } })
         await tx.item.update({ where: { id: trade.offeredItemId },   data: { userId: trade.receiverId, status: "OWNED" } })
         await tx.item.update({ where: { id: trade.requestedItemId }, data: { userId: trade.senderId,   status: "OWNED" } })
         await tx.user.updateMany({
@@ -427,7 +432,7 @@ export async function POST(
           receiverId: trade.receiverId,
           offeredItemId: trade.offeredItemId,
           requestedItemId: trade.requestedItemId,
-          completedAt: new Date(),
+          completedAt,
         })
       })
     } catch (txErr) {
@@ -442,6 +447,12 @@ export async function POST(
       }
       throw txErr
     }
+
+    // The daily trade quests for both parties, now that settlement has
+    // committed. Fire-and-forget. Not reached on the already_completed replay
+    // above, which returns early, and a replay would pay nothing anyway.
+    settleQuestsAsync(trade.senderId, TRADE_QUESTS)
+    settleQuestsAsync(trade.receiverId, TRADE_QUESTS)
 
     // "+4 Leaves" belongs in the notification, not only on the screen of
     // whoever happened to submit the second code: the other party may not have

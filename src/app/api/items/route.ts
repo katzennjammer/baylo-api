@@ -6,6 +6,7 @@ import { decidePerishableValue } from "@/lib/perishable"
 import { notifyCategoryMatchesAsync } from "@/lib/category-match"
 import prisma from "@/lib/prisma"
 import { awardTaskAsync } from "@/lib/tasks"
+import { settleQuestsAsync } from "@/lib/quests"
 import { createItemSchema, parseBody, categorySchema } from "@/lib/validation"
 import { imageHashRows, leadImageHash } from "@/lib/image-hashes"
 import { decideItemValue, reviewNotice } from "@/lib/valuation-server"
@@ -309,6 +310,13 @@ export async function POST(req: NextRequest) {
     awardTaskAsync(acting.acting.humanUserId, "FIRST_LISTING", "", {
       description: "Task reward: listed your first item",
     })
+
+    // The "list an item" quest belongs to whoever the row says listed it:
+    // `authorId`, which is the org's backing row for an org post, and
+    // settleQuestsAsync() skips org rows. So a listing posted for an org
+    // completes nobody's quest, the same as before this hook existed. See the
+    // header of @/lib/quests.
+    settleQuestsAsync(authorId, ["LIST_ITEM"])
 
     // ── Tell the people who asked for this category ─────────────────────────
     //

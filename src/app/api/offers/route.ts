@@ -18,6 +18,7 @@ import { enforceNotBlocked } from "@/lib/blocking"
 import { assessOffer, refusalStatus } from "@/lib/offer-check"
 import { holdBridgeFee } from "@/lib/bridge-fee"
 import { TRADING_POLICY_VERSION } from "@/lib/trade-rules"
+import { settleQuestsAsync } from "@/lib/quests"
 
 /**
  * POST /api/offers — one of your items for one of theirs.
@@ -248,6 +249,11 @@ export async function POST(req: NextRequest) {
       }
       throw e
     }
+
+    // Daily quests, now that the offer has committed: the sender's "send an
+    // offer" pair and the receiver's "get an offer". Fire-and-forget.
+    settleQuestsAsync(senderId, ["SEND_OFFER", "SEND_BRIDGE_OFFER"])
+    settleQuestsAsync(post.userId, ["RECEIVE_OFFER"])
 
     const sender = await prisma.user.findUnique({
       where: { id: senderId },

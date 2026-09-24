@@ -615,6 +615,13 @@ model TradeRequest {
   message   String?     @db.Text
   createdAt DateTime    @default(now())
   updatedAt DateTime    @updatedAt
+  /// The moment settlement committed -- written once, inside the completion
+  /// transaction in confirm/submit, and never touched again. `updatedAt` is
+  /// NOT this: any later write to the row (a hide flag, a meetup field) moves
+  /// it, which is how an old trade could count toward TODAY's trade quest.
+  /// NULL on every trade completed before 25 Sep 2026, when the column was
+  /// added; nothing backfills it, and nothing that reads it needs the past.
+  completedAt DateTime?
 
   hiddenBySender   Boolean @default(false)
   hiddenByReceiver Boolean @default(false)
