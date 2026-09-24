@@ -971,6 +971,7 @@ enum QuestKind {
   // ── MEDIUM pool ──
   LIST_ITEM
   RECEIVE_OFFER
+  SEND_BRIDGE_OFFER
   // ── HARD pool ──
   COMPLETE_TRADE
   COMPLETE_BRIDGE_TRADE

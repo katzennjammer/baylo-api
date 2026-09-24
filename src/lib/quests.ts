@@ -44,7 +44,7 @@ import prisma from "@/lib/prisma"
  *
  * ── A KNOWN, ACCEPTED GAP: NO PARTNER-DIVERSITY GUARD ───────────────────────
  *
- * SEND_OFFER, RECEIVE_OFFER, FOLLOW_TRADER and LEAVE_REVIEW are satisfied by
+ * SEND_OFFER, RECEIVE_OFFER, SEND_BRIDGE_OFFER, FOLLOW_TRADER and LEAVE_REVIEW are satisfied by
  * ANY qualifying row in the period, with no equivalent of the task system's
  * PARTNER_GATED / NEW_PARTNER_WINDOW_DAYS guard against two colluding
  * accounts bouncing the same trivial action back and forth. At daily cadence
@@ -58,7 +58,7 @@ import prisma from "@/lib/prisma"
 export type QuestTier = "EASY" | "MEDIUM" | "HARD"
 export type QuestKind =
   | "SEND_OFFER" | "FOLLOW_TRADER" | "LEAVE_REVIEW"
-  | "LIST_ITEM" | "RECEIVE_OFFER"
+  | "LIST_ITEM" | "RECEIVE_OFFER" | "SEND_BRIDGE_OFFER"
   | "COMPLETE_TRADE" | "COMPLETE_BRIDGE_TRADE" | "COMPLETE_SAFEZONE_TRADE"
 
 export const QUEST_TIERS: readonly QuestTier[] = ["EASY", "MEDIUM", "HARD"]
@@ -87,10 +87,9 @@ interface QuestDef {
 }
 
 /** One pool per tier. QuestKind values never repeat across tiers, which is
- *  what lets completeQuest() key a ledger row off `quest` alone. MEDIUM's
- *  pool is exactly QUEST_TIER_COUNT.MEDIUM (2) entries, so both are assigned
- *  every day with no selection needed; EASY and HARD have more entries than
- *  their daily count, so pickQuests() below rotates through them. */
+ *  what lets completeQuest() key a ledger row off `quest` alone. Every tier
+ *  has more pool entries than its daily QUEST_TIER_COUNT, so pickQuests()
+ *  below rotates through each pool rather than trivially assigning all of it. */
 export const QUEST_POOL: Record<QuestTier, readonly QuestDef[]> = {
   EASY: [
     { quest: "SEND_OFFER", label: "Send a trade offer", description: "Propose a trade on any listing today." },
@@ -100,6 +99,7 @@ export const QUEST_POOL: Record<QuestTier, readonly QuestDef[]> = {
   MEDIUM: [
     { quest: "LIST_ITEM", label: "List a new item", description: "Post something from your closet today." },
     { quest: "RECEIVE_OFFER", label: "Get an offer on your shelf", description: "Have one of your listings receive an offer." },
+    { quest: "SEND_BRIDGE_OFFER", label: "Bridge a value gap", description: "Send an offer with an item one bracket below the listing." },
   ],
   HARD: [
     { quest: "COMPLETE_TRADE", label: "Complete a trade", description: "See a trade all the way through to completion." },
@@ -176,6 +176,11 @@ async function questSatisfied(userId: string, quest: QuestKind, periodStart: Dat
     case "LIST_ITEM":
       return (await prisma.item.findFirst({
         where: { userId, createdAt: { gte: periodStart } },
+        select: { id: true },
+      })) !== null
+    case "SEND_BRIDGE_OFFER":
+      return (await prisma.offer.findFirst({
+        where: { senderId: userId, createdAt: { gte: periodStart }, bridgeFeeLeaves: { not: null } },
         select: { id: true },
       })) !== null
     case "COMPLETE_TRADE":
