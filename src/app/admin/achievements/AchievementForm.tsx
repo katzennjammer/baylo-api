@@ -44,6 +44,7 @@ const CRITERIA: { value: string; label: string; counted: boolean }[] = [
   { value: "SAFEZONE_MEETUPS", label: "Safe-Zone meetups", counted: true },
   { value: "REPORTS_FILED", label: "Reports filed", counted: true },
   { value: "BRIDGE_COMPLETED", label: "Completed trades with a bridge fee paid", counted: true },
+  { value: "PREMIUM_SUBSCRIBER", label: "Premium subscriber (current or ever)", counted: false },
 ]
 
 const CRITERIA_BY_VALUE = new Map(CRITERIA.map((c) => [c.value, c]))

@@ -108,17 +108,30 @@ export function offerAllowed(legality: OfferLegality): boolean {
 export const BRIDGE_FEE_PER_BRACKET = 10
 
 /**
+ * The Premium perk (24 Sep 2026): 8 Leaves/bracket instead of 10, a flat 20%
+ * off. A rate, not a percentage applied at call time, for the same reason the
+ * standard fee is a flat per-bracket rate rather than a formula evaluated per
+ * offer -- a whole-number rate can never produce a fractional Leaf, where a
+ * percentage discount on an already-computed fee sometimes would.
+ */
+export const PREMIUM_BRIDGE_FEE_PER_BRACKET = 8
+
+/**
  * The fee for a bridge whose lower item sits in `lowerBracket` -- which is
- * always the PAYER's own item, in both directions.
+ * always the PAYER's own item, in both directions. `premiumPayer` is whether
+ * THAT PARTY (not the other side, not the proposer, specifically whoever the
+ * fee falls on) has a live Premium subscription -- see offerTerms(), which is
+ * the only caller that knows who the payer actually is.
  *
  * `null` for the top bracket: a bracket-10 item cannot be the lower half of a
  * bridge, because there is no bracket 11 for the other half to be in. A caller
  * that gets null has asked a question with no answer rather than a free
  * bridge. (Two bracket-10 items are "same", not a bridge, and cost nothing.)
  */
-export function bridgingFee(lowerBracket: Bracket): number | null {
+export function bridgingFee(lowerBracket: Bracket, premiumPayer = false): number | null {
   if (lowerBracket < 1 || lowerBracket >= BRACKET_COUNT) return null
-  return BRIDGE_FEE_PER_BRACKET * lowerBracket
+  const perBracket = premiumPayer ? PREMIUM_BRIDGE_FEE_PER_BRACKET : BRIDGE_FEE_PER_BRACKET
+  return perBracket * lowerBracket
 }
 
 /** Which side of an offer pays the bridging fee. */
@@ -143,15 +156,24 @@ export interface OfferTerms {
  * receiving the higher one. `bridgeUp` is the proposer (they offered the
  * smaller item); `bridgeDown` is the receiver (their listing is the smaller
  * item, and they are being offered something bigger).
+ *
+ * `premiumPayer`: whether the party who turns out to be the payer has a live
+ * Premium subscription, discounting the fee per bridgingFee(). The caller
+ * does not know who the payer is until THIS function decides it from the
+ * brackets -- see @/lib/offer-check, which calls this once to learn `payer`,
+ * looks up that specific user's subscription, and calls it again with the
+ * answer to get the true fee. Defaults to false so every existing caller
+ * (including the mobile mirror, which does not have a signed-in user's
+ * subscription state to hand) keeps quoting the standard rate.
  */
-export function offerTerms(offered: Bracket, target: Bracket): OfferTerms {
+export function offerTerms(offered: Bracket, target: Bracket, premiumPayer = false): OfferTerms {
   const legality = offerLegality(offered, target)
   const allowed = offerAllowed(legality)
   if (!allowed || legality === "same") {
     return { legality, allowed, fee: 0, payer: null, feeBracket: null }
   }
   const feeBracket = Math.min(offered, target)
-  const fee = bridgingFee(feeBracket) ?? 0
+  const fee = bridgingFee(feeBracket, premiumPayer) ?? 0
   return {
     legality,
     allowed,
@@ -165,8 +187,8 @@ export function offerTerms(offered: Bracket, target: Bracket): OfferTerms {
  * Just the amount. `null` when the pair is not allowed at all, 0 when it is
  * free -- a caller that needs to tell those apart wants `offerTerms()`.
  */
-export function feeForOffer(offered: Bracket, target: Bracket): number | null {
-  const terms = offerTerms(offered, target)
+export function feeForOffer(offered: Bracket, target: Bracket, premiumPayer = false): number | null {
+  const terms = offerTerms(offered, target, premiumPayer)
   return terms.allowed ? terms.fee : null
 }
 

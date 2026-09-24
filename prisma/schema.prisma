@@ -92,15 +92,6 @@ model User {
   // exactly that reason.
   vipUntil DateTime?
 
-  // The UTC calendar day the daily Premium/VIP Leaves allowance was last paid,
-  // so claimDailyTierGrant() in @/lib/tier-grant can tell "already paid today"
-  // from "not paid yet" with a WHERE clause instead of a read-then-write --
-  // the same concurrency shape as signupGrantClaimed above. NOT a boolean:
-  // the grant repeats every day a subscription is live, and a boolean would
-  // have to be reset by a job at midnight the way premiumUntil deliberately
-  // is not.
-  lastTierGrantAt DateTime?
-
   items                   Item[]
   sentRequests            TradeRequest[]           @relation("SentRequests")
   receivedRequests        TradeRequest[]           @relation("ReceivedRequests")
@@ -798,29 +789,34 @@ enum TaskKind {
   FIRST_TRADE
 }
 
-// ── Weekly quests (23 Sep 2026) ──────────────────────────────────────────────
+// ── Daily quests (23 Sep 2026, moved weekly -> daily 24 Sep 2026) ────────────
 //
-// Three quests, one per QuestTier, assigned to every user for a fixed
-// calendar week (`weekStart`, Monday 00:00 UTC) and reconciled against real
-// DB state the same way TaskCompletion is -- see reconcileQuests() in
-// @/lib/quests. Every quest is an existing, already-tracked platform action
-// (send an offer, list an item, complete a trade); none of it is a new
-// engagement metric like time-in-app, which is deliberate -- the manuscript
-// frames Baylo's Point System as a reward system rather than gamification,
-// and a metric with no real-world action behind it would contradict that.
+// Five quests a day: 2 Easy (2 Leaves each), 2 Medium (3 each), 1 Hard (5) --
+// 15 Leaves/day if every one is completed. Assigned fresh each UTC calendar
+// day (`periodStart`) and reconciled against real DB state the same way
+// TaskCompletion is -- see reconcileQuests() in @/lib/quests. Every quest is
+// an existing, already-tracked platform action (send an offer, list an item,
+// complete a trade); none of it is a new engagement metric like time-in-app,
+// which is deliberate -- the manuscript frames Baylo's Point System as a
+// reward system rather than gamification, and a metric with no real-world
+// action behind it would contradict that.
 //
-// ONE ROW PER (user, week, tier), not per quest: the tier is what is
-// guaranteed to exist every week, and `quest` is which pool entry filled it.
+// ONE ROW PER (user, day, quest), not per tier: unlike the original weekly
+// shape (one quest per tier), Easy and Medium each place TWO quests a day, so
+// the tier alone no longer identifies a row -- `quest` does, and the pools
+// are built so a QuestKind is never assigned twice in the same day.
 // `rewardLeaves` is snapshotted at assignment time so a later change to
-// QUEST_REWARDS never rewrites what a past week actually paid.
+// QUEST_REWARDS never rewrites what a past day actually paid.
+//
+// STACKS ON TOP OF WEEKLY_TASK_LEAF_CAP, DELIBERATELY. Quests write
+// QUEST_REWARD ledger rows, not TASK_REWARD, so the existing 100/week task
+// cap never sums them -- 15/day of quests is a second, separate allowance on
+// top of it, not a share of it. A conscious product decision, not an
+// oversight: see the header of @/lib/quests.
 model QuestAssignment {
   id           String    @id @default(cuid())
-  dayStart     DateTime
+  periodStart  DateTime
   tier         QuestTier
-  /// 0-based index within the tier's slots for this day (2 Easy: 0-1, 2
-  /// Medium: 0-1, 1 Hard: 0). Part of the unique key so a tier can hold more
-  /// than one assignment per day.
-  slot         Int       @default(0)
   quest        QuestKind
   rewardLeaves Int
   /// Non-null means paid -- the same "row's existence/non-null column is the
@@ -832,8 +828,8 @@ model QuestAssignment {
   userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  @@unique([userId, dayStart, tier, slot])
-  @@index([userId, dayStart])
+  @@unique([userId, periodStart, quest])
+  @@index([userId, periodStart])
 }
 
 enum QuestTier {
@@ -850,7 +846,6 @@ enum QuestKind {
   // ── MEDIUM pool ──
   LIST_ITEM
   RECEIVE_OFFER
-  SEND_BRIDGE_OFFER
   // ── HARD pool ──
   COMPLETE_TRADE
   COMPLETE_BRIDGE_TRADE
@@ -1248,9 +1243,12 @@ enum LeafTxType {
   // negative, and is the only thing that ever decrements lifetimeLeaves.
   TRADE_REWARD
   TRADE_REWARD_REVERSAL
-  // The daily free-Leaves allowance for a live Premium or VIP subscriber --
-  // 5 or 10 Leaves, once per UTC calendar day. See claimDailyTierGrant() in
-  // @/lib/tier-grant, which is the only writer.
+  // RETIRED (24 Sep 2026). Was the daily free-Leaves allowance for a live
+  // Premium or VIP subscriber; dropped from the Premium perk list before it
+  // ever paid out (zero rows of this type exist on the live ledger). The
+  // value stays, per this file's own convention for a retired concept (see
+  // TaskKind.VERIFIED_SWAP), rather than being removed -- Postgres cannot
+  // drop an enum value cheaply, and there is nothing to award with it now.
   TIER_DAILY_GRANT
   // A completed weekly quest -- 5/10/20 Leaves for Easy/Medium/Hard. See
   // completeQuest() in @/lib/quests, which is the only writer.
@@ -2144,6 +2142,15 @@ enum AchievementCriterion {
   /// was bridged with Leaves, not just an even swap. Counted, same shape as
   /// COMPLETED_TRADES; see progressFor() in @/lib/achievements.
   BRIDGE_COMPLETED
+  // ── PREMIUM PERK #4 (24 Sep 2026) ─────────────────────────────
+  //
+  // Boolean, same shape as VERIFIED_ACCOUNT: isPremium(User.premiumUntil) OR
+  // isVip(User.vipUntil) at the moment evaluateAchievements() runs. Once
+  // granted it behaves like every other achievement here -- PERMANENT, never
+  // revoked -- so a lapsed subscription keeps the badge. That is not a special
+  // case coded in; it falls straight out of the engine's existing rule that
+  // nothing un-grants a UserAchievement row once written.
+  PREMIUM_SUBSCRIBER
 }
 
 model Achievement {
