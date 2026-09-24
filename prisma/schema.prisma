@@ -166,7 +166,7 @@ model User {
   // raw table in live until it was finally modelled here.
   achievements    UserAchievement[]
 
-  // -- Organisation / SMME accounts -------------------------------------------
+  // -- Organisation / MSME accounts -------------------------------------------
   //
   // TRUE ON A SYNTHETIC ROW THAT IS NOT A PERSON. An Organization is backed by
   // a User row so that every FK already pointing at User -- Item.userId,
@@ -2334,7 +2334,7 @@ model UserAchievement {
   @@index([achievementId])
 }
 
-// ── Organisations / SMMEs ────────────────────────────────────────────────────
+// ── Organisations / MSMEs ────────────────────────────────────────────────────
 
 /**
  * What kind of business it is. A CLOSED LIST, and deliberately not `Category`.
@@ -2401,7 +2401,7 @@ enum OrgMemberStatus {
 }
 
 /**
- * An organisation or SMME account.
+ * An organisation or MSME (Micro, Small and Medium Enterprise, the DTI term) account.
  *
  * ── IT IS A User ROW, AND THAT IS THE WHOLE DESIGN ──────────────────────────
  *
@@ -2460,6 +2460,34 @@ model Organization {
    * rather than initials.
    */
   logoUrl String? @db.Text
+
+  /**
+   * The wide cover image across the top of the storefront profile. PUBLIC, and
+   * uploaded through POST /api/upload like a listing photo -- the opposite of
+   * businessDocUrl below, which must never take that path. Null renders a
+   * token-coloured band, so an org that never sets one does not look broken.
+   */
+  bannerUrl String? @db.Text
+
+  /**
+   * The shop's own one-paragraph pitch, shown under the category line. A
+   * separate column from the backing row's User.bio on purpose: that is a
+   * person's field on a person's edit screen, and this is edited by whichever
+   * OWNER is signed in, from the shop's.
+   */
+  description String? @db.VarChar(500)
+
+  /**
+   * The DTI business-name registration number, AS TYPED by the applicant.
+   *
+   * Stored and shown to the reviewer beside the document; never checked
+   * against any DTI registry. Its only job is to let a reviewer compare the
+   * number on the photograph with the number the applicant claims. Nullable
+   * because organisations created before the field existed have none, and
+   * unlike businessDocUrl it is NOT destroyed on decision -- a registration
+   * number is a public business identifier, not a document about a person.
+   */
+  dtiRegistrationNumber String? @db.VarChar(64)
 
   businessCategory BusinessCategory
 

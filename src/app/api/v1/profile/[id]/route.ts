@@ -92,7 +92,24 @@ export async function GET(
         select: {
           ...ORG_PUBLIC_SELECT,
           createdAt: true,
+          // The storefront's own fields. Here and not in ORG_PUBLIC_SELECT,
+          // which every listing card pays for -- a card has no use for a
+          // banner or a paragraph.
+          bannerUrl: true,
+          description: true,
           _count: { select: { members: { where: { status: "ACTIVE" } } } },
+          /**
+           * The VIEWER'S OWN membership, if any -- at most one row, by the
+           * (organizationId, userId) unique. It decides whether the client
+           * shows the staff roster (members only; GET .../members already
+           * 404s everyone else) and the owner's Edit shop button. ACTIVE only,
+           * for the reason activeOrgsFor() gives: an invitation is not a grant.
+           */
+          members: {
+            where: { userId: viewerId, status: "ACTIVE" },
+            select: { role: true },
+            take: 1,
+          },
         },
       },
       _count: {
@@ -131,6 +148,19 @@ export async function GET(
       ORDER BY ua."displayOrder" ASC, ua."unlockedAt" DESC
     `,
   ])
+
+  // ── 1b ── an organisation's completed trades, counted from the trades.
+  //
+  // ORGANISATIONS ONLY, so a person's profile still costs the five queries the
+  // header promises. The storefront's "Trades completed" stat is a claim a
+  // shop makes to strangers, so it is counted from COMPLETED rows on either
+  // side rather than read from User.totalTrades, which the types note says
+  // has drifted above the real count on live rows.
+  const orgCompletedTrades = user.organization
+    ? await prisma.tradeRequest.count({
+        where: { status: "COMPLETED", OR: [{ senderId: id }, { receiverId: id }] },
+      })
+    : null
 
   // ── 2 ── the follow edge in both directions, in one query.
   const edges = await prisma.follow.findMany({
@@ -212,6 +242,11 @@ export async function GET(
               ...orgBadge(user.organization),
               createdAt: user.organization.createdAt,
               staffCount: user.organization._count.members,
+              bannerUrl: user.organization.bannerUrl,
+              description: user.organization.description,
+              completedTrades: orgCompletedTrades ?? 0,
+              /** "OWNER" | "STAFF" when the viewer is an ACTIVE member, else null. */
+              viewerRole: user.organization.members[0]?.role ?? null,
             }
           : null,
         isVerified: user.isVerified,

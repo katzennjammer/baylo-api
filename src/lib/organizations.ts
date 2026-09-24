@@ -2,7 +2,7 @@ import type { PrismaClient } from "@/generated/prisma/client"
 import prisma from "@/lib/prisma"
 
 /**
- * Organisations / SMMEs: who they are, who may act as them, and what a badge
+ * Organisations / MSMEs: who they are, who may act as them, and what a badge
  * is allowed to claim about them.
  *
  * ── AN ORGANISATION IS A User ROW ───────────────────────────────────────────
@@ -93,7 +93,7 @@ export interface OrgBadge {
 /**
  * The public badge for an organisation.
  *
- * `verified` is derived here and nowhere else, so that "Verified org" cannot
+ * `verified` is derived here and nowhere else, so that "Verified MSME" cannot
  * come to mean "an Organization row exists". A PENDING org is a real account
  * that can post and trade — it simply has no checkmark yet, and a client that
  * renders one off the mere presence of this object would be claiming a review
@@ -213,17 +213,26 @@ export async function resolveActingIdentity(
 export async function activeOrgsFor(
   db: Pick<PrismaClient, "organizationMember">,
   userId: string,
-): Promise<{ id: string; name: string; logoUrl: string | null; role: OrgMemberRole; verified: boolean }[]> {
+): Promise<{
+  id: string
+  /** The backing User row -- what GET /api/v1/profile/[id] takes, for "view my shop". */
+  orgUserId: string
+  name: string
+  logoUrl: string | null
+  role: OrgMemberRole
+  verified: boolean
+}[]> {
   const rows = await db.organizationMember.findMany({
     where: { userId, status: "ACTIVE" },
     select: {
       role: true,
-      organization: { select: ORG_PUBLIC_SELECT },
+      organization: { select: { ...ORG_PUBLIC_SELECT, orgUserId: true } },
     },
     orderBy: { joinedAt: "asc" },
   })
   return rows.map((r) => ({
     id: r.organization.id,
+    orgUserId: r.organization.orgUserId,
     name: r.organization.name,
     logoUrl: r.organization.logoUrl,
     role: r.role as OrgMemberRole,
@@ -261,6 +270,8 @@ export interface CreateOrganizationInput {
   /** The uploaded DTI/SEC/barangay permit. Destroyed when a decision is made. */
   businessDocUrl?: string | null
   businessDocPublicId?: string | null
+  /** As typed. Stored and shown to the reviewer; never checked against DTI. */
+  dtiRegistrationNumber?: string | null
 }
 
 /**
@@ -324,6 +335,7 @@ export async function createOrganization(
         businessCategory: input.businessCategory as never,
         businessDocUrl: input.businessDocUrl ?? null,
         businessDocPublicId: input.businessDocPublicId ?? null,
+        dtiRegistrationNumber: input.dtiRegistrationNumber ?? null,
         // PENDING by default. The org can post and trade while it waits; what
         // it does not have yet is the checkmark.
         members: {

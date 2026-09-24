@@ -24,6 +24,12 @@ export const revalidate = 0
  *   1  is this a real DTI/SEC registration or barangay permit?
  *   2  is it readable and current?
  *   3  does the business name on it match the name on Baylo?
+ *   4  does the registration number on it match the one the applicant typed?
+ *
+ * The typed DTI number sits DIRECTLY ABOVE the document, not in the side card,
+ * because question 4 is a character-by-character comparison and the reviewer
+ * should not have to move their eyes across the page to make it. It is never
+ * checked against any DTI registry; this comparison is the whole check.
  *
  * The listing count is here and is not decoration: an organisation applying for
  * a badge with forty listings already up is a different risk from one applying
@@ -87,6 +93,7 @@ export default async function OrganizationReviewPage({ params }: Props) {
       name: true,
       logoUrl: true,
       businessCategory: true,
+      dtiRegistrationNumber: true,
       verificationStatus: true,
       rejectionReason: true,
       businessDocPublicId: true,
@@ -150,6 +157,38 @@ export default async function OrganizationReviewPage({ params }: Props) {
         <div style={card}>
           <p style={{ fontSize: 15, fontWeight: 800, marginBottom: 12 }}>Business document</p>
 
+          <div
+            style={{
+              display: "flex",
+              alignItems: "baseline",
+              gap: 10,
+              flexWrap: "wrap",
+              padding: "10px 12px",
+              marginBottom: 12,
+              borderRadius: 10,
+              background: "#f6f6f6",
+              border: "1px solid rgba(0,0,0,.08)",
+            }}
+          >
+            <span style={{ fontSize: 12, color: "#666" }}>DTI registration no. (as typed)</span>
+            {org.dtiRegistrationNumber ? (
+              <span
+                style={{
+                  fontSize: 16,
+                  fontWeight: 800,
+                  fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
+                  letterSpacing: ".04em",
+                }}
+              >
+                {org.dtiRegistrationNumber}
+              </span>
+            ) : (
+              <span style={{ fontSize: 13, color: "#b45309", fontWeight: 600 }}>
+                none on file — applied before the field existed
+              </span>
+            )}
+          </div>
+
           {documentUrl ? (
             <>
               {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -191,6 +230,7 @@ export default async function OrganizationReviewPage({ params }: Props) {
                 ] ?? org.businessCategory
               }
             />
+            <Field label="DTI registration no." value={org.dtiRegistrationNumber ?? "—"} />
             <Field label="Applied" value={org.createdAt.toLocaleString()} />
             <Field
               label="Owner"

@@ -79,6 +79,7 @@ export default async function OrganizationQueuePage({ searchParams }: Props) {
         id: true,
         name: true,
         businessCategory: true,
+        dtiRegistrationNumber: true,
         verificationStatus: true,
         rejectionReason: true,
         createdAt: true,
@@ -216,6 +217,12 @@ export default async function OrganizationQueuePage({ searchParams }: Props) {
                       r.businessCategory as keyof typeof BUSINESS_CATEGORY_LABEL
                     ] ?? r.businessCategory}
                     {owner ? ` · ${owner.name}` : " · no active owner"}
+                  </span>
+                  <span style={{ fontSize: 12, color: "#555", display: "block" }}>
+                    DTI no.{" "}
+                    <span style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontWeight: 700 }}>
+                      {r.dtiRegistrationNumber ?? "—"}
+                    </span>
                   </span>
                 </span>
 

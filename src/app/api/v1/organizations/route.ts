@@ -31,12 +31,32 @@ export const dynamic = "force-dynamic"
  *   429  the shared upload budget
  *   403  this account is itself an organisation's backing row
  *   409  already an owner of an organisation
- *   400  bad name / category / missing file / too large / not an image
+ *   400  bad name / category / DTI number / missing file / too large /
+ *        not an image
  *   ---- only now is anything uploaded ----
  */
 
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024
 const MAX_NAME = 120
+const MAX_DTI = 64
+
+/**
+ * The DTI registration number, as typed. SHAPE ONLY, deliberately loose.
+ *
+ * Nothing here asks DTI whether the number exists -- the reviewer compares it
+ * with the photographed document, and that comparison is the whole check. So
+ * this only refuses input that cannot be a registration number at all (empty,
+ * a paragraph, emoji) and keeps the separators people actually type. Internal
+ * whitespace is collapsed so "1234  567" and "1234 567" are one value in the
+ * admin queue.
+ */
+const DTI_PATTERN = /^[A-Za-z0-9][A-Za-z0-9 ./-]*$/
+
+function normaliseDti(raw: unknown): string | null {
+  const value = String(raw ?? "").trim().replace(/\s+/g, " ")
+  if (value.length < 3 || value.length > MAX_DTI) return null
+  return DTI_PATTERN.test(value) ? value : null
+}
 
 export const BUSINESS_CATEGORIES = [
   "SARI_SARI",
@@ -105,7 +125,7 @@ export async function GET() {
       value: v,
       label: BUSINESS_CATEGORY_LABEL[v],
     })),
-    limits: { maxNameLength: MAX_NAME, maxImageBytes: MAX_IMAGE_BYTES },
+    limits: { maxNameLength: MAX_NAME, maxImageBytes: MAX_IMAGE_BYTES, maxDtiLength: MAX_DTI },
   })
 }
 
@@ -150,7 +170,9 @@ export async function POST(req: NextRequest) {
   try {
     form = await req.formData()
   } catch {
-    return invalid("Send this as multipart/form-data with name, businessCategory and file.")
+    return invalid(
+      "Send this as multipart/form-data with name, businessCategory, dtiRegistrationNumber and file.",
+    )
   }
 
   const name = String(form.get("name") ?? "").trim()
@@ -161,6 +183,15 @@ export async function POST(req: NextRequest) {
   const categoryRaw = String(form.get("businessCategory") ?? "")
   if (!(BUSINESS_CATEGORIES as readonly string[]).includes(categoryRaw)) {
     return invalid(`"${categoryRaw}" is not a business category we accept.`)
+  }
+
+  // REQUIRED, and checked here with the other refusals so a bad number never
+  // costs an upload. See normaliseDti() for how little "valid" means.
+  const dtiRegistrationNumber = normaliseDti(form.get("dtiRegistrationNumber"))
+  if (!dtiRegistrationNumber) {
+    return invalid(
+      `Enter the DTI registration number shown on your certificate — letters, digits, spaces, "-", "/" or ".", up to ${MAX_DTI} characters.`,
+    )
   }
 
   const file = form.get("file")
@@ -211,6 +242,7 @@ export async function POST(req: NextRequest) {
       businessCategory: categoryRaw,
       businessDocUrl: document.url,
       businessDocPublicId: document.publicId,
+      dtiRegistrationNumber,
     })
   } catch (err) {
     await destroyOrgDocument(document.publicId)
