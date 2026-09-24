@@ -94,8 +94,8 @@ export default async function AdminQueuePage({ searchParams }: Props) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
       <div>
-        <h1 style={{ fontSize: 24, fontWeight: 800, letterSpacing: "-.02em" }}>Report queue</h1>
-        <p style={{ fontSize: 13, color: "#777", marginTop: 4 }}>
+        <h1 style={{ fontSize: 24, fontWeight: 800, letterSpacing: "-.02em", color: "var(--adm-text)" }}>Report queue</h1>
+        <p style={{ fontSize: 13, color: "var(--adm-text-secondary)", marginTop: 4 }}>
           {countBy.OPEN ?? 0} open · {countBy.REVIEWING ?? 0} in review ·{" "}
           {countBy.ACTIONED ?? 0} actioned · {countBy.DISMISSED ?? 0} dismissed
         </p>

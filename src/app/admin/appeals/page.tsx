@@ -43,8 +43,8 @@ export default async function AppealsPage({ searchParams }: Props) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
       <div>
-        <h1 style={{ fontSize: 24, fontWeight: 800, letterSpacing: "-.02em" }}>Appeals</h1>
-        <p style={{ fontSize: 13, color: "#777", marginTop: 4, maxWidth: "80ch", lineHeight: 1.6 }}>
+        <h1 style={{ fontSize: 24, fontWeight: 800, letterSpacing: "-.02em", color: "var(--adm-text)" }}>Appeals</h1>
+        <p style={{ fontSize: 13, color: "var(--adm-text-secondary)", marginTop: 4, maxWidth: "80ch", lineHeight: 1.6 }}>
           Owners appealing a value rejection or a takedown, in their own words. The listing
           stays hidden until this is answered. <strong>Uphold</strong> keeps the decision and
           closes the appeal for good; <strong>Overturn</strong> publishes the listing at the

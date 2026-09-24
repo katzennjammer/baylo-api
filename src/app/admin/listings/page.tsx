@@ -80,8 +80,8 @@ export default async function ListingsPage({ searchParams }: Props) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
       <div>
-        <h1 style={{ fontSize: 24, fontWeight: 800 }}>Listings</h1>
-        <p style={{ fontSize: 13, color: "#777", marginTop: 4 }}>
+        <h1 style={{ fontSize: 24, fontWeight: 800, color: "var(--adm-text)" }}>Listings</h1>
+        <p style={{ fontSize: 13, color: "var(--adm-text-secondary)", marginTop: 4 }}>
           Search listings, decide value reviews, and manage moderator takedowns without opening a report.
         </p>
       </div>

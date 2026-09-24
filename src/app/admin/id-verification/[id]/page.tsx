@@ -133,7 +133,7 @@ export default async function IdVerificationDetailPage({ params }: Props) {
       </Link>
 
       <div style={{ display: "flex", alignItems: "baseline", gap: 12, marginTop: 10 }}>
-        <h1 style={{ fontSize: 20, fontWeight: 800 }}>{row.user.name}</h1>
+        <h1 style={{ fontSize: 20, fontWeight: 800, color: "var(--adm-text)" }}>{row.user.name}</h1>
         <span
           style={{
             fontSize: 11,

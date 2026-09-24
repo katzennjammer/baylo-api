@@ -177,6 +177,21 @@ Reported across ID Verification, Review Queue, Appeals, Users, Listings, Safe-Zo
 - [ ] Re-check the four already-redesigned pages (`/admin/dashboard`, `/admin/reports`, `/admin/audit`, `/admin/access`) in both themes — confirm nothing regressed (their text should be completely unaffected, since it's all explicitly colored already).
 - [ ] Toggle back to light mode and confirm the seven unredesigned pages look exactly as they did before this fix (dark text was already correct there).
 
+## Bug fix, part 2: page titles going dark-on-dark (the flip side of the previous fix)
+
+Reported immediately after the previous fix shipped: "Appeals", "Achievements", etc. — the page title itself — went dark and hard to read in dark mode.
+
+**Root cause:** the previous fix (`.adm-main { color: #17201b }`) was correct for text sitting inside a still-white, hardcoded card (`background: "#fff"`), but every one of these pages' `<h1>` + description `<p>` is NOT inside a card — it's the loose page header rendered directly above the content, sitting straight on `.adm-shell`'s background. That background IS theme-reactive (`var(--adm-shell)`), so in dark mode it's dark — and now the title was *also* forced dark by the previous fix. Dark-on-dark. The previous fix over-corrected: it fixed white-card text but broke loose text that was never on a card in the first place.
+
+**Fix:** rather than another blanket CSS rule (which can't tell "sits on a card" from "sits on the shell" apart), gave each affected page's `<h1>` an explicit `color: var(--adm-text)` and its description `<p>` an explicit `color: var(--adm-text-secondary)` — the same explicit-color convention the four already-redesigned pages use, and the same reason it protects them from `.adm-main`'s fallback. Touched: `/admin` (report queue), `/admin/appeals`, `/admin/users`, `/admin/listings`, `/admin/hubs`, `/admin/id-verification` (list + detail), `/admin/anomalies` (review queue), `/admin/achievements`. Verified each one's `<h1>` first: pages where a title *was* correctly inside a white card (e.g. the panel headers inside `/admin/anomalies`'s "Values waiting for review" card, `/admin/reports/[id]`'s report-detail `<h1>`) were left untouched, since those are already correctly legible via the previous fix.
+
+**Working-tree note:** this session's shared working tree has substantial unrelated uncommitted work from other activity (a premium-achievement criterion, quest/prisma changes). One of the nine files touched here (`achievements/page.tsx`) had an unrelated line already sitting in it; staged only my own hunk via `git add -p`, confirmed via `git diff --cached` before committing, left the other line as it was.
+
+**Manual test steps:**
+- [ ] Toggle dark mode. Confirm every page title ("Report queue", "Appeals", "Users", "Listings", "Safe-Zone hubs", "ID verification", "Review queue", "Achievements", and an ID-verification detail page's applicant name) is clearly legible against the dark shell background.
+- [ ] Confirm row/card content on those same pages (the white-card rows fixed by the previous commit) is STILL legible too -- this fix must not have regressed that.
+- [ ] Toggle back to light mode -- everything should look exactly as it did before both dark-mode fixes.
+
 ## Baseline (recorded before any redesign changes)
 
 - `npx tsc --noEmit`: fails, but only on pre-existing errors in `scripts/seed-demo-appeal.ts`, `scripts/verify-id-verification.ts`, `scripts/verify-moderation.ts` (Role union type mismatches — `"SUPER_ADMIN"`/`"MODERATOR"` not in the current `Role` enum). None touch `src/app/admin` or `src/components/admin`.

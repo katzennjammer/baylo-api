@@ -99,13 +99,13 @@ export default async function IdVerificationQueuePage({ searchParams }: Props) {
   return (
     <div>
       <div style={{ display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
-        <h1 style={{ fontSize: 20, fontWeight: 800 }}>ID verification</h1>
-        <span style={{ fontSize: 13, color: "#888" }}>
+        <h1 style={{ fontSize: 20, fontWeight: 800, color: "var(--adm-text)" }}>ID verification</h1>
+        <span style={{ fontSize: 13, color: "var(--adm-text-muted)" }}>
           {countFor("PENDING")} waiting · oldest first
         </span>
       </div>
 
-      <p style={{ fontSize: 13, color: "#666", marginTop: 6, maxWidth: 760 }}>
+      <p style={{ fontSize: 13, color: "var(--adm-text-secondary)", marginTop: 6, maxWidth: 760 }}>
         Approving unlocks posting and proposing deferred agreements for that account. Either
         decision destroys the uploaded photo and writes an audit row naming you.
       </p>

@@ -111,8 +111,8 @@ export default async function ReviewQueuePage() {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
       <div>
-        <h1 style={{ fontSize: 24, fontWeight: 800, letterSpacing: "-.02em" }}>Review queue</h1>
-        <p style={{ fontSize: 13, color: "#777", marginTop: 4, maxWidth: "70ch", lineHeight: 1.6 }}>
+        <h1 style={{ fontSize: 24, fontWeight: 800, letterSpacing: "-.02em", color: "var(--adm-text)" }}>Review queue</h1>
+        <p style={{ fontSize: 13, color: "var(--adm-text-secondary)", marginTop: 4, maxWidth: "70ch", lineHeight: 1.6 }}>
           Signals the system already records. Neither is misconduct on its own — both are
           worth a human&apos;s eye. Acting on one means opening the relevant report or user,
           so that an audit row gets written with a reason.
