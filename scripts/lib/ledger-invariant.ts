@@ -38,6 +38,8 @@ export const ISSUANCE_TYPES = [
   "TASK_REWARD",
   "TRADE_REWARD",
   "TRADE_REWARD_REVERSAL",
+  "QUEST_REWARD",
+  "TIER_DAILY_GRANT",
 ] as const
 
 /** The fee triple. HOLD is negative; RELEASE and PAID positive; live holds net negative. */
