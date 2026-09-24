@@ -43,6 +43,7 @@ const CRITERION_LABEL: Record<string, string> = {
   SAFEZONE_MEETUPS: "Safe-Zone meetups",
   REPORTS_FILED: "Reports filed",
   BRIDGE_COMPLETED: "Trades with a bridge fee paid",
+  PREMIUM_SUBSCRIBER: "Premium subscriber",
 }
 
 function describeCriterion(criterion: string, threshold: number): string {

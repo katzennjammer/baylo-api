@@ -1,6 +1,7 @@
 import type { Prisma, PrismaClient, AchievementCriterion } from "@/generated/prisma/client"
 import prisma from "@/lib/prisma"
 import { isIdVerified } from "@/lib/id-verification"
+import { isPremium, isVip } from "@/lib/premium"
 
 /**
  * The achievements engine.
@@ -81,6 +82,11 @@ interface Activity {
   safeZoneMeetups: number
   reportsFiled: number
   bridgesCompleted: number
+  /** isPremium(premiumUntil) OR isVip(vipUntil) AT EVALUATION TIME. Once this
+   *  grants PREMIUM_SUBSCRIBER, the badge stays -- see the enum comment on
+   *  AchievementCriterion.PREMIUM_SUBSCRIBER for why that needs no special
+   *  case here. */
+  premiumSubscriber: boolean
 }
 
 /**
@@ -100,7 +106,10 @@ async function readActivity(db: Db, userId: string): Promise<Activity | null> {
     await Promise.all([
       db.user.findUnique({
         where: { id: userId },
-        select: { isVerified: true, avatar: true, bio: true, location: true, lifetimeLeaves: true },
+        select: {
+          isVerified: true, avatar: true, bio: true, location: true, lifetimeLeaves: true,
+          premiumUntil: true, vipUntil: true,
+        },
       }),
       db.item.count({ where: { userId } }),
       db.tradeRequest.count({
@@ -136,6 +145,7 @@ async function readActivity(db: Db, userId: string): Promise<Activity | null> {
     safeZoneMeetups,
     reportsFiled,
     bridgesCompleted,
+    premiumSubscriber: isPremium(user.premiumUntil) || isVip(user.vipUntil),
   }
 }
 
@@ -170,6 +180,8 @@ export function progressFor(criterion: AchievementCriterion, activity: Activity)
       return activity.reportsFiled
     case "BRIDGE_COMPLETED":
       return activity.bridgesCompleted
+    case "PREMIUM_SUBSCRIBER":
+      return activity.premiumSubscriber ? 1 : 0
   }
 }
 

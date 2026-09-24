@@ -21,8 +21,8 @@ export async function GET(_req: NextRequest) {
 
   const now = new Date()
   const quests = await reconcileQuests(session.user.id, now)
-  const dayStart = dayStartUtc(now)
-  const resetsAt = new Date(dayStart.getTime() + 24 * 60 * 60 * 1000)
+  const periodStart = dayStartUtc(now)
+  const resetsAt = new Date(periodStart.getTime() + 24 * 60 * 60 * 1000)
 
-  return ok({ quests, dayStart: dayStart.toISOString(), resetsAt: resetsAt.toISOString() })
+  return ok({ quests, periodStart: periodStart.toISOString(), resetsAt: resetsAt.toISOString() })
 }
