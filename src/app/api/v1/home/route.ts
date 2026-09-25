@@ -13,7 +13,7 @@ import { decodeCursor, encodeCursor, olderThan, paginate } from "@/lib/v1/cursor
 import { V1_ITEM_SELECT, V1_ITEM_OWNER_SELECT, v1ItemStatsSelect, v1Item, type V1ItemRow } from "@/lib/v1/item"
 import { categoryLabel, categoryHashtag, type Category } from "@/lib/v1/taxonomy"
 import { sharedCategories, matchReason } from "@/lib/category-match"
-import { notAnOrgWhere } from "@/lib/organizations"
+import { ORG_CONTEXT_HEADER, notAnOrgWhere, resolveActingIdentity } from "@/lib/organizations"
 import { expirePerishableItems } from "@/lib/perishable"
 
 export const dynamic = "force-dynamic"
@@ -80,6 +80,27 @@ export async function GET(req: NextRequest) {
     },
   })
   if (!viewer) return unauthenticated()
+
+  // ── 1b ── who the header's balance belongs to (25 Sep 2026).
+  //
+  // Acting as a shop, the pill shows the SHOP's Leaves: that is the balance a
+  // boost of a shop listing is charged to (see /api/v1/items/[id]/boost), so it
+  // is the number the person is spending from. `viewer.leaves` stays the
+  // PERSON's -- offers, trades and the rank ladder are always theirs.
+  //
+  // NEVER A 403. POST /api/items refuses a dead org header; the home feed must
+  // not, or being removed from a shop would blank the app. A refused or absent
+  // membership is `acting: null`, and the pill falls back to the person, which
+  // is also who the server would charge.
+  const actingResult = await resolveActingIdentity(prisma, viewerId, req.headers.get(ORG_CONTEXT_HEADER))
+  const actingAs = actingResult.ok && actingResult.acting.organization ? actingResult.acting : null
+  const shopRow = actingAs
+    ? await prisma.user.findUnique({ where: { id: actingAs.actingUserId }, select: { leaves: true } })
+    : null
+  const acting =
+    actingAs?.organization && shopRow
+      ? { organizationId: actingAs.organization.id, name: actingAs.organization.name, leaves: shopRow.leaves }
+      : null
 
   // ── 2 ── the feed: everything available, newest first, keyset paginated.
   //
@@ -242,6 +263,7 @@ export async function GET(req: NextRequest) {
         totalTrades: viewer.totalTrades,
         isVerified: viewer.isVerified,
       },
+      acting,
       unread: {
         messages: unreadMessages,
         messageConversations: unreadMessageConversations.length,

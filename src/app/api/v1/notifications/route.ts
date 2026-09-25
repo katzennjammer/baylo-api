@@ -47,7 +47,13 @@ const querySchema = z.strictObject({
   unread: z.enum(["0", "1"]).optional(),
 })
 
-const ACTOR_BRIEF = { id: true, name: true, avatar: true } as const
+/**
+ * `isOrgAccount` rides along so the client can draw a shop without a logo as a
+ * shop. An org's backing row carries its logo in `avatar` (see the PATCH route
+ * for organisations), and with no logo the only other honest fallback is a
+ * person silhouette -- which is the wrong thing to put next to a business.
+ */
+const ACTOR_BRIEF = { id: true, name: true, avatar: true, isOrgAccount: true } as const
 
 function firstImage(raw: string | null | undefined): string | null {
   if (!raw) return null
@@ -102,6 +108,38 @@ export async function GET(req: NextRequest) {
     for (const item of items) itemImages.set(item.id, firstImage(item.images))
   }
 
+  // ── The organisation a row is ABOUT, for the two org tokens ──────────────────
+  //
+  // An ORG_INVITE's actor is the owner who sent it -- a person, often with no
+  // photo -- and an organisation-review row has no actor at all. Both rendered
+  // as a blank grey tile while every other kind of notification had a face or
+  // a photo. The subject of both is a shop, so the shop's logo is the picture.
+  //
+  // 'org_invite' carries an OrganizationMember id, 'organization' an
+  // Organization id. A membership that is gone (withdrawn, answered) simply
+  // has no entry; its notification is deleted with it anyway.
+  const memberIds = rows
+    .filter((row) => row.entityType === "org_invite" && row.entityId)
+    .map((row) => row.entityId as string)
+  const orgIds = rows
+    .filter((row) => row.entityType === "organization" && row.entityId)
+    .map((row) => row.entityId as string)
+  const orgBriefs = new Map<string, { id: string; name: string; logoUrl: string | null }>()
+  if (memberIds.length > 0) {
+    const members = await prisma.organizationMember.findMany({
+      where: { id: { in: memberIds } },
+      select: { id: true, organization: { select: { id: true, name: true, logoUrl: true } } },
+    })
+    for (const m of members) orgBriefs.set(`org_invite:${m.id}`, m.organization)
+  }
+  if (orgIds.length > 0) {
+    const orgs = await prisma.organization.findMany({
+      where: { id: { in: orgIds } },
+      select: { id: true, name: true, logoUrl: true },
+    })
+    for (const o of orgs) orgBriefs.set(`organization:${o.id}`, o)
+  }
+
   const { page, nextCursor } = paginate(rows, limit, (r) => encodeCursor(r.createdAt, r.id))
 
   // The unread total, and NOT `page.filter(r => !r.read).length`. The screen
@@ -122,7 +160,10 @@ export async function GET(req: NextRequest) {
         entityType: n.entityType,
         entityId: n.entityId,
         itemImage: n.entityType === "item" && n.entityId ? itemImages.get(n.entityId) ?? null : null,
-        actor: n.actor ? { id: n.actor.id, name: n.actor.name, avatar: n.actor.avatar } : null,
+        org: (n.entityId && orgBriefs.get(`${n.entityType}:${n.entityId}`)) || null,
+        actor: n.actor
+          ? { id: n.actor.id, name: n.actor.name, avatar: n.actor.avatar, isOrg: n.actor.isOrgAccount }
+          : null,
       })),
       unreadCount,
     },

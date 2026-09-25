@@ -341,12 +341,28 @@ export async function activeOrgsFor(
    * phone reads it to stop somebody before the post wizard rather than after.
    */
   postingRefusal: { code: OrgPostingRefusal["code"]; message: string } | null
+  /**
+   * The SHOP's Leaf balance -- its backing row's, never the person's. Here and
+   * nowhere public: this list is only ever the caller's own ACTIVE
+   * memberships, so the figure reaches exactly the owners and staff who can
+   * spend it (the verified-MSME welcome grant lands here, and a listing posted
+   * as the shop is boosted from here). Added 25 Sep 2026 because nothing in
+   * the app showed it, and a paid grant read as a missing one.
+   */
+  leaves: number
 }[]> {
   const rows = await db.organizationMember.findMany({
     where: { userId, status: "ACTIVE" },
     select: {
       role: true,
-      organization: { select: { ...ORG_PUBLIC_SELECT, orgUserId: true, rejectionReason: true } },
+      organization: {
+        select: {
+          ...ORG_PUBLIC_SELECT,
+          orgUserId: true,
+          rejectionReason: true,
+          orgUser: { select: { leaves: true } },
+        },
+      },
     },
     orderBy: { joinedAt: "asc" },
   })
@@ -365,6 +381,7 @@ export async function activeOrgsFor(
       )
       return refusal ? { code: refusal.code, message: refusal.message } : null
     })(),
+    leaves: r.organization.orgUser.leaves,
   }))
 }
 

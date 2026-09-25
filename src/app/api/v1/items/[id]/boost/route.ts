@@ -2,7 +2,8 @@ import { NextRequest } from "next/server"
 import { z } from "zod"
 import { resolveSession } from "@/lib/api-auth"
 import prisma from "@/lib/prisma"
-import { ok, unauthenticated, notFound, conflict, invalid } from "@/lib/v1/envelope"
+import { ORG_CONTEXT_HEADER, resolveActingIdentity } from "@/lib/organizations"
+import { ok, unauthenticated, notFound, conflict, invalid, forbidden } from "@/lib/v1/envelope"
 import { parseQuery } from "@/lib/v1/query"
 import { enforceRateLimit } from "@/lib/rate-limit-config"
 import { expireStaleOffers } from "@/lib/offers"
@@ -17,13 +18,26 @@ export const dynamic = "force-dynamic"
  *
  * ── WHO PAYS ────────────────────────────────────────────────────────────────
  *
- * The signed-in person, for their own listing, from their own balance -- the
- * same `item.userId === session.user.id` test the detail route's `isOwner`
- * and the edit/delete routes make. Deliberately NOT the org acting identity:
- * the Boost button is drawn off `viewer.isOwner`, and a route that resolved
- * ownership differently from the flag that draws its button would refuse
- * taps the screen invited. Boosting an organisation's listings from the org's
- * balance is a separate decision, to be made with edit and delete.
+ * The ACTING identity, for its own listing, from its own balance: the person
+ * themselves, or -- when X-Baylo-Org names an organisation they are an ACTIVE
+ * member of -- the org's backing row. The same resolveActingIdentity() call
+ * POST /api/items makes, so a listing posted as the shop is boosted as the
+ * shop, from the shop's balance (which is where the verified-MSME welcome
+ * grant lands).
+ *
+ * Changed 25 Sep 2026. This used to be `session.user.id` only, and the Post
+ * flow's "Boost this listing after posting" box, ticked while acting as an
+ * org, charged the person for a listing whose userId was the org's: the
+ * ownership test missed and the owner was told "That listing is no longer
+ * available" about a listing they had posted a second earlier.
+ *
+ * THE LISTING PICKS THE PAYER, NOT THE HEADER ALONE. The header rides every
+ * request, but the item screen and My Listings are still the PERSON's (they
+ * draw Boost off `viewer.isOwner`, which ignores the header), so a person
+ * acting as a shop can boost their own listing from there. The org pays only
+ * when the listing is the acting org's; anything else is charged to the
+ * person, exactly as before. The rate limit stays on the human, like every
+ * limiter.
  *
  * NOT IDEMPOTENT, AND DELIBERATELY NOT A 200 ON A REPEAT. A second boost on a
  * listing that is already featured is a 409 carrying `featuredUntil`, so a
@@ -39,14 +53,29 @@ export async function POST(
 ) {
   const session = await resolveSession()
   if (!session?.user?.id) return unauthenticated()
-  const ownerId = session.user.id
+  const humanId = session.user.id
   const { id } = await params
 
   const parsed = parseQuery(req, querySchema)
   if (!parsed.ok) return parsed.response
 
-  const limited = enforceRateLimit("boost", ownerId)
+  const limited = enforceRateLimit("boost", humanId)
   if (limited) return limited
+
+  const acting = await resolveActingIdentity(prisma, humanId, req.headers.get(ORG_CONTEXT_HEADER))
+  if (!acting.ok) {
+    return forbidden(
+      acting.reason === "membership_pending"
+        ? "Accept the invitation before acting for this organisation"
+        : "You are not a member of that organisation",
+    )
+  }
+  const { actingUserId } = acting.acting
+  const listing =
+    actingUserId !== humanId
+      ? await prisma.item.findUnique({ where: { id }, select: { userId: true } })
+      : null
+  const ownerId = listing?.userId === actingUserId ? actingUserId : humanId
 
   // availableLeaves() inside boostItem() reads PENDING offers, and an offer
   // past its window is PENDING until something moves it. See the note there.
