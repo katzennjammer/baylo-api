@@ -276,6 +276,11 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
         ...valuationData,
         ...(body.images !== undefined && { images: JSON.stringify(body.images) }),
         ...(body.wantedItems !== undefined && { wantedItems: body.wantedItems }),
+        // updateItemSchema has accepted this since it was added, and until now
+        // it was validated and then dropped here -- so an edit to what the
+        // owner wants left the matcher reading the ORIGINAL categories forever.
+        // Restated in full, like hubIds: `[]` clears it.
+        ...(body.lookingForCategories !== undefined && { lookingForCategories: body.lookingForCategories }),
         ...(hashesTouched && { imageHash: leadImageHash(hashRows) }),
         ...(pickupTouched
           ? hasPickup
