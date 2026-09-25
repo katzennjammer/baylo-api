@@ -4,11 +4,20 @@ import prisma from "@/lib/prisma"
 import pusher from "@/lib/pusher"
 import { createMessageSchema, parseBody } from "@/lib/validation"
 import { blockDirection, enforceNotBlocked } from "@/lib/blocking"
+import { legacyOrgRefusal, resolveInbox } from "@/lib/inbox"
+
+// Every handler here reads and writes as `inboxId`: the person, or -- acting
+// as a shop -- the shop's backing row. See @/lib/inbox for why a shop's inbox
+// is shared by its members and why a dead context is a 403 and not a fallback.
 
 export async function GET(req: NextRequest) {
   try {
     const session = await resolveSession()
     if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
+
+    const inbox = await resolveInbox(session.user.id, req.headers)
+    if (!inbox.ok) return legacyOrgRefusal(inbox.message)
+    const { inboxId } = inbox
 
     const partnerId = new URL(req.url).searchParams.get("partnerId")
     if (!partnerId) return NextResponse.json({ error: "partnerId required" }, { status: 400 })
@@ -21,7 +30,7 @@ export async function GET(req: NextRequest) {
     // Note the `read` flag is NOT flipped below on this path: marking a blocked
     // thread as read would let the block silently clear the other party's
     // unread badge, which is state the blocker no longer gets to touch.
-    const direction = await blockDirection(session.user.id, partnerId)
+    const direction = await blockDirection(inboxId, partnerId)
     if (direction !== "none") {
       return NextResponse.json(
         {
@@ -38,7 +47,7 @@ export async function GET(req: NextRequest) {
     }
 
     const hidden = await prisma.conversationHide.findUnique({
-      where: { viewerId_partnerId: { viewerId: session.user.id, partnerId } },
+      where: { viewerId_partnerId: { viewerId: inboxId, partnerId } },
       select: { id: true },
     })
     if (hidden) return NextResponse.json([])
@@ -46,15 +55,15 @@ export async function GET(req: NextRequest) {
     const messages = await prisma.message.findMany({
       where: {
         OR: [
-          { senderId: session.user.id, receiverId: partnerId },
-          { senderId: partnerId, receiverId: session.user.id },
+          { senderId: inboxId, receiverId: partnerId },
+          { senderId: partnerId, receiverId: inboxId },
         ],
       },
       orderBy: { createdAt: "asc" },
     })
 
     await prisma.message.updateMany({
-      where: { senderId: partnerId, receiverId: session.user.id, read: false },
+      where: { senderId: partnerId, receiverId: inboxId, read: false },
       data: { read: true },
     })
 
@@ -69,18 +78,23 @@ export async function DELETE(req: NextRequest) {
     const session = await resolveSession()
     if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
+    const inbox = await resolveInbox(session.user.id, req.headers)
+    if (!inbox.ok) return legacyOrgRefusal(inbox.message)
+    const { inboxId } = inbox
+
     const partnerId = new URL(req.url).searchParams.get("partnerId")
     if (!partnerId) return NextResponse.json({ error: "partnerId required" }, { status: 400 })
 
+    // Acting as a shop this hides the thread for every member: one inbox.
     const hidden = await prisma.conversationHide.upsert({
-      where: { viewerId_partnerId: { viewerId: session.user.id, partnerId } },
-      create: { viewerId: session.user.id, partnerId },
+      where: { viewerId_partnerId: { viewerId: inboxId, partnerId } },
+      create: { viewerId: inboxId, partnerId },
       update: { hiddenAt: new Date() },
       select: { hiddenAt: true },
     })
 
     await prisma.notification.deleteMany({
-      where: { userId: session.user.id, actorId: partnerId, type: "NEW_MESSAGE" },
+      where: { userId: inboxId, actorId: partnerId, type: "NEW_MESSAGE" },
     })
 
     return NextResponse.json({ ok: true, hiddenAt: hidden.hiddenAt.toISOString() })
@@ -94,9 +108,21 @@ export async function POST(req: NextRequest) {
     const session = await resolveSession()
     if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
+    const inbox = await resolveInbox(session.user.id, req.headers)
+    if (!inbox.ok) return legacyOrgRefusal(inbox.message)
+    // The AUTHOR on the wire: the shop's backing row when acting as it, so the
+    // customer sees the shop's name and logo rather than the staff member's.
+    const senderId = inbox.inboxId
+
     const parsed = await parseBody(req, createMessageSchema)
     if (!parsed.ok) return parsed.response
     const { receiverId, content, tradeId } = parsed.data
+
+    // Reachable only as a shop: a staff member acting as the shop and opening
+    // the shop's own storefront. A thread with oneself has no other side.
+    if (receiverId === senderId) {
+      return NextResponse.json({ error: "You cannot message yourself" }, { status: 400 })
+    }
 
     // Blocked users cannot message each other -- in either direction, and
     // regardless of whether a trade between them is in progress. See the note
@@ -104,7 +130,7 @@ export async function POST(req: NextRequest) {
     // while the channel closes: the block shuts new contact, it does not rewind
     // an obligation, and a block that stayed porous "just for this trade" would
     // reopen exactly the channel the user blocked to close.
-    const blocked = await enforceNotBlocked(session.user.id, receiverId, "message this person")
+    const blocked = await enforceNotBlocked(senderId, receiverId, "message this person")
     if (blocked) return blocked
 
     const message = await prisma.$transaction(async (tx) => {
@@ -114,14 +140,14 @@ export async function POST(req: NextRequest) {
       await tx.conversationHide.deleteMany({
         where: {
           OR: [
-            { viewerId: session.user.id, partnerId: receiverId },
-            { viewerId: receiverId, partnerId: session.user.id },
+            { viewerId: senderId, partnerId: receiverId },
+            { viewerId: receiverId, partnerId: senderId },
           ],
         },
       })
       return tx.message.create({
         data: {
-          senderId: session.user.id,
+          senderId,
           receiverId,
           content,
           tradeId: tradeId || null,
@@ -130,17 +156,23 @@ export async function POST(req: NextRequest) {
     })
 
     await prisma.notification.deleteMany({
-      where: { userId: receiverId, actorId: session.user.id, type: "NEW_MESSAGE", read: false },
+      where: { userId: receiverId, actorId: senderId, type: "NEW_MESSAGE", read: false },
     })
     await prisma.notification.create({
       data: {
         userId: receiverId,
         type: "NEW_MESSAGE",
         message: "sent you a message",
-        link: `/dashboard/messages?partner=${session.user.id}`,
-        actorId: session.user.id,
+        link: `/dashboard/messages?partner=${senderId}`,
+        actorId: senderId,
       },
     })
+
+    // The backing row carries the shop's name and its logo in `avatar`; the
+    // session carries the person's. Only the shop case costs a read.
+    const shop = inbox.acting.organization
+      ? await prisma.user.findUnique({ where: { id: senderId }, select: { name: true, avatar: true } })
+      : null
 
     // Push to receiver's private channel
     const payload = {
@@ -149,8 +181,8 @@ export async function POST(req: NextRequest) {
       senderId: message.senderId,
       receiverId: message.receiverId,
       createdAt: message.createdAt.toISOString(),
-      senderName: session.user.name ?? "",
-      senderAvatar: session.user.image ?? null,
+      senderName: shop ? shop.name ?? inbox.acting.organization?.name ?? "" : session.user.name ?? "",
+      senderAvatar: shop ? shop.avatar ?? null : session.user.image ?? null,
     }
     pusher.trigger(`private-user-${receiverId}`, "new-message", payload).catch(() => {})
 

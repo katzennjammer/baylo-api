@@ -2,7 +2,8 @@ import { NextRequest } from "next/server"
 import { z } from "zod"
 import { resolveSession } from "@/lib/api-auth"
 import prisma from "@/lib/prisma"
-import { ok, unauthenticated, invalid } from "@/lib/v1/envelope"
+import { ok, fail, unauthenticated, invalid } from "@/lib/v1/envelope"
+import { resolveInbox, shopBellWhere } from "@/lib/inbox"
 import { parseQuery, paginationShape } from "@/lib/v1/query"
 import { decodeCursor, encodeCursor, paginate, olderThan } from "@/lib/v1/cursor"
 
@@ -68,7 +69,16 @@ function firstImage(raw: string | null | undefined): string | null {
 export async function GET(req: NextRequest) {
   const session = await resolveSession()
   if (!session?.user?.id) return unauthenticated()
-  const viewerId = session.user.id
+
+  // Acting as a shop, the bell is the SHOP's: its NEW_MESSAGE rows, and
+  // anything else addressed to the backing row. Same inbox as Messages, and the
+  // same count /api/v1/home badges. See @/lib/inbox.
+  const inbox = await resolveInbox(session.user.id, req.headers)
+  if (!inbox.ok) return fail("ORG_CONTEXT_REFUSED", inbox.message)
+  const viewerId = inbox.inboxId
+  // A shop's bell lists only the types that work as the shop. The same clause
+  // gates the count below and /api/v1/home's badge, so they agree.
+  const bellFilter = inbox.acting.organization ? [shopBellWhere()] : []
 
   const parsed = parseQuery(req, querySchema)
   if (!parsed.ok) return parsed.response
@@ -81,6 +91,7 @@ export async function GET(req: NextRequest) {
       userId: viewerId,
       ...(parsed.data.unread === "1" ? { read: false } : {}),
       ...(olderThan(cursor) ?? {}),
+      AND: bellFilter,
     },
     select: {
       id: true,
@@ -148,7 +159,7 @@ export async function GET(req: NextRequest) {
   // shows a page; the count has to describe the whole list or it disagrees with
   // the bell the moment there are more unread rows than fit on one page.
   const unreadCount = await prisma.notification.count({
-    where: { userId: viewerId, read: false },
+    where: { userId: viewerId, read: false, AND: bellFilter },
   })
 
   return ok(

@@ -14,6 +14,7 @@ import { V1_ITEM_SELECT, V1_ITEM_OWNER_SELECT, v1ItemStatsSelect, v1Item, type V
 import { categoryLabel, categoryHashtag, type Category } from "@/lib/v1/taxonomy"
 import { sharedCategories, matchReason } from "@/lib/category-match"
 import { ORG_CONTEXT_HEADER, notAnOrgWhere, resolveActingIdentity } from "@/lib/organizations"
+import { shopBellWhere } from "@/lib/inbox"
 import { expirePerishableItems } from "@/lib/perishable"
 
 export const dynamic = "force-dynamic"
@@ -99,8 +100,19 @@ export async function GET(req: NextRequest) {
     : null
   const acting =
     actingAs?.organization && shopRow
-      ? { organizationId: actingAs.organization.id, name: actingAs.organization.name, leaves: shopRow.leaves }
+      ? {
+          organizationId: actingAs.organization.id,
+          name: actingAs.organization.name,
+          leaves: shopRow.leaves,
+          // The shop's backing row: its inbox, and the realtime channel the
+          // header listens on while acting as it. See @/lib/inbox.
+          orgUserId: actingAs.actingUserId,
+        }
       : null
+  // Whose unread counts the header badges: the shop's while acting as it,
+  // with the same fallback as the pill -- a refused context counts the person.
+  // Follow requests stay the person's; they are not part of the inbox.
+  const inboxId = acting ? acting.orgUserId : viewerId
 
   // ── 2 ── the feed: everything available, newest first, keyset paginated.
   //
@@ -216,15 +228,16 @@ export async function GET(req: NextRequest) {
 
   // ── 7, 8, 9 ── the unread counts, one call each.
   const unreadMessages = await prisma.message.count({
-    where: { receiverId: viewerId, read: false },
+    where: { receiverId: inboxId, read: false },
   })
   const unreadMessageConversations = await prisma.message.findMany({
-    where: { receiverId: viewerId, read: false },
+    where: { receiverId: inboxId, read: false },
     distinct: ["senderId"],
     select: { senderId: true },
   })
+  // A shop's bell counts only the types it lists. See shopBellWhere().
   const unreadNotifications = await prisma.notification.count({
-    where: { userId: viewerId, read: false },
+    where: { userId: inboxId, read: false, AND: acting ? [shopBellWhere()] : [] },
   })
   const followRequests = await prisma.follow.count({
     where: { followeeId: viewerId, status: "PENDING" },
