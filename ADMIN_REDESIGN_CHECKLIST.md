@@ -194,7 +194,7 @@ Reported immediately after the previous fix shipped: "Appeals", "Achievements", 
 
 ## Baseline (recorded before any redesign changes)
 
-- `npx tsc --noEmit`: fails, but only on pre-existing errors in `scripts/seed-demo-appeal.ts`, `scripts/verify-id-verification.ts`, `scripts/verify-moderation.ts` (Role union type mismatches — `"SUPER_ADMIN"`/`"MODERATOR"` not in the current `Role` enum). None touch `src/app/admin` or `src/components/admin`.
+- `npx tsc --noEmit`: fails, but only on pre-existing errors in `scripts/seed-demo-appeal.ts`, `scripts/verify-id-verification.ts`, `scripts/verify-moderation.ts` (Role union type mismatches — `"SUPER_ADMIN"`/`"MODERATOR"` not in the current `Role` enum). None touch `src/app/admin` or `src/components/admin`. **Resolved 25 Sep 2026:** 643a862 moved all three scripts to ADMIN-only, and `npx tsc --noEmit` is now clean.
 - `npx eslint src/app/admin src/components/admin`: 5 pre-existing errors, 1 warning, none introduced by this task:
   - `hubs/HubForm.tsx:230` — `setState` in effect (react-hooks/set-state-in-effect)
   - `hubs/HubLocationPicker.tsx:39,67` — ref mutation during render (react-hooks/refs)
