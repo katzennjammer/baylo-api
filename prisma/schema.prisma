@@ -1251,6 +1251,16 @@ enum NotificationType {
    * an invitation that no longer exists points at nothing.
    */
   ORG_INVITE
+
+  /**
+   * The recipient's perishable listing ran out of window unsold. Written only
+   * by `expirePerishableItems()`, in the same transaction as the expiry, so
+   * each listing is announced exactly once. No actor -- the clock did it.
+   * entityType "listing_review", entityId the expired Item's id: the owner's
+   * listing screen, whose expired state offers Relist (a NEW post prefilled
+   * from this one, never an edit of it).
+   */
+  LISTING_EXPIRED
 }
 
 enum FollowStatus {

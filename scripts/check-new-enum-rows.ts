@@ -33,7 +33,7 @@ import prisma from "@/lib/prisma"
  * Values the live database can hold that `main` CANNOT read.
  *
  * Empty since main took the schema-only commits (16 Sep, and again 25 Sep for
- * FEATURE_BOOST and ORG_INVITE). Add to it the moment a branch
+ * FEATURE_BOOST and ORG_INVITE, and again for LISTING_EXPIRED). Add to it the moment a branch
  * deploys an enum value main has not got, and empty it again when main does.
  */
 const MAIN_LACKS: readonly string[] = []
@@ -51,6 +51,8 @@ const CHECKS: { table: string; column: string; values: string[] }[] = [
   // 24-25 Sep 2026: featured boosts and staff-invite notifications.
   { table: "LeafTransaction", column: "type", values: ["FEATURE_BOOST"] },
   { table: "Notification", column: "type", values: ["ORG_INVITE"] },
+  // 25 Sep 2026: perishable expiry notices (20260925000002_listing_expired_notification).
+  { table: "Notification", column: "type", values: ["LISTING_EXPIRED"] },
 ]
 
 const COLUMNS: { table: string; column: string }[] = [

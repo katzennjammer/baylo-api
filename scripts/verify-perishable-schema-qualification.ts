@@ -158,6 +158,25 @@ async function main() {
     check("unscoped variant moves the remaining scratch row", unscoped === 1, `moved ${unscoped}`)
     const thirdAfter = await prisma.item.findUnique({ where: { id: third }, select: { status: true } })
     check("the third fixture is EXPIRED", thirdAfter?.status === "EXPIRED", `status is ${thirdAfter?.status}`)
+
+    // ── 3b ── the owner was told, once per expiry, in scratch (25 Sep 2026).
+    // The notice is written by the Prisma model API inside the sweep's
+    // transaction, so it lands where the adapter's schema says -- and a sweep
+    // that finds nothing AVAILABLE writes nothing.
+    const notices = await prisma.notification.findMany({
+      where: { userId, type: "LISTING_EXPIRED" },
+      select: { entityType: true, entityId: true },
+    })
+    check("one LISTING_EXPIRED notice per expired fixture", notices.length === 3, `found ${notices.length}`)
+    check(
+      "each notice points at its listing via listing_review",
+      [first, second, third].every((id) =>
+        notices.some((n) => n.entityType === "listing_review" && n.entityId === id),
+      ),
+    )
+    const again = await expirePerishableItems(prisma, { userId })
+    const noticesAgain = await prisma.notification.count({ where: { userId, type: "LISTING_EXPIRED" } })
+    check("a second sweep moves nothing and notifies nobody", again === 0 && noticesAgain === 3, `moved ${again}, notices ${noticesAgain}`)
   } finally {
     if (userId) await prisma.user.deleteMany({ where: { id: userId } })
   }
@@ -173,6 +192,11 @@ async function main() {
     `${before.perishable} -> ${after.perishable}`,
   )
   check("live EXPIRED count unchanged", after.expired === before.expired, `${before.expired} -> ${after.expired}`)
+  // `::text` because live may not have the enum value yet, and comparing an
+  // enum column to a label it lacks is an error rather than a zero.
+  const [liveNotices] = await prisma.$queryRaw<Array<{ n: bigint }>>`
+    SELECT COUNT(*) AS n FROM "public"."Notification" WHERE "type"::text = 'LISTING_EXPIRED'`
+  check("no LISTING_EXPIRED notice was written to live", Number(liveNotices.n) === 0, `${liveNotices.n} row(s)`)
 
   console.log(failures === 0 ? "\n  all checks passed\n" : `\n  ${failures} check(s) failed\n`)
   await prisma.$disconnect()

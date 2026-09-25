@@ -96,8 +96,10 @@ export async function GET(req: NextRequest) {
     take: limit + 1,
   })
 
+  // "listing_review" rows are about the recipient's own listing and carry no
+  // actor (an expiry, a takedown), so the listing's photo is their picture too.
   const itemIds = rows
-    .filter((row) => row.entityType === "item" && row.entityId)
+    .filter((row) => (row.entityType === "item" || row.entityType === "listing_review") && row.entityId)
     .map((row) => row.entityId as string)
   const itemImages = new Map<string, string | null>()
   if (itemIds.length > 0) {
@@ -159,7 +161,7 @@ export async function GET(req: NextRequest) {
         createdAt: n.createdAt.toISOString(),
         entityType: n.entityType,
         entityId: n.entityId,
-        itemImage: n.entityType === "item" && n.entityId ? itemImages.get(n.entityId) ?? null : null,
+        itemImage: n.entityId && (n.entityType === "item" || n.entityType === "listing_review") ? itemImages.get(n.entityId) ?? null : null,
         org: (n.entityId && orgBriefs.get(`${n.entityType}:${n.entityId}`)) || null,
         actor: n.actor
           ? { id: n.actor.id, name: n.actor.name, avatar: n.actor.avatar, isOrg: n.actor.isOrgAccount }

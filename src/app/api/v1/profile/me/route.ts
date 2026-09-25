@@ -26,6 +26,10 @@ const SHELF_STATUSES: ItemStatus[] = [
   "OWNED",
   "PENDING_REVIEW",
   "VALUE_REJECTED",
+  // A perishable whose window ran out. Kept on the owner's shelf, labelled, so
+  // the listing the LISTING_EXPIRED notice names is still there to relist from.
+  // Nobody else sees it: every other read filters on AVAILABLE.
+  "EXPIRED",
 ]
 
 export const dynamic = "force-dynamic"

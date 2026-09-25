@@ -128,7 +128,7 @@ type PerishableDb = Pick<PrismaClient, "item">
  * `search_path`. So `UPDATE "Item"` resolved against the connection's default
  * search_path, which is `public` -- THE LIVE DATABASE -- however the URL read.
  *
- * The three statements below are the only raw WRITER in `src/`, and they run
+ * The statements below are the only raw WRITER in `src/`, and they run
  * on /browse, /home and /profile/me, so this was not a background job quietly
  * missing its target: an acceptance harness on `scratch_x` was expiring live
  * listings and counting scratch ones. Proven by running one clause twice on one
@@ -188,6 +188,13 @@ function itemTable(): Prisma.Sql {
  * the UPDATE is conditional on `status = 'AVAILABLE'` so two concurrent sweeps
  * produce one expiry and one no-op — the same guard `expireStaleOffers()` uses.
  *
+ * ── THE OWNER IS TOLD, ONCE (25 Sep 2026) ───────────────────────────────────
+ *
+ * Every row this moves gets a LISTING_EXPIRED notice in the same transaction,
+ * so an expiry and its notice land together or not at all. The row itself is
+ * kept -- nothing on this path deletes -- and stays on the owner's shelf as
+ * "Expired"; the notice's Relist opens a NEW post prefilled from it.
+ *
  * ── WHAT IT DOES NOT TOUCH ──────────────────────────────────────────────────
  *
  * An item in IN_TRADE is in somebody's trade and its window has stopped
@@ -195,13 +202,125 @@ function itemTable(): Prisma.Sql {
  * an obligation by clock. Only AVAILABLE rows move.
  */
 export async function expirePerishableItems(
-  db: PerishableDb & { $executeRaw: PrismaClient["$executeRaw"] },
+  db: PerishableDb & Pick<PrismaClient, "$executeRaw" | "$queryRaw" | "$transaction">,
   scope: { userId?: string; itemId?: string } = {},
 ): Promise<number> {
-  // Scoped variants are separate statements rather than one interpolated
-  // string: `$executeRaw` is a tagged template and its safety comes from the
-  // parameters being parameters. Building the WHERE by concatenation is how
-  // that guarantee gets lost.
+  try {
+    return await db.$transaction(async (tx) => {
+      const moved = await expireReturning(tx, scope)
+      if (moved.length > 0) {
+        await tx.notification.createMany({ data: moved.map(expiryNotification) })
+      }
+      return moved.length
+    })
+  } catch (err) {
+    // ── THE NOTICE IS BEST-EFFORT; THE EXPIRY IS NOT ──────────────────────────
+    //
+    // This runs on /home, /browse and /profile/me. If the notice cannot be
+    // written -- most plausibly a database that has not yet taken
+    // 20260925000002_listing_expired_notification, the same case the ORG_INVITE
+    // writer allows for -- the transaction rolls the expiry back with it, and
+    // throwing from here would 500 the feed. So the sweep runs again WITHOUT
+    // the notice. Those rows lose their notification for good (the next sweep
+    // finds them EXPIRED, not AVAILABLE); yesterday's fish staying on sale is
+    // the worse failure of the two.
+    console.error("[perishable] expiry notice failed; expiring without it", err)
+    return expireSilently(db, scope)
+  }
+}
+
+/** One moved row: enough to address and word its notice. */
+interface ExpiredRow {
+  id: string
+  userId: string
+  title: string
+}
+
+/**
+ * The owner's notice for one expired listing.
+ *
+ * ── entityType "listing_review", NOT "item" ─────────────────────────────────
+ *
+ * "item" opens the listing with its comments sheet up (see the client's
+ * `notificationTarget()`), which is the wrong screen for "this stopped being
+ * on sale". "listing_review" is the owner-only "what happened to your listing"
+ * screen the value-review notices already open, and the expired state there is
+ * where Relist lives.
+ *
+ * ── SENT TO `Item.userId`, WHICH FOR A SHOP IS THE SHOP'S BACKING ROW ───────
+ *
+ * Nobody can read that row's notifications yet: GET /api/v1/notifications
+ * reads the signed-in PERSON's rows and ignores X-Baylo-Org. Written anyway,
+ * because it is the true recipient and an org inbox will find it; see the org
+ * inbox gap before assuming a shop owner was told.
+ */
+function expiryNotification(row: ExpiredRow) {
+  return {
+    userId: row.userId,
+    type: "LISTING_EXPIRED" as const,
+    // A whole sentence: a system row has no actor to prefix.
+    message: `Your "${row.title}" listing expired unsold.`,
+    entityType: "listing_review",
+    entityId: row.id,
+  }
+}
+
+/**
+ * The expiry UPDATE, returning what moved.
+ *
+ * RETURNING lists only the rows THIS statement changed, and the UPDATE is
+ * conditional on `status = 'AVAILABLE'`, so two concurrent sweeps return
+ * disjoint sets -- which is what makes one notice per expiry true rather than
+ * likely, without a "notified" column to keep in step.
+ *
+ * Scoped variants are separate statements rather than one interpolated
+ * string: the tagged template's safety comes from the parameters being
+ * parameters. Building the WHERE by concatenation is how that guarantee gets
+ * lost.
+ */
+function expireReturning(
+  db: Pick<PrismaClient, "$queryRaw">,
+  scope: { userId?: string; itemId?: string },
+): Promise<ExpiredRow[]> {
+  if (scope.itemId) {
+    return db.$queryRaw<ExpiredRow[]>`
+      UPDATE ${itemTable()}
+         SET "status" = 'EXPIRED', "updatedAt" = now()
+       WHERE "id" = ${scope.itemId}
+         AND "isPerishable" = true
+         AND "status" = 'AVAILABLE'
+         AND "tradeWithinHours" IS NOT NULL
+         AND "createdAt" + make_interval(hours => "tradeWithinHours") < now()
+      RETURNING "id", "userId", "title"`
+  }
+
+  if (scope.userId) {
+    return db.$queryRaw<ExpiredRow[]>`
+      UPDATE ${itemTable()}
+         SET "status" = 'EXPIRED', "updatedAt" = now()
+       WHERE "userId" = ${scope.userId}
+         AND "isPerishable" = true
+         AND "status" = 'AVAILABLE'
+         AND "tradeWithinHours" IS NOT NULL
+         AND "createdAt" + make_interval(hours => "tradeWithinHours") < now()
+      RETURNING "id", "userId", "title"`
+  }
+
+  return db.$queryRaw<ExpiredRow[]>`
+    UPDATE ${itemTable()}
+       SET "status" = 'EXPIRED', "updatedAt" = now()
+     WHERE "isPerishable" = true
+       AND "status" = 'AVAILABLE'
+       AND "tradeWithinHours" IS NOT NULL
+       AND "createdAt" + make_interval(hours => "tradeWithinHours") < now()
+    RETURNING "id", "userId", "title"`
+}
+
+/** The same UPDATE with no notice. Only the fallback above uses it. */
+function expireSilently(
+  db: Pick<PrismaClient, "$executeRaw">,
+  scope: { userId?: string; itemId?: string },
+): Promise<number> {
   if (scope.itemId) {
     return db.$executeRaw`
       UPDATE ${itemTable()}
