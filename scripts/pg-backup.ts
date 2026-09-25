@@ -306,6 +306,45 @@ async function restore(inPath: string, force: boolean) {
 
 const DRILL_SCHEMA = "restore_drill"
 
+// ── Existence checks that look at the whole server ───────────────────────────
+//
+// Several migrations guard a CREATE with "does it already exist?" read from a
+// system catalog by NAME ALONE -- `pg_type WHERE typname = 'QuestTier'`,
+// `pg_constraint WHERE conname = ...`, `information_schema.table_constraints
+// WHERE constraint_name = ...`. A search_path does not narrow a catalog, so in
+// the drill schema each one finds public's copy and SKIPS the create. For a
+// type that is fatal ("type AchievementCriterion does not exist", 25 Sep 2026
+// -- every drill since 20260919000000_achievements had failed); for a foreign
+// key it is silent, and the drill would pass on a schema missing constraints.
+//
+// So each check is scoped to current_schema() -- the drill schema, since it is
+// alone on the path. IN MEMORY ONLY: the migration files are applied on live
+// and checksummed, and are never edited. Scoped, each check means exactly what
+// it meant on the database it was written for.
+//
+// Any catalog lookup this does not recognise stops the drill rather than
+// passing it: a future migration written the same way must fail here loudly,
+// not build an incomplete schema quietly.
+function scopeCatalogChecks(ddl: string): string {
+  const scoped = ddl
+    .replace(/(FROM\s+pg_type\s+WHERE\s+typname\s*=\s*'[^']+')/gi,
+      "$1 AND typnamespace = current_schema()::regnamespace")
+    .replace(/(FROM\s+pg_constraint\s+WHERE\s+conname\s*=\s*'[^']+')/gi,
+      "$1 AND connamespace = current_schema()::regnamespace")
+    .replace(/(FROM\s+information_schema\.table_constraints\s+WHERE\s+constraint_name\s*=\s*'[^']+')/gi,
+      "$1 AND constraint_schema = current_schema()")
+
+  const lookups = scoped.match(/FROM\s+(pg_type|pg_constraint|pg_class|pg_enum|pg_namespace|information_schema\.\w+)\b[^;]*/gi) ?? []
+  const unscoped = lookups.filter((l) => !/current_schema\(\)/.test(l))
+  if (unscoped.length > 0) {
+    console.error("the migration chain has catalog lookups this drill does not know how to scope to the drill schema:")
+    for (const l of unscoped) console.error(`  ${l.replace(/\s+/g, " ").slice(0, 140)}`)
+    console.error("teach scopeCatalogChecks() the new shape; until then the drill cannot prove a restore.")
+    process.exit(1)
+  }
+  return scoped
+}
+
 async function drill(inPath: string) {
   if (!existsSync(inPath)) { console.error(`no such file: ${inPath}`); process.exit(2) }
   const sql = await readFile(inPath, "utf8")
@@ -324,6 +363,7 @@ async function drill(inPath: string) {
     // must not run here.
     ddl += body.replace(/^\s*CREATE SCHEMA IF NOT EXISTS "public";\s*$/gim, "") + "\n"
   }
+  ddl = scopeCatalogChecks(ddl)
 
   const pg = await connect()
   let built = false

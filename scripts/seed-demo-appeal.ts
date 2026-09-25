@@ -37,7 +37,7 @@ async function apply() {
   const owner = await prisma.user.findUnique({ where: { email: OWNER_EMAIL }, select: { id: true, name: true } })
   if (!owner) throw new Error(`${OWNER_EMAIL} is not seeded here -- run npm run seed first`)
   const actor = await prisma.user.findFirst({
-    where: { email: { in: ACTOR_EMAILS }, role: { in: ["ADMIN", "SUPER_ADMIN", "MODERATOR"] } },
+    where: { email: { in: ACTOR_EMAILS }, role: "ADMIN" },
     select: { id: true, name: true, email: true },
   })
   if (!actor) throw new Error(`none of ${ACTOR_EMAILS.join(", ")} is a staff account here`)

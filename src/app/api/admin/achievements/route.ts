@@ -61,6 +61,7 @@ const criterionSchema = z.enum([
   "SAFEZONE_MEETUPS",
   "REPORTS_FILED",
   "BRIDGE_COMPLETED",
+  "PREMIUM_SUBSCRIBER",
 ])
 
 /**

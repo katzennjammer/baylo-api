@@ -147,7 +147,7 @@ export interface AdminActor {
  * the thing the handler needs next. Here that is the actor, because every admin
  * action writes an audit row naming who did it:
  *
- *   const gate = await requireRole("MODERATOR")
+ *   const gate = await requireRole("ADMIN")
  *   if (gate.response) return gate.response
  *   // gate.actor.id
  *
