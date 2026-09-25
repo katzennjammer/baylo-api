@@ -100,7 +100,7 @@ async function cleanup() {
   await prisma.user.deleteMany({ where: { id: { in: ids } } })
 }
 
-async function makeUser(tag: string, role: "USER" | "MODERATOR" | "ADMIN" | "SUPER_ADMIN" = "USER") {
+async function makeUser(tag: string, role: "USER" | "ADMIN" = "USER") {
   return prisma.user.create({
     data: {
       name: `${P}${tag}`,
@@ -135,7 +135,9 @@ async function main() {
   const alice = await makeUser("alice")          // ordinary user
   const mallory = await makeUser("mallory")      // the one who gets blocked
   const carol = await makeUser("carol")          // uninvolved third party
-  const mod = await makeUser("mod", "MODERATOR")
+  // Staff is ADMIN-only. Two separate admins, so the audit checks below can
+  // tell which one acted: `mod` works the report queue, `admin` changes roles.
+  const mod = await makeUser("mod", "ADMIN")
   const admin = await makeUser("admin", "ADMIN")
 
   const tAlice = await signAccessToken(alice.id)
@@ -168,13 +170,9 @@ async function main() {
   // Unauthenticated is 401, not 403 — a different failure and a different fix.
   const anon = await GET("/api/admin/reports", null)
   check("GET /api/admin/reports unauthenticated -> 401", anon.status === 401, `got ${anon.status}`)
-  // And a moderator does get in, or the 403s above prove nothing.
+  // And an admin does get in, or the 403s above prove nothing.
   const modOk = await GET("/api/admin/reports", tMod)
-  check("GET /api/admin/reports as MODERATOR -> 200", modOk.status === 200, `got ${modOk.status}`)
-  // Suspension is ADMIN-only, so a moderator is refused there specifically.
-  const modSuspend = await POST(`/api/admin/users/${mallory.id}`, tMod, { action: "suspend", reason: "x" })
-  check("POST /api/admin/users/[id] as MODERATOR -> 403 (ADMIN only)", modSuspend.status === 403,
-    `got ${modSuspend.status}`)
+  check("GET /api/admin/reports as ADMIN -> 200", modOk.status === 200, `got ${modOk.status}`)
 
   // ═══════════════════════════════════════════════════════════════════════════
   head("2  Self-report is refused")
@@ -563,7 +561,8 @@ async function main() {
   // when it was written: there was no admin surface, so any route touching
   // role was a privilege-escalation hole. An admin panel that cannot manage
   // roles is not much of a panel, so /api/admin/access now does exactly that,
-  // behind requireRole("SUPER_ADMIN").
+  // behind requireRole("ADMIN") -- staff is ADMIN-only since MODERATOR and
+  // SUPER_ADMIN were removed (2026-09-25), so any admin may change a role.
   //
   // The rule is NARROWED, not dropped, and the half that mattered is stricter:
   //
@@ -631,17 +630,14 @@ async function main() {
     unaudited.length === 0, unaudited.join(", "))
 
   // -- Dynamically: the audit row is really written --------------------------
-  const superAdmin = await makeUser("super", "SUPER_ADMIN")
-  const tSuper = await signAccessToken(superAdmin.id)
-
   const roleAuditBefore = await prisma.adminAction.count({ where: { action: "ROLE_CHANGED", targetId: carol.id } })
-  const promote = await PATCH("/api/admin/access", tSuper,
-    { userId: carol.id, role: "MODERATOR", reason: "promoted by the acceptance harness" })
-  check("SUPER_ADMIN can change a role -> 200", promote.status === 200,
+  const promote = await PATCH("/api/admin/access", tAdmin,
+    { userId: carol.id, role: "ADMIN", reason: "promoted by the acceptance harness" })
+  check("an ADMIN can change a role -> 200", promote.status === 200,
     `got ${promote.status} ${JSON.stringify(promote.body)}`)
 
   const carolPromoted = await prisma.user.findUnique({ where: { id: carol.id }, select: { role: true } })
-  check("the role actually changed", carolPromoted?.role === "MODERATOR", String(carolPromoted?.role))
+  check("the role actually changed", carolPromoted?.role === "ADMIN", String(carolPromoted?.role))
 
   const roleAudit = await prisma.adminAction.findFirst({
     where: { action: "ROLE_CHANGED", targetId: carol.id },
@@ -650,23 +646,32 @@ async function main() {
   })
   const roleAuditAfter = await prisma.adminAction.count({ where: { action: "ROLE_CHANGED", targetId: carol.id } })
   check("exactly one new ROLE_CHANGED audit row", roleAuditAfter === roleAuditBefore + 1, `${roleAuditBefore} -> ${roleAuditAfter}`)
-  check("the audit row records WHO made the change", roleAudit?.actorId === superAdmin.id, String(roleAudit?.actorId))
+  check("the audit row records WHO made the change", roleAudit?.actorId === admin.id, String(roleAudit?.actorId))
   check("the audit row records WHOSE role changed",
     roleAudit?.targetId === carol.id && roleAudit?.targetType === "USER", `${roleAudit?.targetType} ${roleAudit?.targetId}`)
   check("the audit row records the reason", (roleAudit?.reason ?? "").includes("acceptance harness"), String(roleAudit?.reason))
   const roleDetail = (() => { try { return JSON.parse(roleAudit?.detail ?? "{}") as Record<string, unknown> } catch { return {} } })()
   check("the audit row records FROM what and TO what",
-    roleDetail.from === "USER" && roleDetail.to === "MODERATOR", JSON.stringify(roleDetail))
+    roleDetail.from === "USER" && roleDetail.to === "ADMIN", JSON.stringify(roleDetail))
   check("the audit row records WHEN",
     !!roleAudit?.createdAt && Date.now() - roleAudit.createdAt.getTime() < 120_000, String(roleAudit?.createdAt))
 
-  // The gate is SUPER_ADMIN, not merely admin: a plain ADMIN cannot promote.
-  const byAdmin = await PATCH("/api/admin/access", tAdmin,
+  // The gate is ADMIN: an ordinary user cannot grant themselves admin.
+  const byUser = await PATCH("/api/admin/access", tAlice,
     { userId: alice.id, role: "ADMIN", reason: "should not be allowed" })
-  check("a plain ADMIN cannot change a role -> 403", byAdmin.status === 403,
-    `got ${byAdmin.status} ${JSON.stringify(byAdmin.body)}`)
+  check("an ordinary USER cannot change a role -> 403", byUser.status === 403,
+    `got ${byUser.status} ${JSON.stringify(byUser.body)}`)
   const aliceRow = await prisma.user.findUnique({ where: { id: alice.id }, select: { role: true } })
   check("and that user's role is untouched", aliceRow?.role === "USER", String(aliceRow?.role))
+
+  // With one staff tier, the only thing stopping the last admin locking
+  // everyone out is that no admin may demote themselves.
+  const selfDemote = await PATCH("/api/admin/access", tAdmin,
+    { userId: admin.id, role: "USER", reason: "should not be allowed" })
+  check("an ADMIN cannot remove their own admin access -> 400", selfDemote.status === 400,
+    `got ${selfDemote.status} ${JSON.stringify(selfDemote.body)}`)
+  const adminRow = await prisma.user.findUnique({ where: { id: admin.id }, select: { role: true } })
+  check("and they are still ADMIN", adminRow?.role === "ADMIN", String(adminRow?.role))
 
   // Put carol back, so the rest of the run sees the fixture it expects.
   await prisma.user.update({ where: { id: carol.id }, data: { role: "USER" } })

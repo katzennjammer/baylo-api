@@ -149,7 +149,7 @@ async function cleanup() {
 
 async function makeUser(
   tag: string,
-  opts: { role?: "USER" | "MODERATOR" | "ADMIN"; grandfathered?: boolean } = {},
+  opts: { role?: "USER" | "ADMIN"; grandfathered?: boolean } = {},
 ) {
   return prisma.user.create({
     data: {
@@ -196,7 +196,7 @@ async function main() {
   const other = await makeUser("other", { grandfathered: true })
   const grandfathered = await makeUser("grandfathered", { grandfathered: true })
   const rival = await makeUser("rival")
-  const mod = await makeUser("mod", { role: "MODERATOR", grandfathered: true })
+  const mod = await makeUser("mod", { role: "ADMIN", grandfathered: true })   // the reviewer; staff is ADMIN-only
 
   const tUnverified = await signAccessToken(unverified.id)
   const tOther = await signAccessToken(other.id)
