@@ -36,8 +36,8 @@ export default async function HubsPage({ searchParams }: Props) {
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start", gap: 12, flexWrap: "wrap" }}>
         <div>
-          <h1 style={{ fontSize: 24, fontWeight: 800 }}>Safe-Zone hubs</h1>
-          <p style={{ fontSize: 13, color: "#777", marginTop: 4 }}>Manage public meetup points and their availability.</p>
+          <h1 style={{ fontSize: 24, fontWeight: 800, color: "var(--adm-text)" }}>Safe-Zone hubs</h1>
+          <p style={{ fontSize: 13, color: "var(--adm-text-secondary)", marginTop: 4 }}>Manage public meetup points and their availability.</p>
         </div>
         <HubForm />
       </div>

@@ -55,6 +55,7 @@ const patchSchema = z.strictObject({
       "SAFEZONE_MEETUPS",
       "REPORTS_FILED",
       "BRIDGE_COMPLETED",
+      "PREMIUM_SUBSCRIBER",
     ])
     .optional(),
   threshold: z.number().int().min(1).max(1_000_000).optional(),

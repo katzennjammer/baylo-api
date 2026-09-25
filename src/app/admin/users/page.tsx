@@ -5,6 +5,7 @@ import { suspensionState } from "@/lib/moderation"
 import UserActions from "./UserActions"
 import { FilterChips } from "@/components/admin/FilterChips"
 import { StaggerGroup, StaggerItem } from "@/components/admin/Stagger"
+import UrlSyncedForm from "@/components/admin/primitives/UrlSyncedForm"
 
 export const dynamic = "force-dynamic"
 export const revalidate = 0
@@ -109,13 +110,13 @@ export default async function UsersPage({ searchParams }: Props) {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
       <div>
-        <h1 style={{ fontSize: 24, fontWeight: 800 }}>Users</h1>
-        <p style={{ fontSize: 13, color: "#777", marginTop: 4 }}>
+        <h1 style={{ fontSize: 24, fontWeight: 800, color: "var(--adm-text)" }}>Users</h1>
+        <p style={{ fontSize: 13, color: "var(--adm-text-secondary)", marginTop: 4 }}>
           Search accounts, inspect moderation state, and manage suspensions.
         </p>
       </div>
 
-      <form action="/admin/users" style={{ display: "flex", gap: 8, maxWidth: 620 }}>
+      <UrlSyncedForm action="/admin/users" style={{ display: "flex", gap: 8, maxWidth: 620 }}>
         <input
           name="q"
           defaultValue={q}
@@ -125,7 +126,7 @@ export default async function UsersPage({ searchParams }: Props) {
         <button type="submit" style={{ padding: "10px 16px", border: 0, borderRadius: 9, background: "#17201b", color: "#fff", fontWeight: 700 }}>
           Search
         </button>
-      </form>
+      </UrlSyncedForm>
 
       <FilterChips
         groupId="status"

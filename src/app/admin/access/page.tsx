@@ -15,8 +15,11 @@ export default async function AccessPage() {
     take: 100,
   })
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-      <div><h1 style={{ fontSize: 24, fontWeight: 800 }}>Access management</h1><p style={{ color: "#777", fontSize: 13 }}>Only admins can change staff roles.</p></div>
+    <div style={{ display: "flex", flexDirection: "column", gap: 22 }}>
+      <div>
+        <h1 style={{ fontSize: 30, fontWeight: 700, letterSpacing: "-0.02em", color: "var(--adm-text)" }}>Access management</h1>
+        <p style={{ fontSize: 14, fontWeight: 500, color: "var(--adm-text-secondary)", marginTop: 6 }}>Only admins can change staff roles.</p>
+      </div>
       <AccessActions users={users} />
     </div>
   )

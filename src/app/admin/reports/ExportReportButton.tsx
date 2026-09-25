@@ -66,19 +66,19 @@ export default function ExportReportButton({
         onClick={() => window.print()}
         className="admin-btn-press"
         style={{
-          padding: "10px 16px",
+          padding: "12px 22px",
           border: 0,
-          borderRadius: 9,
-          background: "#1f6b43",
-          color: "#fff",
+          borderRadius: 999,
+          background: "var(--adm-accent)",
+          color: "var(--adm-text-on-accent)",
           fontWeight: 700,
-          fontSize: 13,
+          fontSize: 14,
           cursor: "pointer",
         }}
       >
         Export as PDF
       </button>
-      <div style={{ fontSize: 11, color: "#5b665f", lineHeight: 1.4 }}>
+      <div style={{ fontSize: 11, color: "var(--adm-text-muted)", lineHeight: 1.4 }}>
         Turn off “Headers and footers” in the print dialog.
       </div>
       {/* Print-only header. Invisible on screen, and the first thing on the

@@ -72,8 +72,8 @@ export default async function AdminAchievementsPage() {
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "start", gap: 12, flexWrap: "wrap" }}>
         <div>
-          <h1 style={{ fontSize: 24, fontWeight: 800 }}>Achievements</h1>
-          <p style={{ fontSize: 13, color: "#777", marginTop: 4, maxWidth: "72ch", lineHeight: 1.6 }}>
+          <h1 style={{ fontSize: 24, fontWeight: 800, color: "var(--adm-text)" }}>Achievements</h1>
+          <p style={{ fontSize: 13, color: "var(--adm-text-secondary)", marginTop: 4, maxWidth: "72ch", lineHeight: 1.6 }}>
             Define what users can earn. A badge unlocks automatically when a user&apos;s activity meets its
             criterion — nothing here toggles a user&apos;s badge by hand. Deactivate rather than delete: users
             who already earned a badge keep it.

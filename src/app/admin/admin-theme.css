@@ -1,0 +1,501 @@
+/* Scoped: applied via <div className="admin-root"> in src/app/admin/layout.tsx */
+.admin-root {
+  /* ---------- Color: surfaces ---------- */
+  --adm-bg: #070708;                 /* page canvas */
+  --adm-shell: #0d0d10;              /* outer rounded shell */
+  --adm-shell-border: rgba(255,255,255,0.04);
+  --adm-panel: linear-gradient(180deg, #16141c 0%, #1a1224 100%); /* cards/panels */
+  --adm-panel-solid: #1a1224;        /* fallback / contrast reference for --adm-panel */
+  --adm-panel-flat: #17161b;         /* rows, rail, tiles, filter bars, menus */
+  --adm-input: #111015;              /* inputs, selects, textareas */
+  --adm-placeholder-a: #1d1b23;      /* striped placeholder stripe A */
+  --adm-placeholder-b: #17161b;      /* striped placeholder stripe B */
+  --adm-thumb-a: #24212c;            /* thumbnail placeholder stripe A */
+  --adm-thumb-b: #1b1920;            /* thumbnail placeholder stripe B */
+  --adm-scrim: rgba(0,0,0,0.60);     /* drawer / palette backdrop */
+
+  /* ---------- Color: borders & dividers ---------- */
+  --adm-border: rgba(255,255,255,0.06);         /* default panel/row border */
+  --adm-border-hover: rgba(255,255,255,0.12);   /* hover border */
+  --adm-border-input: rgba(255,255,255,0.10);   /* inputs, menus */
+  --adm-border-control: rgba(255,255,255,0.12); /* outlined pills (status chips, Live) */
+  --adm-border-secondary: rgba(255,255,255,0.16); /* secondary button outline */
+  --adm-border-chip: rgba(255,255,255,0.08);    /* inactive filter chip, rail icon buttons */
+  --adm-border-empty: rgba(255,255,255,0.10);   /* dashed empty-state border */
+  --adm-divider: rgba(255,255,255,0.06);
+  --adm-track: rgba(255,255,255,0.05);          /* bar-chart track */
+  --adm-hover-fill: rgba(255,255,255,0.05);     /* menu item hover */
+
+  /* ---------- Color: text ---------- */
+  --adm-text: #f5f4f7;          /* primary */
+  --adm-text-secondary: #c8c5d0;/* body-on-row, chart labels, meta values */
+  --adm-text-muted: #8d8a96;    /* sublines, micro-labels, placeholders */
+  --adm-text-dim: #5f5c68;      /* DISABLED ONLY (fails AA as text; see design spec §6) */
+  --adm-text-on-accent: #12081f;/* text on --adm-accent (solid violet) */
+  --adm-text-on-soft: #1a1024;  /* text on lavender, yellow, highlight gradient */
+
+  /* ---------- Color: accents ---------- */
+  --adm-accent: #a45cf0;          /* violet: primary buttons, active icons, chart primary */
+  --adm-accent-strong: #7b3fd1;   /* start of bar gradient */
+  --adm-accent-text: #c9a2f7;     /* violet used AS TEXT on dark (links, "View queue →") */
+  --adm-accent-icon-active: #b57bf5; /* active rail icon */
+  --adm-accent-soft: #dcc6fb;     /* lavender: selected chip/tile bg, focus ring */
+  --adm-accent-tint: rgba(164,92,240,0.16); /* avatar bg, active rail bg, violet pill bg */
+  --adm-accent-tint-hover: rgba(164,92,240,0.14); /* palette item hover */
+  --adm-accent-2: #f2cf3a;        /* yellow: secondary series, time/count pills */
+  --adm-bar-primary: linear-gradient(90deg, #7b3fd1 0%, #a45cf0 100%);
+  --adm-bar-secondary: #f2cf3a;
+
+  /* ---------- Color: status tones (fg / 12% bg) ---------- */
+  --adm-queue: #f5b544;  --adm-queue-bg: rgba(245,181,68,0.12);   /* amber: pending/waiting */
+  --adm-warn:  #ff5a6e;  --adm-warn-bg:  rgba(255,90,110,0.12);   /* red: rejected/hidden/destructive */
+  --adm-good:  #3fcf8e;  --adm-good-bg:  rgba(63,207,142,0.12);   /* green: active/approved */
+  --adm-info:  #c9a2f7;  --adm-info-bg:  rgba(164,92,240,0.16);   /* violet: updated/in-trade/admin role */
+  --adm-neutral: #c8c5d0; --adm-neutral-bg: rgba(255,255,255,0.06); /* owned/user role/neutral */
+  --adm-warn-outline: rgba(255,90,110,0.50);   /* destructive button border */
+  --adm-warn-hover-bg: rgba(255,90,110,0.10);  /* destructive button hover fill */
+  --adm-badge: #ff5a6e;  --adm-badge-text: #1a0508; /* rail count badge */
+  --adm-tooltip-bg: #23212a;   /* rail tooltip background -- stays dark in both themes */
+  --adm-tooltip-text: #f5f4f7; /* rail tooltip text -- NOT overridden in light theme; it
+                                   pairs with --adm-tooltip-bg, which also never changes,
+                                   not with the page canvas */
+
+  /* ---------- Gradients ---------- */
+  --adm-highlight: linear-gradient(160deg, #9b5cf0 0%, #d98bd0 55%, #f0c24a 100%);
+  --adm-stripes: repeating-linear-gradient(135deg, #1d1b23 0 8px, #17161b 8px 16px);
+  --adm-stripes-thumb: repeating-linear-gradient(135deg, #24212c 0 6px, #1b1920 6px 12px);
+
+  /* ---------- Typography ---------- */
+  --adm-font-sans: var(--font-adm-sans), "Plus Jakarta Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --adm-font-mono: var(--font-adm-mono), "JetBrains Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+
+  /* ---------- Spacing (8px base, 2/4/6 allowed for micro gaps) ---------- */
+  --adm-space-0-5: 2px;
+  --adm-space-1: 4px;
+  --adm-space-1-5: 6px;
+  --adm-space-2: 8px;
+  --adm-space-2-5: 10px;
+  --adm-space-3: 12px;
+  --adm-space-3-5: 14px;
+  --adm-space-4: 16px;
+  --adm-space-4-5: 18px;
+  --adm-space-5: 20px;
+  --adm-space-6: 24px;
+  --adm-space-7: 28px;
+  --adm-space-8: 32px;
+  --adm-space-10: 40px;
+  --adm-space-14: 56px;
+
+  /* ---------- Radii ---------- */
+  --adm-radius-shell: 36px;
+  --adm-radius-rail: 28px;
+  --adm-radius-panel: 24px;
+  --adm-radius-tile: 16px;     /* rows, tiles, menus, image frames, rail items */
+  --adm-radius-input: 14px;    /* inputs, selects, textareas, thumbnails */
+  --adm-radius-menu-item: 10px;
+  --adm-radius-pill: 999px;
+
+  /* ---------- Border widths ---------- */
+  --adm-border-w: 1px;
+  --adm-focus-w: 2px;
+  --adm-focus-offset: 2px;
+
+  /* ---------- Shadows & glows (panels have NO shadow) ---------- */
+  --adm-shadow-none: none;
+  --adm-glow-active: 0 0 24px rgba(164,92,240,0.35);  /* active rail item */
+  --adm-shadow-overlay: 0 24px 64px rgba(0,0,0,0.55); /* menus, palette, drawer */
+
+  /* ---------- Z-index ---------- */
+  --adm-z-base: 0;
+  --adm-z-sticky: 10;       /* rail, sticky action panels */
+  --adm-z-dropdown: 30;     /* account menu */
+  --adm-z-drawer-scrim: 40;
+  --adm-z-drawer: 41;
+  --adm-z-palette-scrim: 50;
+  --adm-z-palette: 51;
+  --adm-z-tooltip: 60;
+  --adm-z-toast: 70;
+
+  /* ---------- Motion ---------- */
+  --adm-dur-fast: 120ms;    /* press */
+  --adm-dur-base: 200ms;    /* hover, color, border */
+  --adm-dur-slow: 250ms;    /* rail width, drawer */
+  --adm-dur-shimmer: 1400ms;
+  --adm-ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --adm-ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --adm-ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+
+  font-family: var(--adm-font-sans);
+  color: var(--adm-text);
+  background: var(--adm-bg);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---------- Light theme ----------
+   Opt-in via data-theme="light" on .admin-root (default is dark, matching
+   DESIGN_SPEC.md, which only specifies a dark palette). Only surface,
+   border, divider and page-background text colors are overridden here --
+   accent/tone/badge/highlight/bar colors are left as-is because they're
+   always drawn on their own filled background (buttons, pills, tiles),
+   not the page canvas, so they don't need a light-mode variant. The two
+   exceptions are --adm-accent-text and --adm-accent-icon-active, which
+   ARE used as text/icon color directly on the page background and need a
+   darker, higher-contrast violet on a light canvas.
+   NOTE: this palette hasn't been through the same WCAG contrast audit as
+   DESIGN_SPEC.md §6.1 did for the dark palette -- do that alongside the
+   Step 6 accessibility pass before shipping. */
+.admin-root[data-theme="light"] {
+  --adm-bg: #f3f1f6;
+  --adm-shell: #ffffff;
+  --adm-shell-border: rgba(0,0,0,0.06);
+  --adm-panel: linear-gradient(180deg, #ffffff 0%, #f8f6fb 100%);
+  --adm-panel-solid: #f8f6fb;
+  --adm-panel-flat: #f2eff5;
+  --adm-input: #ffffff;
+  --adm-placeholder-a: #ece8f1;
+  --adm-placeholder-b: #f2eff5;
+  --adm-thumb-a: #e6e1ed;
+  --adm-thumb-b: #eeeaf2;
+  --adm-scrim: rgba(20,16,26,0.45);
+
+  --adm-border: rgba(0,0,0,0.08);
+  --adm-border-hover: rgba(0,0,0,0.16);
+  --adm-border-input: rgba(0,0,0,0.14);
+  --adm-border-control: rgba(0,0,0,0.16);
+  --adm-border-secondary: rgba(0,0,0,0.20);
+  --adm-border-chip: rgba(0,0,0,0.10);
+  --adm-border-empty: rgba(0,0,0,0.16);
+  --adm-divider: rgba(0,0,0,0.08);
+  --adm-track: rgba(0,0,0,0.07);
+  --adm-hover-fill: rgba(0,0,0,0.04);
+
+  --adm-text: #18151f;
+  --adm-text-secondary: #4a4653;
+  --adm-text-muted: #6f6c78;
+  --adm-text-dim: #a5a1ac;
+
+  --adm-accent-text: #7b3fd1;
+  --adm-accent-icon-active: #7b3fd1;
+  --adm-tooltip-bg: #232030;
+
+  --adm-stripes: repeating-linear-gradient(135deg, #ece8f1 0 8px, #f2eff5 8px 16px);
+  --adm-stripes-thumb: repeating-linear-gradient(135deg, #e6e1ed 0 6px, #eeeaf2 6px 12px);
+
+  --adm-shadow-overlay: 0 24px 64px rgba(20,16,26,0.18);
+}
+
+/* Breakpoints (reference; CSS vars can't be used in media queries):
+   sm 640px · md 768px · lg 1024px · xl 1100px · 2xl 1280px · shell-max 1440px */
+
+/* ---------- Shell layout (layout.tsx / AdminShell.tsx) ---------- */
+.admin-root .adm-canvas {
+  min-height: 100vh;
+  background: var(--adm-bg);
+  display: flex;
+  justify-content: center;
+  padding: 24px;
+}
+@media (max-width: 1279px) { .admin-root .adm-canvas { padding: 20px; } }
+@media (max-width: 1023px) { .admin-root .adm-canvas { padding: 12px; } }
+@media (max-width: 639px)  { .admin-root .adm-canvas { padding: 0; } }
+
+.admin-root .adm-shell {
+  width: 100%;
+  max-width: 1440px;
+  min-width: 0;
+  background: var(--adm-shell);
+  border: 1px solid var(--adm-shell-border);
+  border-radius: 36px;
+  padding: 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+@media (max-width: 1279px) { .admin-root .adm-shell { padding: 24px; border-radius: 32px; gap: 24px; } }
+@media (max-width: 1023px) { .admin-root .adm-shell { padding: 20px; border-radius: 28px; gap: 24px; } }
+@media (max-width: 639px)  { .admin-root .adm-shell { padding: 16px; border-radius: 0; gap: 20px; } }
+
+.admin-root .adm-body { display: flex; gap: 28px; align-items: flex-start; min-width: 0; }
+@media (max-width: 1023px) { .admin-root .adm-body { gap: 24px; } }
+
+/*
+ * color: #17201b (NOT a --adm-* var, deliberately) restores the old
+ * layout.tsx's hardcoded dark-text default for whatever a not-yet-redesigned
+ * page leaves unstyled.
+ *
+ * Pages redesigned so far (dashboard, reports, audit, access) explicitly set
+ * `color: var(--adm-text)` (or a tone token) on every piece of text, so this
+ * never applies to them -- an element's own declared color always wins over
+ * an inherited one, regardless of which selector is more specific.
+ *
+ * Pages NOT yet redesigned (id-verification, review-queue/anomalies,
+ * appeals, users, listings, hubs, achievements) still have their original
+ * hardcoded white cards/tables (`background: "#fff"`), and plenty of their
+ * text relies on INHERITING the default color rather than setting its own.
+ * Before this rule, that inherited default was `.admin-root`'s
+ * `color: var(--adm-text)` -- correct for the redesigned dark shell, but
+ * wrong for a page whose surfaces never stopped being white: in dark mode
+ * that resolves to near-white, i.e. white text quietly landing on a still-
+ * white card. It read fine in light mode by coincidence (dark-on-white),
+ * which is why this only ever showed up after the theme toggle existed.
+ * Fix as each page is redesigned, by giving its text explicit colors the
+ * same way dashboard/reports/audit/access already do -- then this fallback
+ * stops applying to it, the same way it already doesn't for those four.
+ */
+.admin-root .adm-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 32px; overflow-x: hidden; color: #17201b; }
+
+.admin-root .adm-topbar { display: flex; align-items: center; gap: 16px; flex-wrap: nowrap; min-width: 0; }
+
+.admin-root .adm-hamburger-btn { display: none; }
+@media (max-width: 1023px) { .admin-root .adm-hamburger-btn { display: inline-flex; } }
+
+.admin-root .adm-rail-desktop { display: flex; }
+@media (max-width: 1023px) { .admin-root .adm-rail-desktop { display: none; } }
+
+.admin-root .adm-brand-sub { display: inline; }
+@media (max-width: 399px) { .admin-root .adm-brand-sub { display: none; } }
+
+.admin-root .adm-account-text { display: flex; }
+@media (max-width: 639px) { .admin-root .adm-account-text { display: none; } }
+
+.admin-root .adm-skip-link {
+  position: absolute;
+  left: -9999px;
+  top: 0;
+  z-index: 70;
+  background: var(--adm-accent);
+  color: var(--adm-text-on-accent);
+  padding: 10px 18px;
+  border-radius: 999px;
+  font-weight: 700;
+}
+.admin-root .adm-skip-link:focus {
+  left: 16px;
+  top: 16px;
+}
+
+/* Dashboard overview: main column + "Needs attention" sidebar, single
+   column once the sidebar would otherwise squeeze the tiles below their
+   190px minmax. */
+.admin-root .adm-dashboard-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 28px;
+  align-items: start;
+}
+@media (max-width: 1099px) {
+  .admin-root .adm-dashboard-grid { grid-template-columns: minmax(0, 1fr); }
+}
+
+/* ---------- Global admin utilities ---------- */
+.admin-root *:focus-visible {
+  outline: var(--adm-focus-w) solid var(--adm-accent-soft);
+  outline-offset: var(--adm-focus-offset);
+}
+.admin-root input::placeholder,
+.admin-root textarea::placeholder { color: var(--adm-text-muted); }
+.admin-root select option { background: var(--adm-input); color: var(--adm-text); }
+.admin-root input[type="date"] { color-scheme: dark; }
+
+/*
+ * ── EVERYTHING BELOW THIS LINE IS DELIBERATELY *NOT* SCOPED TO .admin-root ──
+ *
+ * Modal.tsx (used by HubForm and AchievementForm) renders its children via
+ * React's createPortal() straight onto document.body, specifically so a
+ * `position: fixed` dialog isn't captured by an animated ancestor's
+ * transform (see the comment in Modal.tsx). That also means portaled
+ * content is NOT a DOM descendant of the .admin-root div in layout.tsx --
+ * a `.admin-root .foo` selector silently never matches anything inside a
+ * modal, which is exactly what made HubLocationPicker's map, its marker,
+ * and its helper text disappear the moment this file first scoped them.
+ *
+ * The fix is to drop the `.admin-root` ancestor requirement from every
+ * class below (all of them are uniquely admin-* / adm- / hub-location-*
+ * prefixed already, so nothing outside /admin can collide with them
+ * regardless of ancestry) and give every var(--adm-*) reference inside
+ * them a literal fallback, so they render correctly whether or not their
+ * DOM position happens to be inside .admin-root. The fallbacks mirror the
+ * dark theme's values, matching this file's default.
+ *
+ * Classes that only ever render as part of the fixed shell structure
+ * (.adm-canvas, .adm-shell, .adm-topbar, the rail, etc., all above this
+ * comment) are NOT portaled today and stay scoped to .admin-root.
+ */
+.adm-lift { transition: transform var(--adm-dur-base, 200ms) var(--adm-ease-standard, cubic-bezier(0.2,0,0,1)), border-color var(--adm-dur-base, 200ms) var(--adm-ease-standard, cubic-bezier(0.2,0,0,1)); }
+.adm-lift:hover { transform: translateY(-2px); border-color: var(--adm-border-hover, rgba(255,255,255,0.12)); }
+.adm-row-hover { transition: border-color var(--adm-dur-base, 200ms) var(--adm-ease-standard, cubic-bezier(0.2,0,0,1)); }
+.adm-row-hover:hover { border-color: var(--adm-border-hover, rgba(255,255,255,0.12)); }
+.adm-press:active { transform: scale(0.97); transition: transform var(--adm-dur-fast, 120ms) var(--adm-ease-standard, cubic-bezier(0.2,0,0,1)); }
+
+/* Press feedback for admin action buttons (Approve/Reject/Suspend/etc). */
+.admin-btn-press {
+  transition: transform var(--adm-dur-fast, 120ms) var(--adm-ease-standard, cubic-bezier(0.2,0,0,1)), opacity var(--adm-dur-fast, 120ms) var(--adm-ease-standard, cubic-bezier(0.2,0,0,1));
+}
+.admin-btn-press:active:not(:disabled) { transform: scale(0.97); }
+
+/* Row success feedback: fade + settle, toggled via rowCollapse.ts right
+   after an action succeeds, then cleared before the data underneath
+   changes. See rowCollapse.ts for why it is a class and not React state. */
+.admin-row-collapsing {
+  transition: opacity 220ms var(--adm-ease-in-out, cubic-bezier(0.65,0,0.35,1)), transform 220ms var(--adm-ease-in-out, cubic-bezier(0.65,0,0.35,1));
+  opacity: 0;
+  transform: scaleY(0.94);
+  transform-origin: top;
+}
+
+/* Table row hover tint (superseded by .adm-row-hover once a page is redesigned;
+   kept restyled here until every consumer has moved off it). */
+.admin-row-hover { transition: border-color var(--adm-dur-base, 200ms) var(--adm-ease-standard, cubic-bezier(0.2,0,0,1)), background var(--adm-dur-base, 200ms) var(--adm-ease-standard, cubic-bezier(0.2,0,0,1)); }
+.admin-row-hover:hover { background: var(--adm-hover-fill, rgba(255,255,255,0.05)); }
+
+/* Card hover lift (superseded by .adm-lift once a page is redesigned). */
+.admin-card-hover { transition: transform var(--adm-dur-base, 200ms) var(--adm-ease-standard, cubic-bezier(0.2,0,0,1)), border-color var(--adm-dur-base, 200ms) var(--adm-ease-standard, cubic-bezier(0.2,0,0,1)); }
+.admin-card-hover:hover { transform: translateY(-2px); border-color: var(--adm-border-hover, rgba(255,255,255,0.12)); }
+
+/* Skeleton loading rows (see AdminTableSkeleton.tsx; superseded by .adm-shimmer). */
+.admin-skeleton {
+  position: relative;
+  overflow: hidden;
+  background: var(--adm-panel-flat, #17161b);
+  border-radius: var(--adm-radius-menu-item, 10px);
+}
+.admin-skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  transform: translateX(-100%);
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,.08), transparent);
+  animation: admin-shimmer-old 1.4s ease-in-out infinite;
+}
+@keyframes admin-shimmer-old { 100% { transform: translateX(100%); } }
+
+/* Filter chips: base look; the active pill itself is a Framer Motion
+   layoutId span (see FilterChips.tsx) so it can slide between chips.
+   Superseded by the new §3.6 chip markup once FilterChips is redesigned. */
+.admin-chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  padding: 9px 16px;
+  border-radius: var(--adm-radius-pill, 999px);
+  font-size: 13px;
+  font-weight: 600;
+  text-decoration: none;
+  border: 1px solid var(--adm-border-chip, rgba(255,255,255,0.08));
+  color: var(--adm-text, #f5f4f7);
+  background: var(--adm-panel-flat, #17161b);
+  overflow: hidden;
+  transition: border-color var(--adm-dur-base, 200ms) var(--adm-ease-standard, cubic-bezier(0.2,0,0,1)), color var(--adm-dur-base, 200ms) var(--adm-ease-standard, cubic-bezier(0.2,0,0,1));
+}
+.admin-chip:hover { border-color: var(--adm-border-hover, rgba(255,255,255,0.12)); }
+.admin-chip[data-active="true"] { border-color: var(--adm-accent-soft, #dcc6fb); color: var(--adm-text-on-soft, #1a1024); }
+.admin-chip[data-active="true"]:hover { border-color: var(--adm-accent-soft, #dcc6fb); }
+.admin-chip-pill { position: absolute; inset: -1px; z-index: 0; background: var(--adm-accent-soft, #dcc6fb); border-radius: var(--adm-radius-pill, 999px); }
+.admin-chip-label { position: relative; z-index: 1; }
+
+/* Admin nav: active item's indicator slides between items (layoutId, see AdminNav.tsx).
+   Superseded by the vertical rail indicator once the shell is redesigned. */
+.admin-nav-link {
+  position: relative;
+  display: inline-flex;
+  color: var(--adm-text-muted, #8d8a96);
+  font-size: 13px;
+  font-weight: 700;
+  padding: 12px 14px;
+  border-radius: var(--adm-radius-menu-item, 10px);
+  white-space: nowrap;
+  transition: color var(--adm-dur-base, 200ms) var(--adm-ease-standard, cubic-bezier(0.2,0,0,1)), background var(--adm-dur-base, 200ms) var(--adm-ease-standard, cubic-bezier(0.2,0,0,1));
+}
+.admin-nav-link:hover { color: var(--adm-text, #f5f4f7); background: var(--adm-hover-fill, rgba(255,255,255,0.05)); }
+.admin-nav-link[data-active="true"] { color: var(--adm-text, #f5f4f7); }
+.admin-nav-underline {
+  position: absolute;
+  left: 14px;
+  right: 14px;
+  bottom: 4px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--adm-accent, #a45cf0);
+}
+
+/* Pulsing "needs attention" dot -- one per card, not the whole card. */
+.admin-pulse-dot {
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  position: relative;
+}
+.admin-pulse-dot::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 999px;
+  background: inherit;
+  opacity: .55;
+  animation: admin-pulse 2s ease-out infinite;
+}
+@keyframes admin-pulse {
+  0% { transform: scale(.6); opacity: .55; }
+  70% { transform: scale(1.9); opacity: 0; }
+  100% { opacity: 0; }
+}
+
+/* Leaflet hub-location map + marker (HubLocationPicker.tsx) */
+.hub-location-map {
+  height: 440px;
+  width: 100%;
+  border: 1px solid var(--adm-border, rgba(255,255,255,0.06));
+  border-radius: var(--adm-radius-input, 14px);
+  overflow: hidden;
+  background: var(--adm-panel-flat, #17161b);
+}
+.admin-hub-marker-host {
+  background: transparent;
+  border: 0;
+}
+.admin-hub-marker {
+  width: 38px;
+  height: 38px;
+  filter: drop-shadow(0 2px 3px rgba(0,0,0,.45));
+  cursor: grab;
+}
+.admin-hub-marker:active {
+  cursor: grabbing;
+  filter: drop-shadow(0 4px 5px rgba(0,0,0,.55));
+}
+.admin-hub-marker svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+.hub-location-help {
+  margin-top: 6px;
+  color: var(--adm-text-muted, #8d8a96);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+@keyframes adm-shimmer { 0% { background-position: -400px 0; } 100% { background-position: 400px 0; } }
+.adm-shimmer {
+  background: linear-gradient(90deg, #17161b 0%, #211a2c 40%, #2a1f3a 50%, #211a2c 60%, #17161b 100%);
+  background-size: 800px 100%;
+  animation: adm-shimmer var(--adm-dur-shimmer, 1400ms) linear infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .admin-root *, .admin-root *::before, .admin-root *::after,
+  .adm-lift, .adm-lift::before, .adm-lift::after,
+  .admin-btn-press, .admin-row-collapsing, .admin-row-hover, .admin-card-hover,
+  .admin-skeleton, .admin-skeleton::after, .admin-chip, .admin-nav-link,
+  .admin-pulse-dot, .admin-pulse-dot::after, .adm-shimmer {
+    animation-duration: 0.01ms !important; animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  .adm-lift:hover { transform: none; }
+  .adm-shimmer { animation: none; background: #1d1b23; }
+  .admin-btn-press:active:not(:disabled) { transform: none; }
+  .admin-pulse-dot::after { animation: none; }
+  .admin-card-hover:hover { transform: none; }
+  .admin-skeleton::after { animation: none; }
+}
