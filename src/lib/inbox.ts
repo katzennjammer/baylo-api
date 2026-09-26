@@ -91,10 +91,11 @@ export async function resolveInbox(
  *                                       PERSON, against the rule that the shop
  *                                       answers as the shop.
  *   OUT  LISTING_* (listing_review)     expiry, value review, takedown, appeal.
- *                                       GET /api/v1/items/[id] decides ownership
- *                                       from the session, so a shop listing opens
- *                                       as somebody else's: "Item not found" in
- *                                       review/hidden states, no Relist on expiry.
+ *                                       Kept out until checked on a device: the
+ *                                       item screen and its owner controls now
+ *                                       honour the acting shop (see
+ *                                       @/lib/listing-owner, 25 Sep 2026), which
+ *                                       was the reason these were excluded.
  *   OUT  CATEGORY_MATCH                 the point of a match is an offer, and an
  *                                       offer from there goes out as the person.
  *   OUT  TRADE_*, OFFER_EXPIRED,        trade screens; org trading is not built.

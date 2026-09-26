@@ -32,9 +32,9 @@ export const dynamic = "force-dynamic"
  * available" about a listing they had posted a second earlier.
  *
  * THE LISTING PICKS THE PAYER, NOT THE HEADER ALONE. The header rides every
- * request, but the item screen and My Listings are still the PERSON's (they
- * draw Boost off `viewer.isOwner`, which ignores the header), so a person
- * acting as a shop can boost their own listing from there. The org pays only
+ * request, and the item screen's `viewer.isOwner` is true for the person's
+ * own listings as well as the acting shop's (see @/lib/listing-owner), so a
+ * person acting as a shop can boost their own listing from there. The org pays only
  * when the listing is the acting org's; anything else is charged to the
  * person, exactly as before. The rate limit stays on the human, like every
  * limiter.
