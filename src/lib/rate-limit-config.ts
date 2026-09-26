@@ -118,6 +118,12 @@ export const RATE_LIMITS = {
    * reported before it is finished.
    */
   comment: { limit: 60, windowMs: HOUR },
+  /**
+   * Buying a Featured boost. The transaction already refuses a second boost on
+   * a listing that is featured, so this is not what stops double-charging; it
+   * bounds the retry loop a broken client could run against the balance check.
+   */
+  boost: { limit: 30, windowMs: HOUR },
 } as const satisfies Record<string, RateRule>
 
 export type RateLimitName = keyof typeof RATE_LIMITS

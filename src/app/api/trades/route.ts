@@ -8,6 +8,9 @@ import { enforceInitiateTrade, enforceAcceptTrade } from "@/lib/reputation-gate"
 import { assessOffer, refusalStatus } from "@/lib/offer-check"
 import { releaseTradeFee, TRADE_FEE_SELECT } from "@/lib/trade-fee-release"
 import { enforceNotBlocked } from "@/lib/blocking"
+import {
+  isShopMemberPair, legacyParticipantRefusal, resolveTradeParticipant, shopMemberSelfTradeRefusal,
+} from "@/lib/trade-participant"
 
 export async function GET() {
   try {
@@ -94,6 +97,9 @@ export async function POST(req: NextRequest) {
       "start a trade with this person",
     )
     if (blocked) return blocked
+
+    // A member proposing to their own shop. See @/lib/trade-participant.
+    if (await isShopMemberPair(prisma, session.user.id, requestedItem.userId)) return shopMemberSelfTradeRefusal()
 
     // ── Reputation gates ──
     //
@@ -230,7 +236,6 @@ export async function PATCH(req: NextRequest) {
   try {
     const session = await resolveSession()
     if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-    const myId = session.user.id
 
     const parsed = await parseBody(req, tradeStatusSchema)
     if (!parsed.ok) return parsed.response
@@ -247,9 +252,19 @@ export async function PATCH(req: NextRequest) {
     })
 
     if (!trade) return NextResponse.json({ error: "Trade not found" }, { status: 404 })
-    if (trade.receiverId !== myId) return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+    // The receiver answers: the person, or -- acting as a shop -- the shop, when
+    // the request was sent to it. `myId` is that side from here on, so the
+    // standing gated and the actor on each notification are the shop's. See
+    // @/lib/trade-participant.
+    const who = await resolveTradeParticipant(session.user.id, req.headers, trade, "receiver")
+    if (!who.ok) return legacyParticipantRefusal(who)
+    const myId = who.participantId
 
     if (status === "ACCEPTED") {
+      // One person on both sides: refused at accept as well as at propose, for
+      // a request that predates the membership. See @/lib/trade-participant.
+      if (await isShopMemberPair(prisma, trade.senderId, trade.receiverId)) return shopMemberSelfTradeRefusal()
+
       // ── Reputation gate, ACCEPT path ──
       //
       // The premium bracket gate and the value ceiling apply -- the receiver is

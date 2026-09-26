@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import { resolveSession } from "@/lib/api-auth"
+import { resolveListingOwners } from "@/lib/listing-owner"
+import { legacyOrgRefusal } from "@/lib/inbox"
 import prisma from "@/lib/prisma"
 import { parseBody, updateItemSchema } from "@/lib/validation"
 import { imageHashRows, leadImageHash } from "@/lib/image-hashes"
@@ -125,7 +127,11 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
       },
     })
     if (!item) return NextResponse.json({ error: "Not found" }, { status: 404 })
-    if (item.userId !== session.user.id) return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+    // The person's own listing, or -- acting as a shop they are an ACTIVE
+    // member of -- the shop's. See @/lib/listing-owner.
+    const owners = await resolveListingOwners(session.user.id, req.headers)
+    if (!owners.ok) return legacyOrgRefusal(owners.message)
+    if (!owners.ownerIds.includes(item.userId)) return NextResponse.json({ error: "Forbidden" }, { status: 403 })
 
     const parsed = await parseBody(req, updateItemSchema)
     if (!parsed.ok) return parsed.response
@@ -276,6 +282,11 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
         ...valuationData,
         ...(body.images !== undefined && { images: JSON.stringify(body.images) }),
         ...(body.wantedItems !== undefined && { wantedItems: body.wantedItems }),
+        // updateItemSchema has accepted this since it was added, and until now
+        // it was validated and then dropped here -- so an edit to what the
+        // owner wants left the matcher reading the ORIGINAL categories forever.
+        // Restated in full, like hubIds: `[]` clears it.
+        ...(body.lookingForCategories !== undefined && { lookingForCategories: body.lookingForCategories }),
         ...(hashesTouched && { imageHash: leadImageHash(hashRows) }),
         ...(pickupTouched
           ? hasPickup
@@ -337,13 +348,14 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
       ? await prisma.item.findUniqueOrThrow({ where: { id }, select: ITEM_WITH_HUBS_SELECT })
       : updated
 
-    return NextResponse.json({ ...shapeItemWithHubs(finalRow, session.user.id), valueReview })
+    // As the listing's owner, so a shop member gets the precise pickup back.
+    return NextResponse.json({ ...shapeItemWithHubs(finalRow, item.userId), valueReview })
   } catch {
     return NextResponse.json({ error: "Internal server error" }, { status: 500 })
   }
 }
 
-export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
+export async function DELETE(req: NextRequest, ctx: { params: Promise<{ id: string }> }) {
   try {
     const session = await resolveSession()
     if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
@@ -351,7 +363,9 @@ export async function DELETE(_req: NextRequest, ctx: { params: Promise<{ id: str
     const { id } = await ctx.params
     const item = await prisma.item.findUnique({ where: { id }, select: { userId: true } })
     if (!item) return NextResponse.json({ error: "Not found" }, { status: 404 })
-    if (item.userId !== session.user.id) return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+    const owners = await resolveListingOwners(session.user.id, req.headers)
+    if (!owners.ok) return legacyOrgRefusal(owners.message)
+    if (!owners.ownerIds.includes(item.userId)) return NextResponse.json({ error: "Forbidden" }, { status: 403 })
 
     // Soft delete, and the pickup point goes with it — a delisted item has no
     // reason to keep the owner's coordinates on file.

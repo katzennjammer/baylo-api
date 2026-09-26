@@ -1,8 +1,9 @@
 import { NextRequest } from "next/server"
 import { z } from "zod"
 import { resolveSession } from "@/lib/api-auth"
+import { resolveListingOwners } from "@/lib/listing-owner"
 import prisma from "@/lib/prisma"
-import { ok, unauthenticated, notFound, conflict } from "@/lib/v1/envelope"
+import { ok, unauthenticated, notFound, conflict, fail } from "@/lib/v1/envelope"
 import { parseJsonBody } from "@/lib/v1/body"
 import { APPEAL_MESSAGE_MAX, appealKindFor, appealableAction } from "@/lib/appeals"
 
@@ -54,8 +55,13 @@ export async function POST(
   const parsed = await parseJsonBody(req, bodySchema)
   if (!parsed.ok) return parsed.response
 
+  // The person's own listing, or the shop's while acting as it. See
+  // @/lib/listing-owner.
+  const owners = await resolveListingOwners(viewerId, req.headers)
+  if (!owners.ok) return fail("ORG_CONTEXT_REFUSED", owners.message)
+
   const item = await prisma.item.findFirst({
-    where: { id, userId: viewerId, status: { not: "REMOVED" } },
+    where: { id, userId: { in: owners.ownerIds }, status: { not: "REMOVED" } },
     select: { id: true, status: true, moderationHiddenAt: true, userId: true },
   })
   if (!item) return notFound("Item not found")
@@ -81,7 +87,10 @@ export async function POST(
     const appeal = await prisma.listingAppeal.create({
       data: {
         itemId: item.id,
-        ownerId: viewerId,
+        // The LISTING's owner, not the member who typed it: the decision is
+        // addressed to whoever owns the listing, which for a shop's is the
+        // backing row.
+        ownerId: item.userId,
         kind,
         actionId: action.id,
         message: parsed.data.message,

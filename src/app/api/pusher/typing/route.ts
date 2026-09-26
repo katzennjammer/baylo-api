@@ -3,6 +3,7 @@ import { resolveSession } from "@/lib/api-auth"
 import prisma from "@/lib/prisma"
 import pusher from "@/lib/pusher"
 import { parseBody, typingSchema } from "@/lib/validation"
+import { legacyOrgRefusal, resolveInbox } from "@/lib/inbox"
 
 export async function POST(req: NextRequest) {
   const session = await resolveSession()
@@ -12,7 +13,10 @@ export async function POST(req: NextRequest) {
   if (!parsed.ok) return parsed.response
   const { receiverId } = parsed.data
 
-  const myId = session.user.id
+  // The shop's backing row when acting as it. See @/lib/inbox.
+  const inbox = await resolveInbox(session.user.id, req.headers)
+  if (!inbox.ok) return legacyOrgRefusal(inbox.message)
+  const myId = inbox.inboxId
   if (receiverId === myId) {
     return NextResponse.json({ error: "Cannot send a typing indicator to yourself" }, { status: 400 })
   }
@@ -40,7 +44,7 @@ export async function POST(req: NextRequest) {
 
   await pusher.trigger(`private-user-${receiverId}`, "typing", {
     senderId: myId,
-    name: session.user.name ?? "Someone",
+    name: inbox.acting.organization?.name ?? session.user.name ?? "Someone",
   })
 
   return NextResponse.json({ ok: true })

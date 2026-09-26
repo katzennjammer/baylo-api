@@ -51,6 +51,8 @@ export type RewardReason =
   /** This party has collected the daily cap already. */
   | "daily_cap"
   | "already_awarded"
+  /** This party is an organisation's backing row. Shops earn no trade reward. */
+  | "organization"
 
 export interface RewardOutcome {
   userId: string
@@ -100,6 +102,13 @@ async function awardOne(
   })
 
   if (trade.offeredItemId === trade.requestedItemId) return none("placeholder")
+
+  // A shop settling as itself (26 Sep 2026) is paid nothing new: its Leaves
+  // come from its welcome grant and from bridging fees, never from issuance.
+  // Same rule as the task rewards and the quests. The PERSON on the other side
+  // is still rewarded as usual -- this skips one side, not the trade.
+  const earner = await db.user.findUnique({ where: { id: userId }, select: { isOrgAccount: true } })
+  if (earner?.isOrgAccount) return none("organization")
 
   const given = await db.item.findUnique({ where: { id: givenItemId }, select: { valueLeaves: true } })
   if (!given || given.valueLeaves === null) return none("unvalued")
@@ -236,6 +245,8 @@ export function rewardDenialCopy(outcome: RewardOutcome, partnerName: string): s
       return `No trade reward this time — you've reached today's ${TRADE_REWARD_DAILY_CAP_LEAVES}-Leaf limit.`
     case "unvalued":
       return "No trade reward — the item you gave has no value on record."
+    case "organization":
+      return "Shops don't earn trade rewards."
     case "placeholder":
     case "already_awarded":
       return null

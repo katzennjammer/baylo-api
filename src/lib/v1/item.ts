@@ -1,5 +1,6 @@
 import { resolvePickup, type PublicPickup } from "@/lib/item-visibility"
 import { getLeafRank } from "@/lib/task-constants"
+import { isFeaturedNow } from "@/lib/featured"
 import type { TrustTier } from "@/lib/reputation"
 import {
   SAFE_ZONE_HUB_SELECT,
@@ -8,6 +9,7 @@ import {
   type V1Hub,
 } from "@/lib/safe-zones"
 import { categoryLabel, conditionLabel } from "./taxonomy"
+import { ORG_PUBLIC_SELECT, orgBadge, type OrgBadge, type OrgPublicRow } from "@/lib/organizations"
 
 /**
  * The one Item shape, rendered by /home, /browse, /items/[id] and both profile
@@ -57,6 +59,19 @@ export const V1_ITEM_SELECT = {
   createdAt: true,
   updatedAt: true,
   userId: true,
+  // The perishable block. Four columns that are null/false on every listing
+  // made before 23 Sep 2026 and on every standard one since, so a client that
+  // does not know about them reads exactly what it read before.
+  isPerishable: true,
+  quantity: true,
+  quantityUnit: true,
+  tradeWithinHours: true,
+  // The matcher's input, and the owner's stated wants -- which the detail
+  // screen renders as "looking for" chips. '{}' on every pre-column row.
+  lookingForCategories: true,
+  // The Featured boost. Read to produce `featuredUntil`; see isFeaturedNow().
+  isFeatured: true,
+  featuredUntil: true,
   // Needed by resolvePickup(). The route resolves them; they never reach a body.
   pickupLat: true,
   pickupLng: true,
@@ -76,6 +91,16 @@ export const V1_ITEM_OWNER_SELECT = {
   rating: true,
   totalTrades: true,
   lifetimeLeaves: true,
+  /**
+   * The organisation this owner IS, when the row is an org's backing account.
+   * NULL on every human owner, which is almost every row.
+   *
+   * A NESTED SELECT AND NOT A SECOND QUERY, because the feed renders a "Verified
+   * org" badge on the card and a per-card lookup is the N+1 this whole module
+   * exists to avoid. It is a left join on a unique index, so the cost on a page
+   * of twenty human owners is twenty index probes that find nothing.
+   */
+  organization: { select: ORG_PUBLIC_SELECT },
 } as const
 
 /**
@@ -184,6 +209,21 @@ export interface V1Owner {
    */
   trustTier: TrustTier | null
   featuredAchievement: { id: string; name: string; icon: string } | null
+  /**
+   * The organisation this owner IS, or null for a person.
+   *
+   * WHEN THIS IS NON-NULL, `trustTier` IS ALWAYS NULL, and that is enforced in
+   * v1Item() rather than left to the caller. The spec asks for the verified-org
+   * badge to REPLACE the trust-tier badge, and a wire shape that can carry both
+   * is one where some client eventually renders both -- a business with a
+   * "Rising Trader" rung under its checkmark, which is exactly the claim
+   * organisations are excluded from the ladder to avoid making.
+   *
+   * `org.verified` is NOT "an Organization row exists". A PENDING org is a real
+   * account that posts and trades; only VERIFIED earns the checkmark. See
+   * orgBadge().
+   */
+  org: OrgBadge | null
 }
 
 export interface V1Item {
@@ -214,6 +254,36 @@ export interface V1Item {
    */
   valueRejectionReason: string | null
   wanted: string | null
+  /**
+   * The perishable block, or null for a standard listing.
+   *
+   * ONE NULLABLE OBJECT rather than four loose nullable fields, because the
+   * four only mean anything together: a quantity with no window, or a window on
+   * a standard item, are states the write paths refuse, and a wire shape that
+   * can express them invites a client to render one.
+   *
+   * `expiresAt` is DERIVED here and not stored -- see the note on
+   * Item.tradeWithinHours. The client counts down against it; the server's
+   * lazy sweep is what actually moves the status.
+   */
+  perishable: {
+    quantity: number | null
+    quantityUnit: string | null
+    tradeWithinHours: number
+    expiresAt: Date
+    /** Already past its window but not yet swept. See expirePerishableItems(). */
+    expired: boolean
+  } | null
+  /**
+   * When this listing's paid Featured boost ends, or null when it is not
+   * featured right now. Null also for a boost whose window has passed but the
+   * sweep has not reached, so a client can draw "Featured" or "Boost" off this
+   * one field without doing its own clock arithmetic against a stale flag.
+   */
+  featuredUntil: Date | null
+  /** The categories the owner will take in return. `[]` means none stated. */
+  lookingFor: string[]
+  lookingForLabels: string[]
   pickup: PublicPickup | null
   /**
    * The public meetup points this listing is offered at.
@@ -263,6 +333,15 @@ export interface V1ItemRow {
   moderationHiddenAt?: Date | null
   valueRejectionReason?: string | null
   wantedItems: string | null
+  /** Optional: rows from a select that predates 23 Sep 2026 still shape. */
+  isPerishable?: boolean
+  quantity?: number | null
+  quantityUnit?: string | null
+  tradeWithinHours?: number | null
+  lookingForCategories?: string[]
+  /** Optional: rows from a select that predates 24 Sep 2026 still shape. */
+  isFeatured?: boolean
+  featuredUntil?: Date | null
   createdAt: Date
   userId: string
   pickupLat: number | null
@@ -276,6 +355,8 @@ export interface V1ItemRow {
     rating: number
     totalTrades: number
     lifetimeLeaves: number
+    /** Present only where V1_ITEM_OWNER_SELECT was used. Null for a person. */
+    organization?: OrgPublicRow | null
   }
   _count?: { likes: number; comments: number }
   likes?: { id: string }[]
@@ -316,6 +397,25 @@ export function v1Item(
     hiddenByModerator: row.moderationHiddenAt != null,
     valueRejectionReason: row.valueRejectionReason ?? null,
     wanted: row.wantedItems ?? null,
+    // Built only when BOTH halves are present. `isPerishable` without a window
+    // is a row the write paths cannot produce, and shaping it as a perishable
+    // would hand the client a countdown to null.
+    perishable:
+      row.isPerishable && row.tradeWithinHours != null
+        ? {
+            quantity: row.quantity ?? null,
+            quantityUnit: row.quantityUnit ?? null,
+            tradeWithinHours: row.tradeWithinHours,
+            expiresAt: new Date(
+              row.createdAt.getTime() + row.tradeWithinHours * 60 * 60 * 1000,
+            ),
+            expired:
+              row.createdAt.getTime() + row.tradeWithinHours * 60 * 60 * 1000 < Date.now(),
+          }
+        : null,
+    featuredUntil: isFeaturedNow(row) ? row.featuredUntil! : null,
+    lookingFor: row.lookingForCategories ?? [],
+    lookingForLabels: (row.lookingForCategories ?? []).map(categoryLabel),
     pickup: resolvePickup(row, viewerId, tradeAccessIds),
     // null when the caller did not select them. See the note on the field: a
     // caller that forgot under-claims rather than asserting "none".
@@ -331,8 +431,14 @@ export function v1Item(
       rank: getLeafRank(row.user.lifetimeLeaves).label,
       // ?? null, not ?? a default tier. A caller that forgot the map
       // under-claims rather than inventing a rung for someone.
-      trustTier: tiers?.get(row.user.id) ?? null,
+      //
+      // AND null outright for an organisation, whatever the map says. Orgs do
+      // not climb the trade-count ladder; their badge is `org` below. Enforced
+      // here rather than by asking every caller to remember, because the one
+      // caller that forgets renders a trust rung on a business.
+      trustTier: row.user.organization ? null : tiers?.get(row.user.id) ?? null,
       featuredAchievement: featuredAchievements?.get(row.user.id) ?? null,
+      org: row.user.organization ? orgBadge(row.user.organization) : null,
     },
     stats: v1Stats(row),
     createdAt: row.createdAt,

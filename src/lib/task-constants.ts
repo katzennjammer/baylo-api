@@ -95,6 +95,21 @@ export const SIGNUP_GRANT_LEAVES = 20
 // piece of user-facing copy that promises a number for verifying reads this.
 export const VERIFY_CREDIT_LEAVES = SIGNUP_GRANT_LEAVES + TASK_REWARDS.VERIFY_ACCOUNT
 
+// The verified-MSME welcome grant (24 Sep 2026), credited to the ORGANISATION'S
+// own balance (its backing User row) when an admin approves its business
+// document. Paid by POST /api/admin/organizations/[id].
+//
+// Pegged to VERIFY_CREDIT_LEAVES on purpose: a verified shop is welcomed with
+// exactly what a verified person sees land (30 today), not a bigger number that
+// would make registering a business a better faucet than signing up. It is gated
+// the same way, behind a check a human did, and never at registration: an org's
+// backing row is created with signupGrantClaimed = true so the person-side grant
+// can never reach it.
+//
+// Written as ONE SIGNUP_GRANT ledger row, so it is cap-exempt and already
+// counted as issuance by scripts/lib/ledger-invariant.ts.
+export const ORG_WELCOME_LEAVES = VERIFY_CREDIT_LEAVES
+
 // ── Recognition ranks ────────────────────────────────────────────────────────
 // Ranked on lifetimeLeaves, never on the spendable balance — otherwise a user
 // would drop a rank every time they traded. Display-only, ascending thresholds.

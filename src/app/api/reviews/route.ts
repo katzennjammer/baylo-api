@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 import { resolveSession } from "@/lib/api-auth"
 import prisma from "@/lib/prisma"
+import { settleQuestsAsync } from "@/lib/quests"
 
 export async function POST(req: Request) {
   const session = await resolveSession()
@@ -79,6 +80,9 @@ export async function POST(req: Request) {
 
     return [created]
   })
+
+  // After the commit, so the check can see the review it is looking for.
+  settleQuestsAsync(myId, ["LEAVE_REVIEW"])
 
   // Fire-and-forget notification — do not block the response
   const reviewer = await prisma.user.findUnique({

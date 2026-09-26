@@ -3,7 +3,8 @@ import { z } from "zod"
 import { Prisma } from "@/generated/prisma/client"
 import { resolveSession } from "@/lib/api-auth"
 import prisma from "@/lib/prisma"
-import { ok, unauthenticated, invalid } from "@/lib/v1/envelope"
+import { ok, fail, unauthenticated, invalid } from "@/lib/v1/envelope"
+import { resolveInbox } from "@/lib/inbox"
 import { parseQuery, paginationShape } from "@/lib/v1/query"
 import { decodeCursor, encodeCursor, cursorDate } from "@/lib/v1/cursor"
 
@@ -30,7 +31,12 @@ interface ThreadRow {
 export async function GET(req: NextRequest) {
   const session = await resolveSession()
   if (!session?.user?.id) return unauthenticated()
-  const viewerId = session.user.id
+
+  // Acting as a shop, this is the SHOP's list: `viewerId` below is its backing
+  // row, and every "me" in the SQL is the shop. See @/lib/inbox.
+  const inbox = await resolveInbox(session.user.id, req.headers)
+  if (!inbox.ok) return fail("ORG_CONTEXT_REFUSED", inbox.message)
+  const viewerId = inbox.inboxId
 
   const parsed = parseQuery(req, querySchema)
   if (!parsed.ok) return parsed.response
@@ -110,8 +116,10 @@ export async function GET(req: NextRequest) {
   const nextCursor =
     hasMore && lastRow ? encodeCursor(new Date(lastRow.lastAt), lastRow.partnerId) : null
 
+  // `viewerId` rides along because a thread's bubbles are "mine" when the
+  // sender is the INBOX, which acting as a shop is not the signed-in person.
   if (pageThreads.length === 0) {
-    return ok({ conversations: [] }, { nextCursor: null })
+    return ok({ conversations: [], viewerId }, { nextCursor: null })
   }
 
   const messages = await prisma.message.findMany({
@@ -147,5 +155,5 @@ export async function GET(req: NextRequest) {
     ]
   })
 
-  return ok({ conversations }, { nextCursor })
+  return ok({ conversations, viewerId }, { nextCursor })
 }

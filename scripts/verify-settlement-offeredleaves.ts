@@ -164,13 +164,14 @@ async function settle(opts: {
   const [tokA, tokB] = await Promise.all([signAccessToken(a.id), signAccessToken(b.id)])
 
   // Each participant submits their PARTNER's code.
+  const submittedFrom = new Date()
   const r1 = await submit(trade.id, tokA, receiverCode)
   const r2 = await submit(trade.id, tokB, senderCode)
 
   const [ua, ub, t, ledger] = await Promise.all([
     prisma.user.findUniqueOrThrow({ where: { id: a.id }, select: { leaves: true } }),
     prisma.user.findUniqueOrThrow({ where: { id: b.id }, select: { leaves: true } }),
-    prisma.tradeRequest.findUniqueOrThrow({ where: { id: trade.id }, select: { status: true } }),
+    prisma.tradeRequest.findUniqueOrThrow({ where: { id: trade.id }, select: { status: true, completedAt: true } }),
     prisma.leafTransaction.findMany({
       where: { tradeId: trade.id }, select: { userId: true, type: true, amount: true },
     }),
@@ -179,6 +180,7 @@ async function settle(opts: {
   const receive = ledger.filter((l) => l.type === "TRADE_RECEIVE")
   return {
     a, b, trade, status: t.status, ledger,
+    completedAt: t.completedAt, submittedFrom,
     httpOk: r1.ok && r2.ok,
     r1Status: r1.status, r2Status: r2.status,
     senderLeaves: ua.leaves, receiverLeaves: ub.leaves,
@@ -211,6 +213,32 @@ async function main() {
       && r.tradeRows.some((l) => l.userId === r.b.id && l.amount === 100 && l.type === "TRADE_RECEIVE"),
       JSON.stringify(r.tradeRows))
     check("trade rows net to zero", r.tradeRows.reduce((s, l) => s + l.amount, 0) === 0)
+
+    // 25 Sep 2026: settlement stamps completedAt, which the daily trade quests
+    // read instead of updatedAt, and settles both parties' quests on the spot.
+    check("completedAt stamped by settlement, inside this run",
+      r.completedAt != null && r.completedAt >= r.submittedFrom && r.completedAt <= new Date(),
+      String(r.completedAt))
+    for (const [who, id] of [["sender", r.a.id], ["receiver", r.b.id]] as const) {
+      const end = Date.now() + 8000
+      let rows = await prisma.questAssignment.findMany({ where: { userId: id } })
+      while (rows.length < 5 && Date.now() < end) {
+        await new Promise((res) => setTimeout(res, 250))
+        rows = await prisma.questAssignment.findMany({ where: { userId: id } })
+      }
+      check(`${who}'s quests settled by the settlement hook (no GET /api/v1/quests)`,
+        rows.length === 5, `${rows.length} rows`)
+      // Assignments are written before the payout, so the payout gets its own wait.
+      const hard = rows.find((q) => q.quest === "COMPLETE_TRADE")
+      if (hard) {
+        let paid = hard
+        while (paid.completedAt == null && Date.now() < end + 4000) {
+          await new Promise((res) => setTimeout(res, 250))
+          paid = await prisma.questAssignment.findUniqueOrThrow({ where: { id: hard.id } })
+        }
+        check(`${who}'s COMPLETE_TRADE is paid`, paid.completedAt != null)
+      }
+    }
   }
 
   // 2. The real production shape: two accepted offers, different amounts.

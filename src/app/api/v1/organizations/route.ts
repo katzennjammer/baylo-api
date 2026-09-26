@@ -1,0 +1,271 @@
+import { NextRequest } from "next/server"
+import { resolveSession } from "@/lib/api-auth"
+import prisma from "@/lib/prisma"
+import { enforceRateLimit } from "@/lib/rate-limit-config"
+import { sanitizeImage } from "@/lib/image-sanitize"
+import { ok, unauthenticated, invalid, conflict, forbidden } from "@/lib/v1/envelope"
+import { activeOrgsFor, createOrganization } from "@/lib/organizations"
+import { destroyOrgDocument, uploadOrgDocument } from "@/lib/org-document"
+
+export const dynamic = "force-dynamic"
+
+/**
+ * /api/v1/organizations — create one, and list the ones I may act as.
+ *
+ * ── MULTIPART, FOR THE REASON /api/v1/id-verification IS ────────────────────
+ *
+ * The business document goes straight from this request into an
+ * `authenticated`-type Cloudinary asset. Routing it through POST /api/upload
+ * first — which every LISTING photo does — would write a DTI registration
+ * carrying somebody's home address to a world-readable URL and leave it there
+ * for the whole time it sat in the review queue, and leave it there forever if
+ * the applicant then abandoned the form and no row was ever created to point
+ * at it. See the header of @/lib/org-document.
+ *
+ * ── THE ORDER OF THE CHECKS IS THE DESIGN ───────────────────────────────────
+ *
+ * Everything that can refuse runs BEFORE the upload, so a refused application
+ * never puts a business registration onto a third party's servers:
+ *
+ *   401  no session
+ *   429  the shared upload budget
+ *   403  this account is itself an organisation's backing row
+ *   409  already an owner of an organisation
+ *   400  bad name / category / DTI number / missing file / too large /
+ *        not an image
+ *   ---- only now is anything uploaded ----
+ */
+
+const MAX_IMAGE_BYTES = 10 * 1024 * 1024
+const MAX_NAME = 120
+const MAX_DTI = 64
+
+/**
+ * The DTI registration number, as typed. SHAPE ONLY, deliberately loose.
+ *
+ * Nothing here asks DTI whether the number exists -- the reviewer compares it
+ * with the photographed document, and that comparison is the whole check. So
+ * this only refuses input that cannot be a registration number at all (empty,
+ * a paragraph, emoji) and keeps the separators people actually type. Internal
+ * whitespace is collapsed so "1234  567" and "1234 567" are one value in the
+ * admin queue.
+ */
+const DTI_PATTERN = /^[A-Za-z0-9][A-Za-z0-9 ./-]*$/
+
+function normaliseDti(raw: unknown): string | null {
+  const value = String(raw ?? "").trim().replace(/\s+/g, " ")
+  if (value.length < 3 || value.length > MAX_DTI) return null
+  return DTI_PATTERN.test(value) ? value : null
+}
+
+export const BUSINESS_CATEGORIES = [
+  "SARI_SARI",
+  "FOOD_AND_BEVERAGE",
+  "AGRICULTURE",
+  "HANDICRAFT",
+  "APPAREL",
+  "ELECTRONICS_REPAIR",
+  "SERVICES",
+  "RETAIL",
+  "COOPERATIVE",
+  "NONPROFIT",
+  "OTHER",
+] as const
+
+export const BUSINESS_CATEGORY_LABEL: Record<(typeof BUSINESS_CATEGORIES)[number], string> = {
+  SARI_SARI: "Sari-sari store",
+  FOOD_AND_BEVERAGE: "Food & beverage",
+  AGRICULTURE: "Agriculture & farming",
+  HANDICRAFT: "Handicraft",
+  APPAREL: "Apparel",
+  ELECTRONICS_REPAIR: "Electronics & repair",
+  SERVICES: "Services",
+  RETAIL: "Retail",
+  COOPERATIVE: "Cooperative",
+  NONPROFIT: "Non-profit",
+  OTHER: "Other",
+}
+
+/**
+ * GET — the organisations this person may act as, plus the vocabulary the
+ * creation form needs.
+ *
+ * The taxonomy travels WITH the response rather than being compiled into the
+ * client, the same call /api/v1/id-verification makes: a shipped mobile build
+ * that hard-codes eleven business categories is one that has to go through the
+ * Play Store the day a twelfth is accepted.
+ */
+export async function GET() {
+  const session = await resolveSession()
+  if (!session?.user?.id) return unauthenticated()
+
+  const organizations = await activeOrgsFor(prisma, session.user.id)
+
+  // Invitations waiting on an answer. Listed SEPARATELY from `organizations`
+  // and never merged into it: a PENDING row is not a permission, and an org in
+  // the switcher that every write path then refuses is worse than no entry.
+  const invitations = await prisma.organizationMember.findMany({
+    where: { userId: session.user.id, status: "PENDING" },
+    select: {
+      id: true,
+      invitedAt: true,
+      organization: { select: { id: true, name: true, logoUrl: true } },
+    },
+    orderBy: { invitedAt: "desc" },
+  })
+
+  return ok({
+    organizations,
+    invitations: invitations.map((i) => ({
+      membershipId: i.id,
+      invitedAt: i.invitedAt,
+      organization: i.organization,
+    })),
+    businessCategories: BUSINESS_CATEGORIES.map((v) => ({
+      value: v,
+      label: BUSINESS_CATEGORY_LABEL[v],
+    })),
+    limits: { maxNameLength: MAX_NAME, maxImageBytes: MAX_IMAGE_BYTES, maxDtiLength: MAX_DTI },
+  })
+}
+
+/** POST — register an organisation. The caller becomes its first OWNER. */
+export async function POST(req: NextRequest) {
+  const session = await resolveSession()
+  if (!session?.user?.id) return unauthenticated()
+  const userId = session.user.id
+
+  // Before formData(), which buffers the whole body into memory — a limit
+  // applied after it has already paid the cost it was meant to avoid.
+  const limited = enforceRateLimit("upload", userId)
+  if (limited) return limited
+
+  const me = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { isOrgAccount: true },
+  })
+  // An organisation cannot found an organisation. The backing row has no way
+  // to reach this endpoint today — it cannot log in — but the rule belongs
+  // where it is enforced rather than where it is currently unreachable.
+  if (me?.isOrgAccount) {
+    return forbidden("An organisation account cannot create another organisation.")
+  }
+
+  // ONE ORGANISATION PER FOUNDER, for now. Not a technical limit — the schema
+  // allows a person to own several — but a deliberate one: an account that can
+  // mint organisations at will is an account that can mint listing identities
+  // at will, and every one of them is a fresh, unreviewed profile. Raising this
+  // is a product decision that should come with a reason.
+  const existingOwnership = await prisma.organizationMember.findFirst({
+    where: { userId, role: "OWNER", status: "ACTIVE" },
+    select: { organization: { select: { id: true, name: true } } },
+  })
+  if (existingOwnership) {
+    return conflict("You already run an organisation on this account.", {
+      organization: existingOwnership.organization,
+    })
+  }
+
+  let form: FormData
+  try {
+    form = await req.formData()
+  } catch {
+    return invalid(
+      "Send this as multipart/form-data with name, businessCategory, dtiRegistrationNumber and file.",
+    )
+  }
+
+  const name = String(form.get("name") ?? "").trim()
+  if (name.length < 2 || name.length > MAX_NAME) {
+    return invalid(`Enter the business name — between 2 and ${MAX_NAME} characters.`)
+  }
+
+  const categoryRaw = String(form.get("businessCategory") ?? "")
+  if (!(BUSINESS_CATEGORIES as readonly string[]).includes(categoryRaw)) {
+    return invalid(`"${categoryRaw}" is not a business category we accept.`)
+  }
+
+  // REQUIRED, and checked here with the other refusals so a bad number never
+  // costs an upload. See normaliseDti() for how little "valid" means.
+  const dtiRegistrationNumber = normaliseDti(form.get("dtiRegistrationNumber"))
+  if (!dtiRegistrationNumber) {
+    return invalid(
+      `Enter the DTI registration number shown on your certificate — letters, digits, spaces, "-", "/" or ".", up to ${MAX_DTI} characters.`,
+    )
+  }
+
+  const file = form.get("file")
+  if (!(file instanceof File)) {
+    return invalid("Attach a photo of your DTI/SEC registration or barangay permit.")
+  }
+  if (file.size > MAX_IMAGE_BYTES) return invalid("The document must be under 10 MB.")
+
+  // The declared MIME type is not consulted. sanitizeImage() decodes the actual
+  // bytes — that IS the content check — and re-encodes without metadata. A
+  // permit photographed at the shop carries the shop's coordinates in EXIF.
+  let sanitized: { buffer: Buffer }
+  try {
+    sanitized = await sanitizeImage(Buffer.from(await file.arrayBuffer()))
+  } catch {
+    return invalid("That file is not an image we can read. Send a JPEG or PNG photo.")
+  }
+
+  let document: { url: string; publicId: string }
+  try {
+    document = await uploadOrgDocument(sanitized.buffer)
+  } catch (err) {
+    console.error(
+      "[organizations] document upload failed:",
+      err instanceof Error ? err.message : "unknown error",
+    )
+    return invalid("We could not store that document. Try again in a moment.")
+  }
+
+  // THE UPLOAD IS NOW AHEAD OF THE ROW, AND THAT WINDOW HAS TO BE CLOSED.
+  //
+  // createOrganization() is one transaction, so a failure here leaves no
+  // half-made organisation — but it does leave the document sitting in
+  // Cloudinary with nothing on Baylo pointing at it. That file cannot be
+  // swept: sweepUndeletedOrgDocuments() finds work by reading Organization
+  // rows, and the whole failure is that no Organization row exists. It would
+  // be a business registration, carrying somebody's name and address, retained
+  // indefinitely and invisibly.
+  //
+  // So the asset is destroyed on the way out and the error is re-thrown
+  // unchanged — the caller still gets its 500, and nothing is swallowed. The
+  // ID submission route makes exactly this call for exactly this reason.
+  let created: { organizationId: string; orgUserId: string }
+  try {
+    created = await createOrganization({
+      founderUserId: userId,
+      name,
+      businessCategory: categoryRaw,
+      businessDocUrl: document.url,
+      businessDocPublicId: document.publicId,
+      dtiRegistrationNumber,
+    })
+  } catch (err) {
+    await destroyOrgDocument(document.publicId)
+    console.error(
+      "[organizations] create failed after upload; document destroyed:",
+      err instanceof Error ? err.message : "unknown error",
+    )
+    throw err
+  }
+
+  // PENDING: the org exists and can trade, but posting as it waits for the
+  // review (see orgPostingRefusal). Saying so here, at creation, is what stops
+  // the first refused post from being a surprise.
+  return ok(
+    {
+      organizationId: created.organizationId,
+      name,
+      verificationStatus: "PENDING",
+      verified: false,
+      notice:
+        "Your organisation is set up. You can post as it once we have checked " +
+        "your business document, and the verified badge appears then too.",
+    },
+    { created: true },
+  )
+}

@@ -6,6 +6,9 @@ import { randomInt } from "crypto"
 import { sendSwapConfirmationCode } from "@/lib/mailer"
 import { MAX_CODE_ATTEMPTS } from "@/lib/swap-code"
 import { sealCode } from "@/lib/swap-code-seal"
+import {
+  isShopMemberPair, legacyParticipantRefusal, resolveTradeParticipant, shopMemberSelfTradeRefusal,
+} from "@/lib/trade-participant"
 
 /**
  * A confirmation code, from the CSPRNG.
@@ -24,7 +27,7 @@ function randomDigits(n: number): string {
 }
 
 export async function POST(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
@@ -32,7 +35,6 @@ export async function POST(
     if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
     const { id: tradeId } = await params
-    const myId = session.user.id
 
     const trade = await prisma.tradeRequest.findUnique({
       where: { id: tradeId },
@@ -45,9 +47,16 @@ export async function POST(
     })
 
     if (!trade) return NextResponse.json({ error: "Trade not found" }, { status: 404 })
-    if (trade.senderId !== myId && trade.receiverId !== myId) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 })
-    }
+    // Either side: the person, or the shop they are acting as. Codes are
+    // generated for both sides at once, so any member may start them for a shop.
+    // See @/lib/trade-participant.
+    const who = await resolveTradeParticipant(session.user.id, req.headers, trade)
+    if (!who.ok) return legacyParticipantRefusal(who)
+    const myId = who.participantId
+    // A shop and one of its own members, at settlement too: a person invited
+    // after the trade was accepted can read BOTH swap codes and would settle
+    // with themselves. Cancelling stays open. See @/lib/trade-participant.
+    if (await isShopMemberPair(prisma, trade.senderId, trade.receiverId)) return shopMemberSelfTradeRefusal()
     if (trade.status !== "ACCEPTED" && trade.status !== "CONFIRMING") {
       return NextResponse.json({ error: "Trade is not ready for confirmation" }, { status: 400 })
     }

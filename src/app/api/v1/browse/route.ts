@@ -3,9 +3,12 @@ import { z } from "zod"
 import { resolveSession } from "@/lib/api-auth"
 import prisma from "@/lib/prisma"
 import { preciseAccessItemIds } from "@/lib/item-visibility"
-import { visibleItemWhere } from "@/lib/blocking"
+import { userNotBlocked, visibleItemWhere } from "@/lib/blocking"
+import { notSuspendedWhere } from "@/lib/moderation"
+import { BUSINESS_CATEGORIES, BUSINESS_CATEGORY_LABEL } from "@/app/api/v1/organizations/route"
 import { CATEGORY_VALUES, conditionSchema } from "@/lib/validation"
 import { ok, unauthenticated, invalid } from "@/lib/v1/envelope"
+import { expirePerishableItems } from "@/lib/perishable"
 import { parseQuery, paginationShape } from "@/lib/v1/query"
 import { decodeCursor, encodeCursor, olderThan, paginate } from "@/lib/v1/cursor"
 import { V1_ITEM_SELECT, V1_ITEM_OWNER_SELECT, v1ItemStatsSelect, v1Item, type V1ItemRow } from "@/lib/v1/item"
@@ -17,6 +20,9 @@ export const dynamic = "force-dynamic"
  * GET /api/v1/browse — the browse tab.
  *
  * THREE queries: items page (1), pickup access (2), category facets (3).
+ * Plus two that run only when asked for: organisations whose NAME matches `q`
+ * (4, first page of a search only), and business-category facets (5, only
+ * while the Organizations pill is on).
  *
  * Filters are optional and compose. `sort=nearest` REQUIRES lat/lng and 400s
  * without them rather than falling back to recent — a silent fallback returns a
@@ -87,6 +93,40 @@ const categoryListSchema = z
   })
   .transform((list) => list as (typeof CATEGORY_VALUES)[number][])
 
+type BusinessCategory = (typeof BUSINESS_CATEGORIES)[number]
+
+/**
+ * `businessCategory`: the sub-filter under the Organizations pill, in the same
+ * comma-separated shape as `category` and for the same reason. The values are
+ * Organization.businessCategory -- a fact about the SHOP, not the item -- so a
+ * sari-sari store's rice is found by Organizations + Sari-sari store, by Food,
+ * and by both at once.
+ */
+const businessCategoryListSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(400)
+  .transform((raw) => [...new Set(raw.split(",").map((c) => c.trim()).filter(Boolean))])
+  .superRefine((list, ctx) => {
+    if (list.length === 0) {
+      ctx.addIssue({ code: "custom", message: "businessCategory cannot be empty" })
+      return
+    }
+    for (const c of list) {
+      if (!(BUSINESS_CATEGORIES as readonly string[]).includes(c)) {
+        ctx.addIssue({ code: "custom", message: `Unknown businessCategory: ${c}` })
+      }
+    }
+  })
+  .transform((list) => list as BusinessCategory[])
+
+/**
+ * How many organisations a search puts above the item grid. A top result, not
+ * a directory: the item grid is still the answer to most searches.
+ */
+const MAX_ORG_MATCHES = 3
+
 /** A Leaf bound: a non-negative integer inside the column's range. */
 const leafBound = z.coerce
   .number()
@@ -106,12 +146,38 @@ const querySchema = z
     lng: z.coerce.number().min(-180).max(180).optional(),
     radiusKm: z.coerce.number().positive().max(MAX_RADIUS_KM).optional(),
     sort: z.enum(["recent", "nearest"]).optional().default("recent"),
+    /**
+     * The "Organizations" pill: show only listings posted by an organisation.
+     *
+     * A BOOLEAN FILTER AND NOT A CATEGORY. It sits in the same pill row as the
+     * category chips and looks like one, but it cannot be one -- `category` is
+     * the item taxonomy and "organisation" is a fact about the POSTER. Folding
+     * it into that list would mean a listing could be FOOD or it could be
+     * Organizations, and a sari-sari store's rice would have to be one or the
+     * other.
+     *
+     * So it composes rather than replaces: Organizations + Food is
+     * organisations' food listings, which is the useful query and the one a
+     * user picking both pills plainly means.
+     */
+    orgsOnly: z
+      .enum(["true", "false"])
+      .optional()
+      .transform((v) => v === "true"),
+    businessCategory: businessCategoryListSchema.optional(),
   })
   .refine((v) => v.sort !== "nearest" || (v.lat !== undefined && v.lng !== undefined), {
     message: "sort=nearest requires lat and lng",
   })
   .refine((v) => v.radiusKm === undefined || (v.lat !== undefined && v.lng !== undefined), {
     message: "radiusKm requires lat and lng",
+  })
+  // A business category is a kind of SHOP, so it only means something with the
+  // Organizations pill on. Refused rather than implying the pill: a client that
+  // sends one without the other has lost track of its own filter state, and a
+  // grid that quietly turned org-only would hide that.
+  .refine((v) => v.businessCategory === undefined || v.orgsOnly, {
+    message: "businessCategory requires orgsOnly=true",
   })
   // An inverted range returns nothing, silently and forever. Refusing it says
   // so once instead of leaving a client to wonder why the list is empty.
@@ -138,10 +204,37 @@ export async function GET(req: NextRequest) {
 
   const parsed = parseQuery(req, querySchema)
   if (!parsed.ok) return parsed.response
-  const { limit, category, condition, minLeaves, maxLeaves, q, lat, lng, radiusKm, sort } =
-    parsed.data
+  const {
+    limit,
+    category,
+    condition,
+    minLeaves,
+    maxLeaves,
+    q,
+    lat,
+    lng,
+    radiusKm,
+    sort,
+    orgsOnly,
+    businessCategory,
+  } = parsed.data
   const cursor = decodeCursor(parsed.data.cursor)
   if (parsed.data.cursor && !cursor) return invalid("Malformed cursor")
+
+  // ── The perishable sweep, BEFORE the page is read ──────────────────────────
+  //
+  // The same arrangement expireStaleOffers() has, and for the same reason: this
+  // deployment runs nothing on a schedule, so the paths that would be WRONG if
+  // the sweep had not run are the paths that run it. Browse is the first of
+  // those -- a tray of fish whose six hours ran out an hour ago is AVAILABLE in
+  // the database until something moves it, and serving it here is serving a
+  // listing nobody can act on.
+  //
+  // Unscoped and awaited. Unscoped because browse is everyone's listings, not
+  // one person's; awaited because the very next statement reads the rows this
+  // updates, and firing it off would race its own page. It is one UPDATE over
+  // an index and it touches nothing when there is nothing to expire.
+  await expirePerishableItems(prisma)
 
   // A bounding box first: cheap in SQL, and it turns a whole-table distance
   // computation into one over a small candidate set. The circle is applied
@@ -188,8 +281,71 @@ export async function GET(req: NextRequest) {
     ...(category ? { category: { in: category } } : {}),
     ...(condition ? { condition } : {}),
     ...leafRange,
-    ...(q ? { OR: [{ title: { contains: q, mode: "insensitive" as const } }, { description: { contains: q, mode: "insensitive" as const } }] } : {}),
+    // The search also matches the OWNER'S SHOP NAME (25 Sep 2026): searching
+    // "Baylo" returns the shop card from query 4 AND everything the shop has
+    // posted, not only listings that happen to repeat the shop's name in their
+    // title. The shop branch uses the card's own rule -- REJECTED is left out
+    // -- so a name that finds no card finds no listings through the name.
+    // Inside the OR, so it does not collide with visibleItemWhere()'s `user`
+    // key; block, suspension and every other filter still apply to it.
+    ...(q
+      ? {
+          OR: [
+            { title: { contains: q, mode: "insensitive" as const } },
+            { description: { contains: q, mode: "insensitive" as const } },
+            {
+              user: {
+                is: {
+                  isOrgAccount: true,
+                  organization: {
+                    is: {
+                      name: { contains: q, mode: "insensitive" as const },
+                      verificationStatus: { not: "REJECTED" as const },
+                    },
+                  },
+                },
+              },
+            },
+          ],
+        }
+      : {}),
     ...(box ?? {}),
+    // The Organizations pill. A predicate on the OWNER's discriminator column,
+    // which is why that column is stored rather than derived -- see the note on
+    // User.isOrgAccount. `organization: { isNot: null }` would say the same
+    // thing as a join, on the hottest list query in the app.
+    //
+    // isOrgAccount, NOT verificationStatus: the pill says "Organizations", so
+    // it shows organisations. Filtering to VERIFIED only would quietly hide
+    // every business still waiting on a review -- which is the state a business
+    // is in for its first days, exactly when it most needs to be findable. The
+    // badge on the card is what distinguishes verified from not.
+    //
+    // In an AND, NOT as a `user` key. visibleItemWhere() above already owns
+    // `user` (the block and suspension filters), and a second `user` spread
+    // here replaced it outright: with the pill on, blocked and suspended
+    // owners' listings came back.
+    //
+    // The business category rides in the same AND entry, so it is AND with
+    // everything else: Organizations + Apparel + Fashion is apparel shops'
+    // fashion listings. Several business categories are OR among themselves,
+    // exactly as several item categories are.
+    ...(orgsOnly
+      ? {
+          AND: [
+            {
+              user: {
+                is: {
+                  isOrgAccount: true,
+                  ...(businessCategory
+                    ? { organization: { is: { businessCategory: { in: businessCategory } } } }
+                    : {}),
+                },
+              },
+            },
+          ],
+        }
+      : {}),
   }
 
   const selection = {
@@ -269,13 +425,118 @@ export async function GET(req: NextRequest) {
     orderBy: { _count: { id: "desc" } },
   })
 
+  // ── 4 ── organisations whose NAME matches the search.
+  //
+  // The "top account" above the content results: the shop itself. Its
+  // listings are in the grid below through the shop-name branch of `q` in
+  // baseWhere; this is the card that goes with them.
+  //
+  // First page only -- it is one card above the grid, and repeating it on every
+  // scroll page would be a wasted query per page. Honours the business-category
+  // sub-filter, so the card never contradicts the chips under it, and the same
+  // block and suspension rules the grid does: a shop you blocked is not a
+  // search result any more than its listings are.
+  //
+  // REJECTED organisations are left out. Their document review failed, and a
+  // prominent card is not where a business that could not be verified belongs;
+  // PENDING ones stay in, unbadged, for the reason the pill keeps them.
+  const orgRows =
+    q && !cursor
+      ? await prisma.organization.findMany({
+          where: {
+            name: { contains: q, mode: "insensitive" },
+            verificationStatus: { not: "REJECTED" },
+            ...(businessCategory ? { businessCategory: { in: businessCategory } } : {}),
+            orgUser: { is: { ...userNotBlocked(viewerId), ...notSuspendedWhere() } },
+          },
+          select: {
+            id: true,
+            orgUserId: true,
+            name: true,
+            logoUrl: true,
+            businessCategory: true,
+            verificationStatus: true,
+            // For the card's Follow button. Following a shop IS following its
+            // backing account -- the same Follow row as following a person --
+            // so the viewer's edge is at most one row by the unique pair.
+            orgUser: {
+              select: {
+                followers: { where: { followerId: viewerId }, select: { status: true }, take: 1 },
+                _count: { select: { followers: { where: { status: "ACCEPTED" } } } },
+              },
+            },
+            // A member is not offered Follow on their own shop.
+            members: { where: { userId: viewerId, status: "ACTIVE" }, select: { id: true }, take: 1 },
+          },
+          orderBy: [{ name: "asc" }],
+          // Over-fetched, then ranked below: Prisma cannot order by "how well
+          // the name matches", and an exact match belongs at the top.
+          take: 20,
+        })
+      : []
+  const needle = q?.toLowerCase() ?? ""
+  const matchRank = (name: string) => {
+    const n = name.toLowerCase()
+    return n === needle ? 0 : n.startsWith(needle) ? 1 : 2
+  }
+  const organizations = orgRows
+    .sort(
+      (a, b) =>
+        matchRank(a.name) - matchRank(b.name) ||
+        Number(b.verificationStatus === "VERIFIED") - Number(a.verificationStatus === "VERIFIED"),
+    )
+    .slice(0, MAX_ORG_MATCHES)
+    .map((o) => ({
+      id: o.id,
+      orgUserId: o.orgUserId,
+      name: o.name,
+      logoUrl: o.logoUrl,
+      businessCategory: o.businessCategory,
+      businessCategoryLabel: BUSINESS_CATEGORY_LABEL[o.businessCategory as BusinessCategory],
+      verified: o.verificationStatus === "VERIFIED",
+      follow: o.orgUser.followers[0]?.status ?? ("NONE" as const),
+      followers: o.orgUser._count.followers,
+      isMember: o.members.length > 0,
+    }))
+
+  // ── 5 ── business-category facets, for the chips under the Organizations pill.
+  //
+  // From the DATA, not the enum: a category appears only when some visible
+  // organisation in it has something AVAILABLE, so no chip leads to an empty
+  // grid. Counted in shops, not listings -- groupBy cannot group items by their
+  // owner's organisation's column, and the chip only needs "is there anything".
+  // Unfiltered by the other controls, like the item facets and for the same
+  // reason: chips that vanish as you pick them are a worse control.
+  const businessFacetRows = orgsOnly
+    ? await prisma.organization.groupBy({
+        by: ["businessCategory"],
+        where: {
+          orgUser: {
+            is: {
+              ...userNotBlocked(viewerId),
+              ...notSuspendedWhere(),
+              items: { some: { status: "AVAILABLE", moderationHiddenAt: null } },
+            },
+          },
+        },
+        _count: { id: true },
+        orderBy: { _count: { id: "desc" } },
+      })
+    : []
+
   return ok(
     {
       items: rowsOut.map((r) => v1Item(r, viewerId, access)),
+      organizations,
       facets: {
         categories: facetRows.map((f) => ({
           category: f.category,
           label: categoryLabel(f.category),
+          count: f._count.id,
+        })),
+        businessCategories: businessFacetRows.map((f) => ({
+          businessCategory: f.businessCategory,
+          label: BUSINESS_CATEGORY_LABEL[f.businessCategory as BusinessCategory],
           count: f._count.id,
         })),
       },
@@ -290,6 +551,8 @@ export async function GET(req: NextRequest) {
       // nothing consumed this echo — it is diagnostic, not data.
       applied: {
         categories: category ?? [],
+        orgsOnly,
+        businessCategories: businessCategory ?? [],
         condition: condition ?? null,
         minLeaves: minLeaves ?? null,
         maxLeaves: maxLeaves ?? null,

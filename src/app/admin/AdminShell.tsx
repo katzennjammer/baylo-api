@@ -34,7 +34,12 @@ const LINKS: { href: string; label: string; icon: LucideIcon }[] = [
   { href: "/admin/dashboard", label: "Overview", icon: LayoutGrid },
   { href: "/admin/reports", label: "Overall report", icon: ChartLine },
   { href: "/admin", label: "Reports", icon: Flag },
-  { href: "/admin/id-verification", label: "ID checks", icon: IdCard },
+  // Two queues behind one entry: government IDs and business documents,
+  // switched by the tab strip on both pages. They are one job — "is this
+  // document real" — with different retention rules and different
+  // consequences, which is why they are separate routes rather than one
+  // filtered list. See DocumentQueueTabs.
+  { href: "/admin/id-verification", label: "Documents", icon: IdCard },
   { href: "/admin/review-queue", label: "Review queue", icon: Scale },
   { href: "/admin/appeals", label: "Appeals", icon: Gavel },
   { href: "/admin/users", label: "Users", icon: Users },
@@ -46,7 +51,7 @@ const LINKS: { href: string; label: string; icon: LucideIcon }[] = [
 ]
 
 // Longest href first, so a nested route like /admin/id-verification/xyz
-// matches the specific "ID checks" link before the "/admin" root link (which
+// matches the specific "Documents" link before the "/admin" root link (which
 // would otherwise prefix-match everything under /admin).
 const BY_SPECIFICITY = [...LINKS].sort((a, b) => b.href.length - a.href.length)
 

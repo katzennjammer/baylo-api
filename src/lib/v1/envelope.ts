@@ -46,6 +46,10 @@ export type ApiErrorCode =
   // request will work. Deferred Points Agreements ended on 16 Sep 2026 and
   // older APKs still call their seven routes.
   | "GONE"
+  // X-Baylo-Org named an organisation this person may not act as right now.
+  // The same code POST /api/items has always sent in its own format; the phone
+  // drops its acting context on it. See @/lib/inbox.
+  | "ORG_CONTEXT_REFUSED"
   | "INTERNAL_ERROR"
 
 const STATUS: Record<ApiErrorCode, number> = {
@@ -55,6 +59,7 @@ const STATUS: Record<ApiErrorCode, number> = {
   NOT_FOUND:        404,
   CONFLICT:         409,
   GONE:             410,
+  ORG_CONTEXT_REFUSED: 403,
   RATE_LIMITED:     429,
   INTERNAL_ERROR:   500,
 }
