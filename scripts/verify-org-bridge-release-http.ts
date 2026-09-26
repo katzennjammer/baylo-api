@@ -9,19 +9,24 @@
  *
  * ── WHY THIS CASE EXISTS (25 Sep 2026) ───────────────────────────────────────
  *
- * A person can send an offer to an org's listing, but nobody can accept or
- * decline it: every route after the offer acts as the signed-in human, and no
- * human IS the org's backing row. See verify-org-trading-http.ts. So a
- * proposer-paid bridge offer to an org holds the sender's fee on an offer that
- * only the SENDER, or the clock, can ever close. This pins down that both of
- * those paths give the fee back, exactly once, and that the org is paid
- * nothing:
+ * Written when nobody could accept or decline an offer to an org: the fee a
+ * proposer held on one could only come back by WITHDRAW or EXPIRY, and this
+ * pinned down that both of those give it back exactly once.
+ *
+ * Since org trading (26 Sep 2026, @/lib/trade-participant) the shop CAN
+ * close it, so section 2 changed from "staff are refused" to "only a real,
+ * header-carrying member is let in", and 5b adds the third way the fee comes
+ * back: the shop DECLINES. Settled trades, and fees paid TO or BY a shop, are
+ * in verify-org-settlement-http.ts.
  *
  *   1  the offer holds the fee: sender -10, one BRIDGE_FEE_HOLD row
- *   2  org staff cannot close it (403), and nothing moves
+ *   2  a stranger naming the org (ORG_CONTEXT_REFUSED) and the owner WITHOUT
+ *      the header (Forbidden) cannot close it, and nothing moves
  *   3  WITHDRAW: sender +10, one BRIDGE_FEE_RELEASE row, offer WITHDRAWN
  *   4  a second withdraw is refused and releases nothing
  *   5  EXPIRY: an offer past OFFER_EXPIRY_DAYS is swept, and refunded once
+ *   5b DECLINE by the owner acting as the org: +10 once, offer DECLINED; a
+ *      second decline releases nothing
  *   6  the org's balance never moved; nothing left in escrow; the ledger
  *      invariant holds with the test rows present
  *
@@ -136,11 +141,19 @@ async function main() {
       })
     const mine1 = await item(sender.id, "mug", LOW)
     const mine2 = await item(sender.id, "lamp", LOW)
+    const mine3 = await item(sender.id, "vase", LOW)
     const orgListing1 = await item(org.orgUserId, "rice", HIGH)
     const orgListing2 = await item(org.orgUserId, "sugar", HIGH)
+    const orgListing3 = await item(org.orgUserId, "flour", HIGH)
 
     const senderToken = await signAccessToken(sender.id)
     const ownerToken = await signAccessToken(owner.id)
+    const stranger = await prisma.user.create({
+      data: { name: `${tag}-stranger`, email: `${tag}-stranger@test.invalid`, isVerified: true, idVerifiedGrandfatheredAt: new Date() },
+      select: { id: true },
+    })
+    users.push(stranger.id)
+    const strangerToken = await signAccessToken(stranger.id)
     const consent = { accepted: true, policyVersion: TRADING_POLICY_VERSION }
 
     // ── 1 ──
@@ -164,11 +177,16 @@ async function main() {
     check("heldBridgeFees(sender) reports it", (await heldBridgeFees(prisma, sender.id)) === FEE)
 
     // ── 2 ──
-    head("2  org staff cannot close it, and nothing moves")
-    const decline = await call(`/api/offers/${offerId}`, {
-      token: ownerToken, orgId: org.organizationId, method: "PATCH", body: { action: "decline" },
+    head("2  only a real member acting as the org may close it; nothing moves otherwise")
+    const byStranger = await call(`/api/offers/${offerId}`, {
+      token: strangerToken, orgId: org.organizationId, method: "PATCH", body: { action: "decline" },
     })
-    check("the org's owner, acting as the org, is refused", decline.status === 403, `status ${decline.status}`)
+    check("a stranger naming the org is refused ORG_CONTEXT_REFUSED",
+      byStranger.status === 403 && byStranger.body.code === "ORG_CONTEXT_REFUSED", `status ${byStranger.status} ${JSON.stringify(byStranger.body)}`)
+    const noHeader = await call(`/api/offers/${offerId}`, {
+      token: ownerToken, method: "PATCH", body: { action: "decline" },
+    })
+    check("the org's owner WITHOUT X-Baylo-Org is not the receiver (403)", noHeader.status === 403, `status ${noHeader.status}`)
     check("sender still held", (await feeBalance(sender.id)) === START - FEE)
     check("no release row", (await rows(offerId, "BRIDGE_FEE_RELEASE")).length === 0)
 
@@ -219,10 +237,39 @@ async function main() {
         rel2.length === 1 && rel2[0].amount === FEE && rel2[0].userId === sender.id, JSON.stringify(rel2))
     }
 
+    // ── 5b ──
+    head("5b  the owner, acting as the org, DECLINES: the fee comes back once")
+    const sent3 = await call("/api/offers", {
+      token: senderToken, method: "POST",
+      body: { postId: orgListing3.id, offeredItemId: mine3.id, consent },
+    })
+    check("third offer created", sent3.status === 201, `status ${sent3.status} ${JSON.stringify(sent3.body).slice(0, 200)}`)
+    if (sent3.status === 201) {
+      const offer3 = String(sent3.body.offerId)
+      await letQuestsSettle()
+      check("held again", (await feeBalance(sender.id)) === START - FEE)
+      const d1 = await call(`/api/offers/${offer3}`, {
+        token: ownerToken, orgId: org.organizationId, method: "PATCH", body: { action: "decline" },
+      })
+      check("decline 200, releasedLeaves = FEE", d1.status === 200 && d1.body.releasedLeaves === FEE,
+        `status ${d1.status} ${JSON.stringify(d1.body).slice(0, 200)}`)
+      const o3 = await prisma.offer.findUniqueOrThrow({ where: { id: offer3 }, select: { status: true } })
+      check("offer DECLINED", o3.status === "DECLINED", o3.status)
+      check(`sender balance back to ${START}`, (await feeBalance(sender.id)) === START, String(await feeBalance(sender.id)))
+      const rel3 = await rows(offer3, "BRIDGE_FEE_RELEASE")
+      check("exactly one release row, +FEE, on the sender",
+        rel3.length === 1 && rel3[0].amount === FEE && rel3[0].userId === sender.id, JSON.stringify(rel3))
+      const d2 = await call(`/api/offers/${offer3}`, {
+        token: ownerToken, orgId: org.organizationId, method: "PATCH", body: { action: "decline" },
+      })
+      check("a second decline is refused", d2.status === 400 || d2.status === 409, `status ${d2.status}`)
+      check("still exactly one release row", (await rows(offer3, "BRIDGE_FEE_RELEASE")).length === 1)
+    }
+
     // ── 6 ──
     head("6  the org, escrow, and the ledger")
     check("the org's balance never moved", (await bal(org.orgUserId)) === orgStart, `${orgStart} -> ${await bal(org.orgUserId)}`)
-    check("the org has no ledger rows from either offer",
+    check("the org has no ledger rows from any of the offers",
       (await prisma.leafTransaction.count({ where: { userId: org.orgUserId, offerId: { not: null } } })) === 0)
     check("nothing left in escrow for the sender", (await heldBridgeFees(prisma, sender.id)) === 0)
     const other = await prisma.leafTransaction.findMany({

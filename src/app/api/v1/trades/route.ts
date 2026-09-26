@@ -4,7 +4,8 @@ import { resolveSession } from "@/lib/api-auth"
 import prisma from "@/lib/prisma"
 import { leafBalances } from "@/lib/leaves"
 import { expireStaleOffers } from "@/lib/offers"
-import { ok, unauthenticated, invalid } from "@/lib/v1/envelope"
+import { ok, unauthenticated, invalid, fail } from "@/lib/v1/envelope"
+import { resolveTradeViewer } from "@/lib/trade-participant"
 import { parseQuery, paginationShape, MAX_LIMIT } from "@/lib/v1/query"
 import { decodeCursor, encodeCursor, paginate, cursorDate } from "@/lib/v1/cursor"
 import { SAFE_ZONE_HUB_SELECT, v1Hub, type SafeZoneHubRow } from "@/lib/safe-zones"
@@ -84,7 +85,16 @@ const USER_BRIEF = { id: true, name: true, avatar: true } as const
 export async function GET(req: NextRequest) {
   const session = await resolveSession()
   if (!session?.user?.id) return unauthenticated()
-  const viewerId = session.user.id
+
+  // Whose list: acting as a shop (X-Baylo-Org, ACTIVE membership) it is the
+  // SHOP's -- its trades, its offers, its balance -- and only the shop's, the
+  // way the shop's Messages are (26 Sep 2026). Every query below keys on
+  // `viewerId`, so this one line is the whole switch. A dead context is
+  // refused, not silently answered with the person's list under a screen that
+  // says it is the shop's. See @/lib/trade-participant.
+  const viewer = await resolveTradeViewer(session.user.id, req.headers)
+  if (!viewer.ok) return fail("ORG_CONTEXT_REFUSED", viewer.message)
+  const viewerId = viewer.viewerId
 
   const parsed = parseQuery(req, querySchema)
   if (!parsed.ok) return parsed.response

@@ -16,11 +16,25 @@
  *             with no GET /api/v1/quests involved, and never touches the org's
  *             backing row.
  *
- * B and C assert what the schema says should happen ("STAFF trades", on
- * OrganizationMemberRole), NOT what the routes do today. Today only POST
- * /api/items reads X-Baylo-Org, so they FAIL: every offer and trade route
- * acts as the signed-in human. See the report of 25 Sep 2026. When org
- * trading is built, these are the checks that should turn green.
+ *   D         SELF-DEALING. A member (owner, staff, or a PENDING invitee)
+ *             offering on their own shop's listing is refused at propose; an
+ *             offer that predates the membership is refused at accept (and
+ *             may still be DECLINED, which is how it gets closed).
+ *   R         A REMOVED member, or a stranger, naming the shop in X-Baylo-Org
+ *             is refused ORG_CONTEXT_REFUSED on accept and on the Trades list,
+ *             and the offer is untouched. Staff WITHOUT the header are simply
+ *             not a participant (403 Forbidden).
+ *
+ * B IS GREEN SINCE 26 SEP 2026 (org trading, @/lib/trade-participant). The
+ * money side of a shop's trades -- settlement, fees, rewards -- is in
+ * verify-org-settlement-http.ts.
+ *
+ * C IS EXPECTED TO FAIL, DELIBERATELY. Shop-initiated offers were deferred on
+ * 26 Sep 2026 (decision F): POST /api/offers still acts as the signed-in human,
+ * so a staff member's offer is sent BY the person, and the shop's item is not
+ * theirs to offer. The check stays in, reporting FAIL and labelled as known,
+ * so the day it is built there is already a test waiting to turn green. A run
+ * of this file is healthy when C is the ONLY failure.
  *
  * Fixtures are tagged, created through Prisma and the org library, and
  * deleted in `finally`.
@@ -177,6 +191,10 @@ async function main() {
       })
       check("staff with X-Baylo-Org can accept an offer on the org's listing",
         accAsOrg.status === 200, brief(accAsOrg))
+      const tr = accAsOrg.status === 200
+        ? await prisma.tradeRequest.findUnique({ where: { id: String(accAsOrg.body.tradeId) }, select: { receiverId: true } })
+        : null
+      check("the trade's receiver is the org's backing row", tr?.receiverId === org.orgUserId, `receiver ${tr?.receiverId}`)
     }
 
     // ── C ───────────────────────────────────────────────────────────────────
@@ -185,14 +203,97 @@ async function main() {
       token: staffToken, orgId: org.organizationId, method: "POST",
       body: { postId: aliceItem2.id, offeredItemId: orgItem2.id },
     })
-    check("staff with X-Baylo-Org can offer an org item", fromOrg.status === 201, brief(fromOrg))
+    check("[KNOWN FAIL, deferred F] staff with X-Baylo-Org can offer an org item", fromOrg.status === 201, brief(fromOrg))
     if (fromOrg.status === 201) {
       const row = await prisma.offer.findUnique({
         where: { id: String(fromOrg.body.offerId) }, select: { senderId: true },
       })
-      check("and the offer is sent BY the org, not the staff member", row?.senderId === org.orgUserId,
+      check("[KNOWN FAIL, deferred F] and the offer is sent BY the org, not the staff member", row?.senderId === org.orgUserId,
         `sender ${row?.senderId}`)
     }
+
+    // ── D ───────────────────────────────────────────────────────────────────
+    console.log("\nD: a shop and its own members cannot trade")
+    const invitee = await person("invitee")
+    created.users.push(invitee.id)
+    await prisma.organizationMember.create({
+      data: { organizationId: org.organizationId, userId: invitee.id, role: "STAFF", status: "PENDING" },
+    })
+    const ownerToken = await signAccessToken(owner.id)
+    const inviteeToken = await signAccessToken(invitee.id)
+    const orgItem3 = await item(org.orgUserId, "org salt")
+    for (const [who, token, ownerId] of [
+      ["staff", staffToken, staff.id], ["owner", ownerToken, owner.id], ["a PENDING invitee", inviteeToken, invitee.id],
+    ] as const) {
+      const theirs = await item(ownerId, `${who} personal thing`)
+      const self = await call("/api/offers", {
+        token, method: "POST", body: { postId: orgItem3.id, offeredItemId: theirs.id },
+      })
+      check(`${who}, as themselves, cannot offer on their own shop's listing`,
+        self.status === 403 && self.body.code === "SHOP_MEMBER_SELF_TRADE", brief(self))
+    }
+    // An offer that got in before the membership existed: written directly,
+    // the way it would have been sent before the staff member joined.
+    const staffThing = await item(staff.id, "staff old thing")
+    const early = await prisma.offer.create({
+      data: {
+        postId: orgItem3.id, senderId: staff.id, receiverId: org.orgUserId,
+        offeredItems: JSON.stringify([{ id: staffThing.id }]), status: "PENDING",
+        offeredBracket: 1, targetBracket: 1,
+      },
+      select: { id: true },
+    })
+    const selfAccept = await call(`/api/offers/${early.id}`, {
+      token: ownerToken, orgId: org.organizationId, method: "PATCH", body: { action: "accept" },
+    })
+    check("the shop cannot ACCEPT an offer from its own member",
+      selfAccept.status === 403 && selfAccept.body.code === "SHOP_MEMBER_SELF_TRADE", brief(selfAccept))
+    const earlyAfter = await prisma.offer.findUniqueOrThrow({ where: { id: early.id }, select: { status: true } })
+    check("and the offer is still PENDING", earlyAfter.status === "PENDING", earlyAfter.status)
+    const selfDecline = await call(`/api/offers/${early.id}`, {
+      token: ownerToken, orgId: org.organizationId, method: "PATCH", body: { action: "decline" },
+    })
+    check("but the shop may DECLINE it", selfDecline.status === 200, brief(selfDecline))
+
+    // ── R ───────────────────────────────────────────────────────────────────
+    console.log("\nR: removed members and strangers")
+    const leaver = await person("leaver")
+    created.users.push(leaver.id)
+    const leaverToken = await signAccessToken(leaver.id)
+    const membership = await prisma.organizationMember.create({
+      data: { organizationId: org.organizationId, userId: leaver.id, role: "STAFF", status: "ACTIVE" },
+      select: { id: true },
+    })
+    const orgItem4 = await item(org.orgUserId, "org flour")
+    const bobItem3 = await item(bob.id, "bob pan")
+    const toOrg2 = await call("/api/offers", {
+      token: bobToken, method: "POST", body: { postId: orgItem4.id, offeredItemId: bobItem3.id },
+    })
+    check("bob offers on another org listing", toOrg2.status === 201, brief(toOrg2))
+    await prisma.organizationMember.delete({ where: { id: membership.id } })
+    if (toOrg2.status === 201) {
+      const removed = await call(`/api/offers/${toOrg2.body.offerId}`, {
+        token: leaverToken, orgId: org.organizationId, method: "PATCH", body: { action: "accept" },
+      })
+      check("a REMOVED member acting as the shop is refused ORG_CONTEXT_REFUSED",
+        removed.status === 403 && removed.body.code === "ORG_CONTEXT_REFUSED", brief(removed))
+      const stranger = await call(`/api/offers/${toOrg2.body.offerId}`, {
+        token: aliceToken, orgId: org.organizationId, method: "PATCH", body: { action: "accept" },
+      })
+      check("a stranger naming the shop is refused ORG_CONTEXT_REFUSED",
+        stranger.status === 403 && stranger.body.code === "ORG_CONTEXT_REFUSED", brief(stranger))
+      const noHeader = await call(`/api/offers/${toOrg2.body.offerId}`, {
+        token: staffToken, method: "PATCH", body: { action: "accept" },
+      })
+      check("staff WITHOUT the header are not the receiver (403 Forbidden)",
+        noHeader.status === 403 && noHeader.body.code === undefined, brief(noHeader))
+      const still = await prisma.offer.findUniqueOrThrow({ where: { id: String(toOrg2.body.offerId) }, select: { status: true } })
+      check("and the offer is untouched (PENDING)", still.status === "PENDING", still.status)
+    }
+    const removedList = await call("/api/v1/trades?tab=active", { token: leaverToken, orgId: org.organizationId })
+    check("the removed member's Trades list as the shop is refused ORG_CONTEXT_REFUSED",
+      removedList.status === 403 && (removedList.body.error as { code?: string } | undefined)?.code === "ORG_CONTEXT_REFUSED",
+      brief(removedList))
 
     // ── quests, through the event hook alone ────────────────────────────────
     console.log("\nquests: settled by POST /api/offers, no GET /api/v1/quests")

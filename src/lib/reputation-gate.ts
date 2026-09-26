@@ -76,7 +76,10 @@ export async function loadStanding(userId: string): Promise<TraderStanding> {
   const [user, completedTrades] = await Promise.all([
     prisma.user.findUnique({
       where: { id: userId },
-      select: { rating: true, premiumUntil: true, vipUntil: true },
+      select: {
+        rating: true, premiumUntil: true, vipUntil: true,
+        isOrgAccount: true, organization: { select: { verificationStatus: true } },
+      },
     }),
     prisma.tradeRequest.count({
       where: { status: "COMPLETED", OR: [{ senderId: userId }, { receiverId: userId }] },
@@ -91,8 +94,21 @@ export async function loadStanding(userId: string): Promise<TraderStanding> {
   // that opens early is not a gate.
   const tier = getTrustTier(completedTrades, rating)
 
+  /*
+   * A VERIFIED SHOP HAS NO TIER CAP (26 Sep 2026). The trade-count ladder is
+   * about a person building a reputation, and organisations do not climb it
+   * (see @/lib/organizations); a verified MSME's standing is its verification.
+   * Without this a shop accepting as itself would read as a New Trader with
+   * zero completed trades and be capped at bracket 3 forever -- or until it
+   * had done the trades a person does. The PREMIUM gate is untouched: a shop
+   * has premiumUntil like anyone, and acquiring a bracket-7 item needs it.
+   * A shop that is PENDING or REJECTED keeps the ladder's cap.
+   */
+  const verifiedShop = user?.isOrgAccount === true && user.organization?.verificationStatus === "VERIFIED"
+  const limits = verifiedShop ? { ...getTierLimits(tier), maxItemBracket: null } : getTierLimits(tier)
+
   return {
-    userId, rating, completedTrades, tier, limits: getTierLimits(tier), premium, vip,
+    userId, rating, completedTrades, tier, limits, premium, vip,
     premiumUntil: user?.premiumUntil ?? null,
     vipUntil: user?.vipUntil ?? null,
   }

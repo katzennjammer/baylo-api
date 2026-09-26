@@ -81,11 +81,19 @@ export async function resolveInbox(
  *   IN   FOLLOW_REQUEST                 "started following you" (follows are
  *                                       ACCEPTED at once). Opens the follower's
  *                                       profile, which is all the row is about.
- *
- *   OUT  NEW_MESSAGE, "conversation"    an offer on a shop listing. Nobody can
- *                                       accept one as a shop (org trading is not
- *                                       built). The offer's message row is still
- *                                       in the shop's Messages, so nothing is lost.
+ *   IN   NEW_MESSAGE, "conversation"    an offer on a shop listing. Opens the
+ *                                       shop's thread, whose offer card opens
+ *                                       offer-review, which reads the SHOP's
+ *                                       Trades list and accepts as the shop
+ *                                       (org trading, @/lib/trade-participant,
+ *                                       26 Sep 2026).
+ *   IN   TRADE_REQUEST                  a direct request to the shop. Opens the
+ *                                       Trades tab, which is the shop's.
+ *   IN   TRADE_CANCELLED                the other side cancelled. No entity
+ *                                       pair, so informational -- the same row
+ *                                       a person gets.
+ *   IN   MEETUP_PROPOSED, MEETUP_AGREED the meetup screen, whose routes accept
+ *                                       the shop as a participant.
  *   OUT  NEW_MESSAGE, "item"            a comment on a shop listing. Replying
  *                                       from the comments sheet posts as the
  *                                       PERSON, against the rule that the shop
@@ -98,8 +106,13 @@ export async function resolveInbox(
  *                                       was the reason these were excluded.
  *   OUT  CATEGORY_MATCH                 the point of a match is an offer, and an
  *                                       offer from there goes out as the person.
- *   OUT  TRADE_*, OFFER_EXPIRED,        trade screens; org trading is not built.
- *        MEETUP_*, NEW_REVIEW
+ *   OUT  TRADE_COMPLETED, NEW_REVIEW    open rate-trade / reviews, which are
+ *                                       still the PERSON's: a shop cannot leave
+ *                                       or read a review as itself yet.
+ *   OUT  TRADE_ACCEPTED, TRADE_REJECTED, addressed to the offer's SENDER, and a
+ *        OFFER_EXPIRED                  shop never sends one: shop-initiated
+ *                                       offers are deliberately not built. Kept
+ *                                       out until they are and are checked.
  *   --   ID_*, ORG_INVITE, REPORT_*,    addressed to people, never to a backing
  *        FOLLOW_ACCEPTED, org review    row, so there is nothing to filter.
  *
@@ -114,7 +127,12 @@ export function shopBellWhere(): Prisma.NotificationWhereInput {
   return {
     OR: [
       { type: "NEW_MESSAGE", entityType: null },
+      { type: "NEW_MESSAGE", entityType: "conversation" },
       { type: "FOLLOW_REQUEST" },
+      { type: "TRADE_REQUEST" },
+      { type: "TRADE_CANCELLED" },
+      { type: "MEETUP_PROPOSED" },
+      { type: "MEETUP_AGREED" },
     ],
   }
 }

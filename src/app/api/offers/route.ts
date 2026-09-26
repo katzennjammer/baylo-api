@@ -19,6 +19,7 @@ import { assessOffer, refusalStatus } from "@/lib/offer-check"
 import { holdBridgeFee } from "@/lib/bridge-fee"
 import { TRADING_POLICY_VERSION } from "@/lib/trade-rules"
 import { settleQuestsAsync } from "@/lib/quests"
+import { isShopMemberPair, shopMemberSelfTradeRefusal } from "@/lib/trade-participant"
 
 /**
  * POST /api/offers — one of your items for one of theirs.
@@ -102,6 +103,10 @@ export async function POST(req: NextRequest) {
     // gates, for the same reason as the trade route.
     const blocked = await enforceNotBlocked(senderId, post.userId, "make an offer to this person")
     if (blocked) return blocked
+
+    // A member offering on their own shop's listing. Refused here AND at
+    // accept: one person on both sides of a trade. See @/lib/trade-participant.
+    if (await isShopMemberPair(prisma, senderId, post.userId)) return shopMemberSelfTradeRefusal()
 
     // ── Reputation gates, INITIATING path ──
     //

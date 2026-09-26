@@ -9,6 +9,9 @@ import { assessOffer, refusalStatus } from "@/lib/offer-check"
 import { holdBridgeFee, releaseBridgeFee } from "@/lib/bridge-fee"
 import { TRADING_POLICY_VERSION } from "@/lib/trade-rules"
 import { createSystemMessage } from "@/lib/system-message"
+import {
+  isShopMemberPair, legacyParticipantRefusal, resolveTradeParticipant, shopMemberSelfTradeRefusal,
+} from "@/lib/trade-participant"
 
 /**
  * PATCH /api/offers/[id] — the RECEIVER accepts or declines.
@@ -83,9 +86,16 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       },
     })
     if (!offer) return NextResponse.json({ error: "Offer not found" }, { status: 404 })
-    if (offer.receiverId !== session.user.id) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 })
-    }
+    // The receiver decides: the person, or -- acting as a shop (X-Baylo-Org,
+    // ACTIVE membership) -- the shop, for an offer on the shop's listing. From
+    // here on `myId` is that side: the standing the gates read, the actor on
+    // the notification, the author of the system message. Any active member
+    // may decide, and on an up-bridge their consent is given on the SHOP's
+    // behalf and the fee is held off the shop's balance (offer.receiverId).
+    // See @/lib/trade-participant.
+    const who = await resolveTradeParticipant(session.user.id, req.headers, offer, "receiver")
+    if (!who.ok) return legacyParticipantRefusal(who)
+    const myId = who.participantId
     if (offer.status !== "PENDING") {
       return NextResponse.json({ error: "Offer already resolved" }, { status: 400 })
     }
@@ -108,6 +118,12 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       offer.offeredBracket < offer.targetBracket
 
     if (action === "accept") {
+      // A shop accepting an offer from one of its own members: one person on
+      // both sides. Refused here as well as at propose, because the offer may
+      // predate the membership. A DECLINE is allowed -- it is how the offer
+      // gets closed and a held fee returned. See @/lib/trade-participant.
+      if (await isShopMemberPair(prisma, offer.senderId, offer.receiverId)) return shopMemberSelfTradeRefusal()
+
       if (!offeredItemId) {
         return NextResponse.json(
           {
@@ -154,7 +170,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       //
       // The accepter is acquiring the offered item, so the premium bracket gate
       // and the tier value ceiling apply to it.
-      const gate = await enforceAcceptTrade(session.user.id, [offeredItemId])
+      const gate = await enforceAcceptTrade(myId, [offeredItemId])
       if (gate.response) return gate.response
 
       /*
@@ -413,14 +429,14 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
               (fee > 0 && proposerPays
                 ? ` — your ${fee}-Leaf bridging fee is back in your balance`
                 : ""),
-        link: `/dashboard/messages?partner=${session.user.id}`,
-        actorId: session.user.id,
+        link: `/dashboard/messages?partner=${myId}`,
+        actorId: myId,
         // An ACCEPT has a real trade to point at, so it writes the fine-grained
         // ('trade', <tradeId>) pair. A DECLINE never has one: nothing was
         // created, and the thread is where the conversation continues.
         ...(tradeRecord
           ? { entityType: "trade", entityId: tradeRecord.id }
-          : { entityType: "conversation", entityId: session.user.id }),
+          : { entityType: "conversation", entityId: myId }),
       },
     })
     pusher
@@ -448,7 +464,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     const receiverSystemContent = JSON.stringify(updatePayload)
     const systemMsg = await createSystemMessage({
       eventKey: `offer-update:${offerId}:${newStatus}:${offer.senderId}`,
-      senderId: session.user.id,
+      senderId: myId,
       receiverId: offer.senderId,
       tradeId: tradeRecord?.id,
       content: senderSystemContent,

@@ -12,6 +12,9 @@ import { awardTradeRewards, rewardDenialCopy, type RewardOutcome } from "@/lib/t
 import { resolveMeetupHub } from "@/lib/safe-zones"
 import { createSystemMessage } from "@/lib/system-message"
 import { settleQuestsAsync, TRADE_QUESTS } from "@/lib/quests"
+import {
+  isShopMemberPair, legacyParticipantRefusal, resolveTradeParticipant, shopMemberSelfTradeRefusal,
+} from "@/lib/trade-participant"
 
 export async function POST(
   req: NextRequest,
@@ -22,11 +25,11 @@ export async function POST(
     if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
     const { id: tradeId } = await params
-    const myId = session.user.id
+    const humanId = session.user.id
 
     // A second, coarser brake on top of the per-code counter below: the counter
     // burns one code, this bounds how fast a caller can burn codes at all.
-    const limited = enforceRateLimit("confirmSubmit", myId)
+    const limited = enforceRateLimit("confirmSubmit", humanId)
     if (limited) return limited
 
     const parsed = await parseBody(req, confirmSubmitSchema)
@@ -45,9 +48,17 @@ export async function POST(
     })
 
     if (!trade) return NextResponse.json({ error: "Trade not found" }, { status: 404 })
-    if (trade.senderId !== myId && trade.receiverId !== myId) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 })
-    }
+    // Either side: the person, or the shop they are acting as. A staff
+    // member entering the partner's code while acting as the shop IS the shop
+    // fulfilling its side: its code row is marked used and its items move.
+    // See @/lib/trade-participant.
+    const who = await resolveTradeParticipant(session.user.id, req.headers, trade)
+    if (!who.ok) return legacyParticipantRefusal(who)
+    const myId = who.participantId
+    // A shop and one of its own members, at settlement too: a person invited
+    // after the trade was accepted can read BOTH swap codes and would settle
+    // with themselves. Cancelling stays open. See @/lib/trade-participant.
+    if (await isShopMemberPair(prisma, trade.senderId, trade.receiverId)) return shopMemberSelfTradeRefusal()
     if (trade.status !== "CONFIRMING" && trade.status !== "COMPLETED") {
       return NextResponse.json({ error: "Trade is not in confirmation phase" }, { status: 400 })
     }
