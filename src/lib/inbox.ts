@@ -106,13 +106,26 @@ export async function resolveInbox(
  *                                       was the reason these were excluded.
  *   OUT  CATEGORY_MATCH                 the point of a match is an offer, and an
  *                                       offer from there goes out as the person.
- *   OUT  TRADE_COMPLETED, NEW_REVIEW    open rate-trade / reviews, which are
- *                                       still the PERSON's: a shop cannot leave
- *                                       or read a review as itself yet.
- *   OUT  TRADE_ACCEPTED, TRADE_REJECTED, addressed to the offer's SENDER, and a
- *        OFFER_EXPIRED                  shop never sends one: shop-initiated
- *                                       offers are deliberately not built. Kept
- *                                       out until they are and are checked.
+ *   IN   TRADE_COMPLETED                opens rate-trade, which reads the
+ *                                       SHOP's Trades history and, since 27 Sep
+ *                                       2026, POST /api/reviews rates as the
+ *                                       shop (resolveTradeParticipant). A
+ *                                       review is reputation, not issuance, so
+ *                                       this does not touch decision E.
+ *   IN   NEW_REVIEW                     a customer rated the shop. Opens the
+ *                                       Profile tab, which in shop mode is the
+ *                                       storefront, whose Reviews tab is the
+ *                                       shop's.
+ *   OUT  TRADE_ACCEPTED, TRADE_REJECTED, NOT A GAP -- NOTHING TO SHOW. All are
+ *        OFFER_EXPIRED                  addressed to the offer's SENDER (the
+ *                                       rival auto-decline too), and both
+ *                                       routes that create a sender write
+ *                                       session.user.id: an offer made in shop
+ *                                       mode goes out as the PERSON and its
+ *                                       answer lands in the person's bell. A
+ *                                       backing row cannot sign in, so it is
+ *                                       never a sender. Revisit only with
+ *                                       shop-initiated offers (decision F).
  *   --   ID_*, ORG_INVITE, REPORT_*,    addressed to people, never to a backing
  *        FOLLOW_ACCEPTED, org review    row, so there is nothing to filter.
  *
@@ -133,6 +146,8 @@ export function shopBellWhere(): Prisma.NotificationWhereInput {
       { type: "TRADE_CANCELLED" },
       { type: "MEETUP_PROPOSED" },
       { type: "MEETUP_AGREED" },
+      { type: "TRADE_COMPLETED" },
+      { type: "NEW_REVIEW" },
     ],
   }
 }

@@ -35,6 +35,17 @@
  *      bracket-2 listing and pays at propose; staff accept; at settlement the
  *      fee lands on the shop's balance.
  *
+ *   4  RATE AS THE SHOP (27 Sep 2026). On trade 1: staff, acting as the shop,
+ *      rate the person; the review's reviewer is the SHOP and the reviewee the
+ *      person, whose rating moves. Without the header staff are not a party;
+ *      a second member of the same shop gets 409 (one side, one review). The
+ *      person rates the shop back and the shop's bell shows NEW_REVIEW and
+ *      TRADE_COMPLETED. The shop's review moves NO Leaves anywhere: every
+ *      ledger row and every balance in the schema is compared before/after.
+ *        4f  hired later: p3 joins the shop as staff AFTER trade 3 completed.
+ *            As the shop that would be a self-review; refused
+ *            SHOP_MEMBER_SELF_TRADE either way round, nothing written.
+ *
  * The three-part ledger invariant (@/scripts/lib/ledger-invariant) is checked
  * before anything and after every section. Each case uses a DIFFERENT person,
  * so the reward's repeat-pair gate never decides an outcome here.
@@ -373,7 +384,87 @@ async function main() {
         && (await ledgerRows({ tradeId: trade3, type: "BRIDGE_FEE_PAID" })).length === 1)
     await letQuestsSettle()
     await invariant("after 3")
+
+    // ── 4 ────────────────────────────────────────────────────────────────────
+    head("4  settle-then-rate: staff rate trade 1 AS THE SHOP")
+    const ledgerSnapshot = async () => ({
+      rows: await prisma.leafTransaction.count(),
+      sum: (await prisma.leafTransaction.aggregate({ _sum: { amount: true } }))._sum.amount ?? 0,
+      balances: (await prisma.user.aggregate({ _sum: { leaves: true } }))._sum.leaves ?? 0,
+    })
+    const before4 = await ledgerSnapshot()
+    const p1RatingBefore = (await prisma.user.findUniqueOrThrow({ where: { id: p1.id }, select: { rating: true } })).rating
+
+    const noHeader = await call("/api/reviews", { token: staff.token, method: "POST", body: { tradeId: trade1, stars: 4 } })
+    check("4: WITHOUT the header, staff are not a party to the trade (403)", noHeader.status === 403, brief(noHeader))
+
+    const r1 = await call("/api/reviews", {
+      token: staff.token, orgId: verified.organizationId, method: "POST", body: { tradeId: trade1, stars: 4, comment: "smooth" },
+    })
+    check("4: staff, acting as the shop, rate the trade", r1.status === 200 && typeof r1.body.reviewId === "string", brief(r1))
+    const rev1 = await prisma.review.findUnique({ where: { id: String(r1.body.reviewId) }, select: { reviewerId: true, revieweeId: true, rating: true } })
+    check("4: reviewer is the SHOP's backing row, not the staff member", rev1?.reviewerId === verified.orgUserId, JSON.stringify(rev1))
+    check("4: reviewee is the person", rev1?.revieweeId === p1.id && rev1?.rating === 4, JSON.stringify(rev1))
+    const p1RatingAfter = (await prisma.user.findUniqueOrThrow({ where: { id: p1.id }, select: { rating: true } })).rating
+    check("4: the person's rating moved to 4", p1RatingAfter === 4, `${p1RatingBefore} -> ${p1RatingAfter}`)
+    const staffGave = await prisma.review.count({ where: { reviewerId: { in: [staff.id, owner.id] } } })
+    check("4: no review is attributed to any human member", staffGave === 0, String(staffGave))
+    const n1 = await prisma.notification.findFirst({ where: { userId: p1.id, type: "NEW_REVIEW" }, select: { actorId: true } })
+    check("4: the person's NEW_REVIEW is from the shop", n1?.actorId === verified.orgUserId, String(n1?.actorId))
+
+    const dup = await call("/api/reviews", {
+      token: owner.token, orgId: verified.organizationId, method: "POST", body: { tradeId: trade1, stars: 1 },
+    })
+    check("4: the OWNER, as the same shop, is refused 409 (one side, one review)", dup.status === 409, brief(dup))
+
+    const shopHistory = await call("/api/v1/trades?tab=history&limit=50", { token: staff.token, orgId: verified.organizationId })
+    const hist = ((shopHistory.body.data as Record<string, unknown>)?.trades ?? []) as { id: string; myReview?: { rating: number } | null }[]
+    check("4: the shop's history shows myReview = 4 (rate screen reads 'already rated')",
+      hist.find((t) => t.id === trade1)?.myReview?.rating === 4, brief(shopHistory))
+
+    await letQuestsSettle()
+    const after4 = await ledgerSnapshot()
+    check("4: the shop's review wrote NO ledger rows anywhere in the schema", after4.rows === before4.rows, `${before4.rows} -> ${after4.rows}`)
+    check("4: ledger sum and SUM(User.leaves) unchanged",
+      after4.sum === before4.sum && after4.balances === before4.balances, JSON.stringify({ before4, after4 }))
+    await shopEarnedNothing(verified.orgUserId, trade1, "4")
+    check("4: the staff member's balance did not move", (await bal(staff.id)) === staffStart)
+
+    head("4d  the person rates the shop back")
+    const p1BalBefore = await bal(p1.id)
+    const r2 = await call("/api/reviews", { token: p1.token, method: "POST", body: { tradeId: trade1, stars: 5 } })
+    check("4d: the person rates the shop", r2.status === 200, brief(r2))
+    const shopRating = (await prisma.user.findUniqueOrThrow({ where: { id: verified.orgUserId }, select: { rating: true } })).rating
+    check("4d: the SHOP's rating is 5", shopRating === 5, String(shopRating))
+    const bell = await call("/api/v1/notifications?limit=50", { token: staff.token, orgId: verified.organizationId })
+    const bellTypes = (((bell.body.data as Record<string, unknown>)?.notifications ?? []) as { type: string }[]).map((n) => n.type)
+    check("4d: the shop's bell lists NEW_REVIEW", bellTypes.includes("NEW_REVIEW"), brief(bell))
+    check("4d: the shop's bell lists TRADE_COMPLETED", bellTypes.includes("TRADE_COMPLETED"), JSON.stringify(bellTypes))
+    await letQuestsSettle()
+    const p1Rows = await ledgerRows({ userId: p1.id, createdAt: { gt: new Date(Date.now() - 60_000) }, type: { not: "TRADE_REWARD" } })
+    console.log(`  info  the PERSON's own review: balance ${p1BalBefore} -> ${await bal(p1.id)}, recent non-reward rows ${JSON.stringify(p1Rows)}`)
+    check("4d: anything the person's review moved is a QUEST_REWARD to the person (pre-existing quest)",
+      p1Rows.every((r) => r.type === "QUEST_REWARD")
+        && (await bal(p1.id)) - p1BalBefore === p1Rows.reduce((a, r) => a + r.amount, 0), JSON.stringify(p1Rows))
+    await invariant("after 4")
+
+    head("4f  hired later: p3 joins the shop AFTER trade 3 completed")
+    await prisma.organizationMember.create({
+      data: { organizationId: verified.organizationId, userId: p3.id, role: "STAFF", status: "ACTIVE" },
+    })
+    const self = await call("/api/reviews", {
+      token: p3.token, orgId: verified.organizationId, method: "POST", body: { tradeId: trade3, stars: 5 },
+    })
+    check("4f: as the shop, rating their own trade is refused SHOP_MEMBER_SELF_TRADE",
+      self.status === 403 && self.body.code === "SHOP_MEMBER_SELF_TRADE", brief(self))
+    const selfPerson = await call("/api/reviews", { token: p3.token, method: "POST", body: { tradeId: trade3, stars: 5 } })
+    check("4f: as the person, rating their new employer is refused too",
+      selfPerson.status === 403 && selfPerson.body.code === "SHOP_MEMBER_SELF_TRADE", brief(selfPerson))
+    const t3Reviews = await prisma.review.count({ where: { tradeId: trade3 } })
+    check("4f: no review written on trade 3", t3Reviews === 0, String(t3Reviews))
+    await invariant("after 4f")
   } finally {
+    await prisma.review.deleteMany({ where: { OR: [{ reviewerId: { in: users } }, { revieweeId: { in: users } }] } })
     await prisma.leafTransaction.deleteMany({ where: { userId: { in: users } } })
     await prisma.taskCompletion.deleteMany({ where: { userId: { in: users } } })
     await prisma.notification.deleteMany({ where: { OR: [{ userId: { in: users } }, { actorId: { in: users } }] } })
