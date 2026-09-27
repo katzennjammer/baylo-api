@@ -51,6 +51,11 @@ export type ApiErrorCode =
   // drops its acting context on it. See @/lib/inbox.
   | "ORG_CONTEXT_REFUSED"
   | "INTERNAL_ERROR"
+  // An upstream the route depends on (the Anthropic API) failed or answered
+  // with something unusable. Retryable, and not the caller's fault -- which is
+  // what separates it from a 400 and from a 500 in our own code. The search
+  // assistant's phone client falls back to its keyword matcher on this code.
+  | "UNAVAILABLE"
 
 const STATUS: Record<ApiErrorCode, number> = {
   VALIDATION_ERROR: 400,
@@ -62,6 +67,7 @@ const STATUS: Record<ApiErrorCode, number> = {
   ORG_CONTEXT_REFUSED: 403,
   RATE_LIMITED:     429,
   INTERNAL_ERROR:   500,
+  UNAVAILABLE:      503,
 }
 
 /** A success envelope. `meta` defaults to `{}` rather than being omitted. */
