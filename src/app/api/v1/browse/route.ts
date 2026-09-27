@@ -1,15 +1,14 @@
 import { NextRequest } from "next/server"
-import { z } from "zod"
 import { resolveSession } from "@/lib/api-auth"
 import prisma from "@/lib/prisma"
 import { preciseAccessItemIds } from "@/lib/item-visibility"
 import { userNotBlocked, visibleItemWhere } from "@/lib/blocking"
 import { notSuspendedWhere } from "@/lib/moderation"
-import { BUSINESS_CATEGORIES, BUSINESS_CATEGORY_LABEL } from "@/app/api/v1/organizations/route"
-import { CATEGORY_VALUES, conditionSchema } from "@/lib/validation"
+import { BUSINESS_CATEGORY_LABEL } from "@/app/api/v1/organizations/route"
+import { browseQuerySchema, type BusinessCategory } from "@/lib/v1/browse-query"
 import { ok, unauthenticated, invalid } from "@/lib/v1/envelope"
 import { expirePerishableItems } from "@/lib/perishable"
-import { parseQuery, paginationShape } from "@/lib/v1/query"
+import { parseQuery } from "@/lib/v1/query"
 import { decodeCursor, encodeCursor, olderThan, paginate } from "@/lib/v1/cursor"
 import { V1_ITEM_SELECT, V1_ITEM_OWNER_SELECT, v1ItemStatsSelect, v1Item, type V1ItemRow } from "@/lib/v1/item"
 import { categoryLabel } from "@/lib/v1/taxonomy"
@@ -35,156 +34,14 @@ export const dynamic = "force-dynamic"
  * someone who is not the owner or an accepted counterparty.
  */
 
-const MAX_RADIUS_KM = 200
 /** Ceiling on rows pulled for an in-memory distance sort. See sortNearest(). */
 const NEAREST_SCAN_CAP = 500
-
-/** MySQL signed INT upper bound — the real ceiling on Item.valueLeaves. */
-const INT_MAX = 2147483647
-
-/**
- * How many categories one request may name.
- *
- * Browsing two or three at once is the normal thing to want; browsing all
- * twenty is not a filter, it is the unfiltered feed with a longer URL. The cap
- * also bounds the `IN (...)` list, so a caller cannot hand the planner an
- * arbitrarily long disjunction.
- */
-const MAX_CATEGORIES = 5
-
-/**
- * `category` accepts one value or a COMMA-SEPARATED list: `?category=BOOKS` and
- * `?category=BOOKS,GAMING` are both valid.
- *
- * COMMA-SEPARATED AND NOT A REPEATED PARAMETER, and that is forced rather than
- * chosen: parseQuery() rejects `?category=A&category=B` outright — a repeated
- * parameter is refused before zod ever sees it, because resolving one by a
- * first-or-last rule is a guess about what the caller meant. So the list has to
- * arrive inside a single value.
- *
- * Parsed with superRefine rather than a bare `.transform` so that a bad member
- * names ITSELF in the error. "Unknown category: BOOSK" is actionable;
- * "invalid category" sends a client author looking through all five.
- */
-const categoryListSchema = z
-  .string()
-  .trim()
-  .min(1)
-  // 20 enum names plus separators cannot exceed this; a longer string is not a
-  // category list and is refused before it is split.
-  .max(400)
-  .transform((raw) => [...new Set(raw.split(",").map((c) => c.trim()).filter(Boolean))])
-  .superRefine((list, ctx) => {
-    if (list.length === 0) {
-      ctx.addIssue({ code: "custom", message: "category cannot be empty" })
-      return
-    }
-    if (list.length > MAX_CATEGORIES) {
-      ctx.addIssue({
-        code: "custom",
-        message: `at most ${MAX_CATEGORIES} categories (got ${list.length})`,
-      })
-    }
-    for (const c of list) {
-      if (!(CATEGORY_VALUES as readonly string[]).includes(c)) {
-        ctx.addIssue({ code: "custom", message: `Unknown category: ${c}` })
-      }
-    }
-  })
-  .transform((list) => list as (typeof CATEGORY_VALUES)[number][])
-
-type BusinessCategory = (typeof BUSINESS_CATEGORIES)[number]
-
-/**
- * `businessCategory`: the sub-filter under the Organizations pill, in the same
- * comma-separated shape as `category` and for the same reason. The values are
- * Organization.businessCategory -- a fact about the SHOP, not the item -- so a
- * sari-sari store's rice is found by Organizations + Sari-sari store, by Food,
- * and by both at once.
- */
-const businessCategoryListSchema = z
-  .string()
-  .trim()
-  .min(1)
-  .max(400)
-  .transform((raw) => [...new Set(raw.split(",").map((c) => c.trim()).filter(Boolean))])
-  .superRefine((list, ctx) => {
-    if (list.length === 0) {
-      ctx.addIssue({ code: "custom", message: "businessCategory cannot be empty" })
-      return
-    }
-    for (const c of list) {
-      if (!(BUSINESS_CATEGORIES as readonly string[]).includes(c)) {
-        ctx.addIssue({ code: "custom", message: `Unknown businessCategory: ${c}` })
-      }
-    }
-  })
-  .transform((list) => list as BusinessCategory[])
 
 /**
  * How many organisations a search puts above the item grid. A top result, not
  * a directory: the item grid is still the answer to most searches.
  */
 const MAX_ORG_MATCHES = 3
-
-/** A Leaf bound: a non-negative integer inside the column's range. */
-const leafBound = z.coerce
-  .number()
-  .int("must be a whole number")
-  .min(0, "cannot be negative")
-  .max(INT_MAX)
-
-const querySchema = z
-  .strictObject({
-    ...paginationShape,
-    category: categoryListSchema.optional(),
-    condition: conditionSchema.optional(),
-    minLeaves: leafBound.optional(),
-    maxLeaves: leafBound.optional(),
-    q: z.string().trim().min(1).max(100).optional(),
-    lat: z.coerce.number().min(-90).max(90).optional(),
-    lng: z.coerce.number().min(-180).max(180).optional(),
-    radiusKm: z.coerce.number().positive().max(MAX_RADIUS_KM).optional(),
-    sort: z.enum(["recent", "nearest"]).optional().default("recent"),
-    /**
-     * The "Organizations" pill: show only listings posted by an organisation.
-     *
-     * A BOOLEAN FILTER AND NOT A CATEGORY. It sits in the same pill row as the
-     * category chips and looks like one, but it cannot be one -- `category` is
-     * the item taxonomy and "organisation" is a fact about the POSTER. Folding
-     * it into that list would mean a listing could be FOOD or it could be
-     * Organizations, and a sari-sari store's rice would have to be one or the
-     * other.
-     *
-     * So it composes rather than replaces: Organizations + Food is
-     * organisations' food listings, which is the useful query and the one a
-     * user picking both pills plainly means.
-     */
-    orgsOnly: z
-      .enum(["true", "false"])
-      .optional()
-      .transform((v) => v === "true"),
-    businessCategory: businessCategoryListSchema.optional(),
-  })
-  .refine((v) => v.sort !== "nearest" || (v.lat !== undefined && v.lng !== undefined), {
-    message: "sort=nearest requires lat and lng",
-  })
-  .refine((v) => v.radiusKm === undefined || (v.lat !== undefined && v.lng !== undefined), {
-    message: "radiusKm requires lat and lng",
-  })
-  // A business category is a kind of SHOP, so it only means something with the
-  // Organizations pill on. Refused rather than implying the pill: a client that
-  // sends one without the other has lost track of its own filter state, and a
-  // grid that quietly turned org-only would hide that.
-  .refine((v) => v.businessCategory === undefined || v.orgsOnly, {
-    message: "businessCategory requires orgsOnly=true",
-  })
-  // An inverted range returns nothing, silently and forever. Refusing it says
-  // so once instead of leaving a client to wonder why the list is empty.
-  .refine(
-    (v) => v.minLeaves === undefined || v.maxLeaves === undefined || v.minLeaves <= v.maxLeaves,
-    { message: "minLeaves cannot be greater than maxLeaves" },
-  )
 
 /** Great-circle distance in km. */
 function haversineKm(aLat: number, aLng: number, bLat: number, bLng: number): number {
@@ -202,7 +59,7 @@ export async function GET(req: NextRequest) {
   if (!session?.user?.id) return unauthenticated()
   const viewerId = session.user.id
 
-  const parsed = parseQuery(req, querySchema)
+  const parsed = parseQuery(req, browseQuerySchema)
   if (!parsed.ok) return parsed.response
   const {
     limit,
@@ -217,6 +74,7 @@ export async function GET(req: NextRequest) {
     sort,
     orgsOnly,
     businessCategory,
+    perishable,
   } = parsed.data
   const cursor = decodeCursor(parsed.data.cursor)
   if (parsed.data.cursor && !cursor) return invalid("Malformed cursor")
@@ -280,6 +138,9 @@ export async function GET(req: NextRequest) {
     // no second code path that could disagree with this one.
     ...(category ? { category: { in: category } } : {}),
     ...(condition ? { condition } : {}),
+    // The expiry sweep above has already moved lapsed perishables out of
+    // AVAILABLE, so perishable=true never serves a tray whose window ran out.
+    ...(perishable !== undefined ? { isPerishable: perishable } : {}),
     ...leafRange,
     // The search also matches the OWNER'S SHOP NAME (25 Sep 2026): searching
     // "Baylo" returns the shop card from query 4 AND everything the shop has
@@ -553,6 +414,7 @@ export async function GET(req: NextRequest) {
         categories: category ?? [],
         orgsOnly,
         businessCategories: businessCategory ?? [],
+        perishable: perishable ?? null,
         condition: condition ?? null,
         minLeaves: minLeaves ?? null,
         maxLeaves: maxLeaves ?? null,
