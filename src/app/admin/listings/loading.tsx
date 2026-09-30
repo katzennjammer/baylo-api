@@ -9,7 +9,7 @@ export default function Loading() {
           Search listings, decide value reviews, and manage moderator takedowns without opening a report.
         </p>
       </div>
-      <AdminTableSkeleton columns={5} rows={8} rowHeight={78} />
+      <AdminTableSkeleton columns={6} rows={8} rowHeight={78} />
     </div>
   )
 }
