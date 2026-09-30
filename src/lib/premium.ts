@@ -20,6 +20,32 @@ export function isPremium(premiumUntil: Date | null | undefined, now: Date = new
 }
 
 /**
+ * PROVISIONAL -- BETA PRICING ONLY (30 Sep 2026). During the beta, Premium is
+ * sold as a one-time ₱199 LIFETIME grant, not a yearly subscription. The real
+ * price and term are undecided and WILL change; do not build on this as if it
+ * were the permanent model.
+ *
+ * A lifetime grant is stored as this exact sentinel in premiumUntil rather
+ * than as null (null already means "not subscribed" to every reader) or as a
+ * new column (a live migration for a term that is itself provisional). Because
+ * it is a real future date, isPremium() and every gate that calls it -- the
+ * bracket gate, the bridge-fee discount in offer-check, the achievement, the
+ * assistant -- need no change. Nothing does arithmetic on premiumUntil.
+ *
+ * The one thing it must never do is reach a screen as a date ("until 31 Dec
+ * 9999"): publicStanding() sends `premiumLifetime` so the phone says
+ * "lifetime" instead. And because it is one exact value, the beta's lifetime
+ * grants stay findable (`WHERE "premiumUntil" = sentinel`) when real pricing
+ * lands and someone has to decide what happens to them.
+ */
+export const PREMIUM_LIFETIME_UNTIL = new Date("9999-12-31T00:00:00.000Z")
+
+/** True when premiumUntil is the beta lifetime sentinel above. Display only. */
+export function isLifetimePremium(premiumUntil: Date | null | undefined): boolean {
+  return premiumUntil != null && premiumUntil.getTime() === PREMIUM_LIFETIME_UNTIL.getTime()
+}
+
+/**
  * The one reader of `User.vipUntil`. Same date-not-flag shape as isPremium()
  * above, set by hand today via scripts/set-premium.ps1.
  *

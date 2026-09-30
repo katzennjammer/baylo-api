@@ -4,7 +4,7 @@ import { getTrustTier, getTierLimits, type TrustTier, type TierLimits } from "@/
 import {
   bracketOf, bracketRange, PREMIUM_MIN_BRACKET, VIP_MIN_BRACKET, valueNeedsPremium, valueNeedsVip,
 } from "@/lib/brackets"
-import { isPremium, isVip } from "@/lib/premium"
+import { isLifetimePremium, isPremium, isVip } from "@/lib/premium"
 
 /**
  * Server-side enforcement of the reputation tiers.
@@ -52,7 +52,8 @@ export interface TraderStanding {
   vip: boolean
   /**
    * The raw column values, DISPLAY-ONLY -- "your Premium expires 18 Oct 2026"
-   * on the membership screen, or "expired 3 Sep 2026" for a lapsed one. Never
+   * on the membership screen, or "expired 3 Sep 2026" for a lapsed one (a
+   * beta lifetime grant holds a 9999 sentinel; publicStanding() flags it). Never
    * used to decide access: `premium`/`vip` above are what every enforcement
    * check reads, and a client must compare this date to "now" itself to know
    * which sentence it is looking at rather than trust a flag that could go
@@ -350,6 +351,11 @@ export function publicStanding(standing: TraderStanding) {
     vip: standing.vip,
     /** DISPLAY-ONLY. See the field comment on TraderStanding. ISO or null. */
     premiumUntil: standing.premiumUntil?.toISOString() ?? null,
+    /**
+     * premiumUntil is the beta lifetime sentinel (see PREMIUM_LIFETIME_UNTIL
+     * in @/lib/premium) -- show "lifetime", never the 9999 date. DISPLAY-ONLY.
+     */
+    premiumLifetime: isLifetimePremium(standing.premiumUntil),
     vipUntil: standing.vipUntil?.toISOString() ?? null,
     completedTrades: standing.completedTrades,
     rating: standing.rating,
