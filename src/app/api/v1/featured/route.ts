@@ -21,8 +21,8 @@ import {
 export const dynamic = "force-dynamic"
 
 /**
- * GET /api/v1/featured?category=BOOKS — Home's Featured section for one
- * category. THREE queries: every eligible id (1), the eight chosen rows (2),
+ * GET /api/v1/featured[?category=BOOKS] — one category's Featured boosts, or
+ * every category's when `category` is absent (see below). THREE queries: every eligible id (1), the eight chosen rows (2),
  * and their pickup access (3).
  *
  * ── THE ROTATION, AND WHY IT IS TWO READS ───────────────────────────────────
@@ -46,11 +46,28 @@ export const dynamic = "force-dynamic"
  * Not paginated: the section is the eight, and a "more" page would be the
  * pay-to-dominate feed the cap exists to prevent. `total` is how many boosts
  * are live and visible in the category; `rotationHour` names the draw.
+ *
+ * ── NO `category`: EVERY CATEGORY (30 Sep 2026) ─────────────────────────────
+ *
+ * Home's standalone Featured section. Same cap, same hourly rotation, drawn
+ * over every category's boosts at once and seeded with ALL_CATEGORIES_SEED in
+ * place of a category name -- so the all-categories eight is its own draw, not
+ * any one category's first eight. The trade-off is exposure: a boost now
+ * competes with every live boost for eight slots rather than with its own
+ * category's, so a busy platform shows each one less often than the
+ * per-category section did. The simulation figures above apply to the TOTAL
+ * live boost count in this mode.
  */
 
 const querySchema = z.strictObject({
-  category: z.enum(CATEGORY_VALUES),
+  category: z.enum(CATEGORY_VALUES).optional(),
 })
+
+/**
+ * The rotation's seed with no category. Not a Category value, so it can never
+ * collide with a real category's draw.
+ */
+const ALL_CATEGORIES_SEED = "*"
 
 export async function GET(req: NextRequest) {
   const session = await resolveSession()
@@ -66,7 +83,11 @@ export async function GET(req: NextRequest) {
   const now = new Date()
   await expireFeaturedItems(prisma, {}, now)
 
-  const where = { ...activeFeaturedWhere(now), category, ...visibleItemWhere(viewerId) }
+  const where = {
+    ...activeFeaturedWhere(now),
+    ...(category ? { category } : {}),
+    ...visibleItemWhere(viewerId),
+  }
 
   // ── 1 ── every eligible id. The featuredAt/id order matters only past the
   // scan cap, where it decides deterministically which boosts are considered.
@@ -76,7 +97,7 @@ export async function GET(req: NextRequest) {
     orderBy: [{ featuredAt: "asc" }, { id: "asc" }],
     take: FEATURED_SCAN_CAP,
   })
-  const chosen = featuredRotation(candidates, category, now)
+  const chosen = featuredRotation(candidates, category ?? ALL_CATEGORIES_SEED, now)
     .slice(0, FEATURED_VISIBLE_CAP)
     .map((c) => c.id)
 
@@ -100,8 +121,8 @@ export async function GET(req: NextRequest) {
   return ok(
     { items: page.map((r) => v1Item(r, viewerId, access)) },
     {
-      category,
-      categoryLabel: categoryLabel(category),
+      category: category ?? null,
+      categoryLabel: category ? categoryLabel(category) : null,
       cap: FEATURED_VISIBLE_CAP,
       total: candidates.length,
       rotationHour: rotationHour(now),

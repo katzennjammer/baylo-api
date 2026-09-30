@@ -38,6 +38,14 @@ export const dynamic = "force-dynamic"
 const NEAREST_SCAN_CAP = 500
 
 /**
+ * Ceiling on perishables pulled for the in-memory expiry sort. The oldest are
+ * read first, and with windows of at most 24 hours the oldest are, roughly, the
+ * soonest to expire -- so past the cap it is mostly the far end that is cut.
+ */
+const EXPIRING_SCAN_CAP = 500
+const HOUR_MS = 60 * 60 * 1000
+
+/**
  * How many organisations a search puts above the item grid. A top result, not
  * a directory: the item grid is still the answer to most searches.
  */
@@ -248,6 +256,33 @@ export async function GET(req: NextRequest) {
         : withDistance
 
     const sliced = paginate(after, limit, (x) => encodeCursor(x.d, x.row.id))
+    page = sliced.page.map((x) => x.row)
+    nextCursor = sliced.nextCursor
+  } else if (sort === "expiring") {
+    // ── 1 (expiring) ── soonest trade window first; perishable=true only (the
+    // schema refuses it otherwise). The window is createdAt + tradeWithinHours,
+    // which Prisma cannot ORDER BY without raw SQL, so this is nearest's
+    // arrangement: a bounded scan, sorted and cursored in memory on a real
+    // (expiresAt, id) keyset. The sweep above has already moved lapsed rows out
+    // of AVAILABLE, so nothing past its window is in the scan.
+    const rows = await prisma.item.findMany({
+      where: { ...baseWhere, tradeWithinHours: { not: null } },
+      select: selection,
+      take: EXPIRING_SCAN_CAP,
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    })
+
+    const withExpiry = rows
+      .map((r) => ({ row: r, t: r.createdAt.getTime() + (r.tradeWithinHours as number) * HOUR_MS }))
+      .sort((a, b) => (a.t === b.t ? (a.row.id < b.row.id ? -1 : 1) : a.t - b.t))
+
+    const afterT = cursor && typeof cursor.k === "number" ? cursor.k : null
+    const after =
+      afterT !== null && cursor
+        ? withExpiry.filter((x) => x.t > afterT || (x.t === afterT && x.row.id > cursor.id))
+        : withExpiry
+
+    const sliced = paginate(after, limit, (x) => encodeCursor(x.t, x.row.id))
     page = sliced.page.map((x) => x.row)
     nextCursor = sliced.nextCursor
   } else {

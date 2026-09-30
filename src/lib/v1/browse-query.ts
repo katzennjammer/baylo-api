@@ -116,7 +116,12 @@ export const browseQuerySchema = z
     lat: z.coerce.number().min(-90).max(90).optional(),
     lng: z.coerce.number().min(-180).max(180).optional(),
     radiusKm: z.coerce.number().positive().max(MAX_RADIUS_KM).optional(),
-    sort: z.enum(["recent", "nearest"]).optional().default("recent"),
+    /**
+     * `expiring` (30 Sep 2026): soonest trade window first. Perishables only --
+     * a standard listing has no window to order by -- so it requires
+     * perishable=true below. Home's Exclusive rail reads it.
+     */
+    sort: z.enum(["recent", "nearest", "expiring"]).optional().default("recent"),
     /**
      * The "Organizations" pill: show only listings posted by an organisation.
      *
@@ -155,6 +160,9 @@ export const browseQuerySchema = z
   })
   .refine((v) => v.sort !== "nearest" || (v.lat !== undefined && v.lng !== undefined), {
     message: "sort=nearest requires lat and lng",
+  })
+  .refine((v) => v.sort !== "expiring" || v.perishable === true, {
+    message: "sort=expiring requires perishable=true",
   })
   .refine((v) => v.radiusKm === undefined || (v.lat !== undefined && v.lng !== undefined), {
     message: "radiusKm requires lat and lng",

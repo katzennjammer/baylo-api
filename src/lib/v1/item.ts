@@ -306,7 +306,7 @@ export interface V1Item {
  * `images` is stored as a JSON string. A malformed value yields an empty array
  * rather than throwing: one bad row should not take down a whole feed page.
  */
-function parseImages(raw: string | null | undefined): string[] {
+export function parseImages(raw: string | null | undefined): string[] {
   if (!raw) return []
   try {
     const parsed: unknown = JSON.parse(raw)
