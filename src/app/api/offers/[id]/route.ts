@@ -475,6 +475,9 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       receiverId: offer.receiverId,
       tradeId: tradeRecord?.id,
       content: receiverSystemContent,
+      // The decider's own copy -- the person or the shop that just tapped.
+      // Written read so the decision does not badge the decider's inbox.
+      read: true,
     })
 
     const senderSystemPayload = {
