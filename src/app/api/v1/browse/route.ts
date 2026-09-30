@@ -10,7 +10,14 @@ import { ok, unauthenticated, invalid } from "@/lib/v1/envelope"
 import { expirePerishableItems } from "@/lib/perishable"
 import { parseQuery } from "@/lib/v1/query"
 import { decodeCursor, encodeCursor, olderThan, paginate } from "@/lib/v1/cursor"
-import { V1_ITEM_SELECT, V1_ITEM_OWNER_SELECT, v1ItemStatsSelect, v1Item, type V1ItemRow } from "@/lib/v1/item"
+import {
+  V1_ITEM_SELECT,
+  V1_ITEM_OWNER_SELECT,
+  V1_ITEM_SAFEZONE_SELECT,
+  v1ItemStatsSelect,
+  v1Item,
+  type V1ItemRow,
+} from "@/lib/v1/item"
 import { categoryLabel } from "@/lib/v1/taxonomy"
 
 export const dynamic = "force-dynamic"
@@ -221,6 +228,10 @@ export async function GET(req: NextRequest) {
     ...V1_ITEM_SELECT,
     user: { select: V1_ITEM_OWNER_SELECT },
     ...v1ItemStatsSelect(viewerId),
+    // The listing's Safe Zone hubs, for the card's place line ("New ·
+    // Lapu-Lapu"). Two batched statements per page, never one per item -- see
+    // the note on V1_ITEM_SAFEZONE_SELECT.
+    ...V1_ITEM_SAFEZONE_SELECT,
   }
 
   let page: unknown[]

@@ -106,10 +106,22 @@ export const V1_ITEM_OWNER_SELECT = {
 /**
  * The Safe-Zone hubs this listing is offered at.
  *
- * A SEPARATE, OPT-IN SELECT rather than part of V1_ITEM_SELECT. Every feed row
- * would otherwise carry a join it does not render: /home and /browse show a
- * card, and a card has no room for five meetup points. Detail screens spread
- * this in; lists do not, and the cost stays where the value is.
+ * A SEPARATE, OPT-IN SELECT rather than part of V1_ITEM_SELECT, so a route
+ * pays for the join only when it renders the hubs. Who spreads it in:
+ *
+ *   detail screens   the full list of meetup points
+ *   /browse          since 1 Oct 2026, for the card's place line ("New ·
+ *                    Lapu-Lapu"): the client shows the first active hub's city
+ *   /home and others not loaded; they send `safeZones: null`, which the
+ *                    client reads as "not loaded", never as "none"
+ *
+ * The cost on a list is TWO extra statements per page, and never one per row
+ * (measured 1 Oct 2026: a 21-row /browse page went from 4 statements to 6).
+ * Prisma loads the relation for the whole page in two batched steps -- the
+ * ItemSafeZone links for all the page's item ids in one IN (...), then the
+ * SafeZoneHub rows they name in another -- whatever the page size. On live
+ * every hub-bearing listing has exactly one hub, so a page carries at most one
+ * small hub object per row.
  *
  * INACTIVE HUBS ARE INCLUDED. That is the whole point of the flag — a listing
  * offered at a hub that has since closed keeps saying so, and the client
