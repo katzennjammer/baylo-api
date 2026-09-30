@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import crypto from "crypto"
 import prisma from "@/lib/prisma"
 import { sendPasswordResetEmail } from "@/lib/mailer"
+import { publicBaseUrl } from "@/lib/public-url"
 import { clientIp, enforceRateLimit } from "@/lib/rate-limit-config"
 import { forgotPasswordSchema, parseBody } from "@/lib/validation"
 
@@ -30,7 +31,7 @@ export async function POST(req: NextRequest) {
 
       await prisma.passwordResetToken.create({ data: { email, token, expiresAt } })
 
-      const resetUrl = `${process.env.NEXTAUTH_URL}/auth/reset-password?token=${token}`
+      const resetUrl = `${publicBaseUrl(req)}/auth/reset-password?token=${token}`
       await sendPasswordResetEmail(email, resetUrl, user.name)
     }
 

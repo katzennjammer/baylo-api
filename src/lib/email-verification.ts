@@ -40,6 +40,8 @@ function hashToken(raw: string): string {
 /**
  * Issues a fresh verification token and emails the link.
  *
+ * `baseUrl` is publicBaseUrl(req) from the calling route — see lib/public-url.
+ *
  * Returns false if the mail could not be sent. Callers on the registration path
  * treat that as non-fatal — see the note in the register route: an SMTP outage
  * must not cost the user their account, and /api/auth/resend-verification
@@ -54,7 +56,7 @@ export async function issueVerificationToken(user: {
   email: string
   name?: string | null
   isVerified?: boolean
-}): Promise<boolean> {
+}, baseUrl: string): Promise<boolean> {
   if (user.isVerified) return true
 
   const raw = crypto.randomBytes(32).toString("hex")
@@ -69,7 +71,7 @@ export async function issueVerificationToken(user: {
   })
 
   // The raw token exists only here and in the email. Nothing writes it to a log.
-  const verifyUrl = `${process.env.NEXTAUTH_URL ?? ""}/api/auth/verify-email?token=${raw}`
+  const verifyUrl = `${baseUrl}/api/auth/verify-email?token=${raw}`
 
   try {
     await sendVerificationEmail(user.email, verifyUrl, user.name)
