@@ -10,6 +10,7 @@ import { parseQuery, paginationShape, MAX_LIMIT } from "@/lib/v1/query"
 import { decodeCursor, encodeCursor, paginate, cursorDate } from "@/lib/v1/cursor"
 import { SAFE_ZONE_HUB_SELECT, v1Hub, type SafeZoneHubRow } from "@/lib/safe-zones"
 import { MEETUP_SELECT, v1MeetupPlan } from "@/lib/meetup"
+import { MAX_CODE_ATTEMPTS } from "@/lib/swap-code"
 
 export const dynamic = "force-dynamic"
 
@@ -178,8 +179,9 @@ export async function GET(req: NextRequest) {
         select: { reviewerId: true, rating: true },
       },
       // Code state, so canConfirm is a real answer rather than a guess from
-      // status alone. At most two rows per trade.
-      swapConfirmationCodes: { select: { userId: true, used: true, expiresAt: true } },
+      // status alone. At most two rows per trade. `attempts` is for codesLive:
+      // a pair burned by MAX_CODE_ATTEMPTS is as dead as an expired one.
+      swapConfirmationCodes: { select: { userId: true, used: true, expiresAt: true, attempts: true } },
     },
     orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
     take: limit + 1,
@@ -235,6 +237,28 @@ export async function GET(req: NextRequest) {
     const canConfirm =
       t.status === "ACCEPTED" ||
       (t.status === "CONFIRMING" && (!partnerCodeLive || !partnerCode.used))
+
+    /*
+     * Whether there is a code to SHOW right now, which canConfirm does not say:
+     * an expired CONFIRMING trade is still the viewer's move (canConfirm true)
+     * but its codes are dead, and its card must offer to start the handoff
+     * again rather than "Show code". The test is confirm/start's own
+     * idempotency check -- both rows unexpired and unburned -- so codesLive is
+     * true exactly when opening the code panel would NOT issue a fresh pair.
+     *
+     * codesExpireAt is the earlier of the two expiries, so the client can flip
+     * the card itself when the window closes. Sent whenever both rows exist and
+     * that instant is still ahead, INCLUDING a burned pair: that is how the
+     * client tells "locked" (attempts spent, window open) from "expired".
+     */
+    const codes = t.swapConfirmationCodes
+    const codesLive =
+      codes.length === 2 &&
+      codes.every((c) => c.expiresAt.getTime() > now && c.attempts < MAX_CODE_ATTEMPTS)
+    const firstExpiry =
+      codes.length === 2 ? Math.min(...codes.map((c) => c.expiresAt.getTime())) : null
+    const codesExpireAt =
+      firstExpiry !== null && firstExpiry > now ? new Date(firstExpiry) : null
 
     return {
       id: t.id,
@@ -297,6 +321,8 @@ export async function GET(req: NextRequest) {
        */
       meetup: v1MeetupPlan(t),
       canConfirm,
+      codesLive,
+      codesExpireAt,
       createdAt: t.createdAt,
       updatedAt: t.updatedAt,
     }
