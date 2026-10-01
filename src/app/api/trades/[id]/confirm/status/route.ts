@@ -3,6 +3,7 @@ import { resolveSession } from "@/lib/api-auth"
 import prisma from "@/lib/prisma"
 import { MAX_CODE_ATTEMPTS } from "@/lib/swap-code"
 import { openCode } from "@/lib/swap-code-seal"
+import { legacyParticipantRefusal, resolveTradeParticipant } from "@/lib/trade-participant"
 
 /**
  * GET /api/trades/[id]/confirm/status — whose turn it is, and YOUR OWN code.
@@ -61,7 +62,7 @@ import { openCode } from "@/lib/swap-code-seal"
  * where guesses are spent, and that is limited already.
  */
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   try {
@@ -69,7 +70,6 @@ export async function GET(
     if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
     const { id: tradeId } = await params
-    const myId = session.user.id
 
     const trade = await prisma.tradeRequest.findUnique({
       where:  { id: tradeId },
@@ -77,9 +77,12 @@ export async function GET(
     })
 
     if (!trade) return NextResponse.json({ error: "Trade not found" }, { status: 404 })
-    if (trade.senderId !== myId && trade.receiverId !== myId) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 })
-    }
+    // Either side: the person, or the shop they are acting as. Acting as
+    // the shop, "mine" is the SHOP's code -- the one its staff member hands over.
+    // See @/lib/trade-participant.
+    const who = await resolveTradeParticipant(session.user.id, req.headers, trade)
+    if (!who.ok) return legacyParticipantRefusal(who)
+    const myId = who.participantId
 
     if (trade.status === "COMPLETED") {
       // Both codes are spent. There is nothing left to read out, so `code` is

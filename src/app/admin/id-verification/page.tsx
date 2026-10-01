@@ -4,6 +4,7 @@ import { ID_TYPE_LABEL, REJECTION_LABEL, toWireIdType, toWireRejectionReason } f
 import { sweepUndeletedIdImages } from "@/lib/id-verification-image"
 import { FilterChips } from "@/components/admin/FilterChips"
 import { StaggerGroup, StaggerItem } from "@/components/admin/Stagger"
+import { DocumentQueueTabs } from "../_components/DocumentQueueTabs"
 
 export const dynamic = "force-dynamic"
 export const revalidate = 0
@@ -65,7 +66,7 @@ export default async function IdVerificationQueuePage({ searchParams }: Props) {
   // may outlive.
   const sweep = await sweepUndeletedIdImages()
 
-  const [rows, counts, staleImages] = await Promise.all([
+  const [rows, counts, staleImages, orgPending] = await Promise.all([
     prisma.idVerification.findMany({
       where: { status },
       select: {
@@ -92,14 +93,23 @@ export default async function IdVerificationQueuePage({ searchParams }: Props) {
     prisma.idVerification.count({
       where: { status: { in: ["APPROVED", "REJECTED"] }, imagePublicId: { not: null } },
     }),
+    // The sibling queue's depth, for the tab strip. See DocumentQueueTabs --
+    // a tab carrying a count is a queue indicator rather than a link.
+    prisma.organization.count({ where: { verificationStatus: "PENDING" } }),
   ])
 
   const countFor = (s: string) => counts.find((c) => c.status === s)?._count.id ?? 0
 
   return (
     <div>
+      <DocumentQueueTabs
+        active="id"
+        idPending={countFor("PENDING")}
+        orgPending={orgPending}
+      />
+
       <div style={{ display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
-        <h1 style={{ fontSize: 20, fontWeight: 800, color: "var(--adm-text)" }}>ID verification</h1>
+        <h1 style={{ fontSize: 20, fontWeight: 800, color: "var(--adm-text)" }}>Government ID</h1>
         <span style={{ fontSize: 13, color: "var(--adm-text-muted)" }}>
           {countFor("PENDING")} waiting · oldest first
         </span>

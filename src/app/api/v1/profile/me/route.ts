@@ -10,10 +10,13 @@ import {
 import { ok, unauthenticated, invalid } from "@/lib/v1/envelope"
 import { parseQuery, paginationShape } from "@/lib/v1/query"
 import { decodeCursor, encodeCursor, olderThan, paginate } from "@/lib/v1/cursor"
+import { expirePerishableItems } from "@/lib/perishable"
+import { expireFeaturedItems } from "@/lib/featured"
 import { V1_ITEM_SELECT, V1_ITEM_OWNER_SELECT, v1ItemStatsSelect, v1Item, type V1ItemRow } from "@/lib/v1/item"
 import { taskLabel } from "@/lib/v1/taxonomy"
 import { loadStanding, publicStanding } from "@/lib/reputation-gate"
 import { loadIdVerificationState, publicIdVerification } from "@/lib/id-verification"
+import { hasPersonalActivity } from "@/lib/organizations"
 
 /** What the owner's own shelf lists. See the note at step 2. */
 const SHELF_STATUSES: ItemStatus[] = [
@@ -23,6 +26,10 @@ const SHELF_STATUSES: ItemStatus[] = [
   "OWNED",
   "PENDING_REVIEW",
   "VALUE_REJECTED",
+  // A perishable whose window ran out. Kept on the owner's shelf, labelled, so
+  // the listing the LISTING_EXPIRED notice names is still there to relist from.
+  // Nobody else sees it: every other read filters on AVAILABLE.
+  "EXPIRED",
 ]
 
 export const dynamic = "force-dynamic"
@@ -64,6 +71,18 @@ export async function GET(req: NextRequest) {
   const { limit } = parsed.data
   const cursor = decodeCursor(parsed.data.cursor)
   if (parsed.data.cursor && !cursor) return invalid("Malformed cursor")
+
+  // The perishable sweep, SCOPED TO THIS USER. See /api/v1/browse for why the
+  // read paths run it at all; the scope is the difference here. The owner's own
+  // shelf is where an unswept listing is most visibly wrong -- it would show a
+  // live "2 hours left" countdown on something whose window closed yesterday --
+  // and it is also the one place a narrow sweep is the right sweep, because the
+  // only rows this screen renders are theirs.
+  await expirePerishableItems(prisma, { userId: viewerId })
+  // And the Featured flag, same scope. The wire field is computed from the
+  // window (see isFeaturedNow()), so this is hygiene for the flag, not what
+  // stops the shelf showing a lapsed boost as live.
+  await expireFeaturedItems(prisma, { userId: viewerId })
 
   // ── 1 ──
   const user = await prisma.user.findUnique({
@@ -198,6 +217,10 @@ export async function GET(req: NextRequest) {
   // nothing a client reports about its own verification is read back.
   const idVerification = await loadIdVerificationState(viewerId)
 
+  // ── 9 ── whether this person has ever acted as THEMSELVES. Up to three more
+  // existence probes. See hasPersonalActivity() for what counts.
+  const personalActivity = await hasPersonalActivity(prisma, viewerId)
+
   // Impact. computeImpactData() returns everything except the two derived
   // figures, which are computed here from the same trade set — no extra query.
   const base = computeImpactData(viewerId, trades)
@@ -279,6 +302,12 @@ export async function GET(req: NextRequest) {
       // NOT the same thing as `user.isVerified` two blocks up, which is the
       // email check — see the header of @/lib/id-verification.
       idVerification: publicIdVerification(idVerification),
+      // False for somebody who has only ever posted or traded for an
+      // organisation. The client combines it with their memberships: no
+      // personal activity plus at least one shop means the Profile tab shows
+      // the shop instead of an empty personal profile. It is recomputed on
+      // every read, so the first personal listing brings the person back.
+      hasPersonalActivity: personalActivity,
       impact: {
         co2Avoided: Math.round(base.co2Avoided * 10) / 10,
         waterSaved: Math.round(base.waterSaved),

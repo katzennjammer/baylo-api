@@ -2,8 +2,9 @@ import { NextRequest } from "next/server"
 import { z } from "zod"
 import { resolveSession } from "@/lib/api-auth"
 import prisma from "@/lib/prisma"
-import { ok, unauthenticated, notFound, forbidden, conflict } from "@/lib/v1/envelope"
+import { ok, unauthenticated, notFound, forbidden, conflict, fail } from "@/lib/v1/envelope"
 import { parseJsonBody } from "@/lib/v1/body"
+import { resolveTradeParticipant } from "@/lib/trade-participant"
 import { MEETUP_SELECT, v1MeetupPlan } from "@/lib/meetup"
 import { notifyMeetupChanged } from "@/lib/meetup-events"
 
@@ -56,7 +57,6 @@ export async function POST(
 ) {
   const session = await resolveSession()
   if (!session?.user?.id) return unauthenticated()
-  const viewerId = session.user.id
   const { id } = await params
 
   const parsed = await parseJsonBody(req, bodySchema)
@@ -74,9 +74,13 @@ export async function POST(
     },
   })
   if (!trade) return notFound("Trade not found")
-  if (trade.senderId !== viewerId && trade.receiverId !== viewerId) {
-    return forbidden("That trade is not yours")
+  // Either side: the person, or the shop they are acting as. See
+  // @/lib/trade-participant.
+  const who = await resolveTradeParticipant(session.user.id, req.headers, trade)
+  if (!who.ok) {
+    return who.kind === "org_refused" ? fail("ORG_CONTEXT_REFUSED", who.message) : forbidden("That trade is not yours")
   }
+  const viewerId = who.participantId
   if (trade.status !== "ACCEPTED") {
     return conflict("That trade has moved past arranging a meeting.")
   }

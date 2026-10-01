@@ -62,6 +62,8 @@ export interface AwardResult {
     | "repeat_partner"
     /** A partner-gated task was awarded without a partnerId. See PARTNER_GATED. */
     | "missing_partner"
+    /** An organisation's backing row. Shops do not earn task rewards. */
+    | "organization"
     | "error"
 }
 
@@ -168,6 +170,15 @@ export async function awardTask(
   const eventAt = opts.eventAt ?? new Date()
 
   try {
+    // A SHOP EARNS NOTHING HERE (26 Sep 2026). Task rewards are issuance, and
+    // an organisation settling trades as itself would otherwise mint Leaves on
+    // its backing row for FIRST_TRADE and SAFEZONE_MEETUP -- the same reasoning
+    // that has settleQuestsAsync() skip `isOrgAccount` rows. No completion row
+    // is written: a backing row never becomes a person, so there is nothing
+    // for a later reconcile to re-pay.
+    const earner = await db.user.findUnique({ where: { id: userId }, select: { isOrgAccount: true } })
+    if (earner?.isOrgAccount) return nothing("organization")
+
     const existing = await db.taskCompletion.findUnique({
       where:  { userId_task_refId: { userId, task, refId } },
       select: { id: true },

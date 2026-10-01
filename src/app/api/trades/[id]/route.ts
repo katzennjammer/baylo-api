@@ -4,6 +4,7 @@ import prisma from "@/lib/prisma"
 import { releaseTradeFee } from "@/lib/trade-fee-release"
 import pusher from "@/lib/pusher"
 import { parseBody, tradeActionSchema } from "@/lib/validation"
+import { legacyParticipantRefusal, resolveTradeParticipant } from "@/lib/trade-participant"
 
 // PATCH /api/trades/[id]
 // body: { action: "cancel" | "hide" }
@@ -18,7 +19,6 @@ export async function PATCH(
     if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
     const { id: tradeId } = await params
-    const myId = session.user.id
     const parsed = await parseBody(req, tradeActionSchema)
     if (!parsed.ok) return parsed.response
     const { action } = parsed.data
@@ -35,9 +35,13 @@ export async function PATCH(
 
     if (!trade) return NextResponse.json({ error: "Trade not found" }, { status: 404 })
 
-    const isSender   = trade.senderId === myId
-    const isReceiver = trade.receiverId === myId
-    if (!isSender && !isReceiver) return NextResponse.json({ error: "Forbidden" }, { status: 403 })
+    // Either side: the person, or the shop they are acting as. Hiding and
+    // cancelling a shop's trade is the shop's -- one member hiding it hides it
+    // for every member, like reading a shop thread. See @/lib/trade-participant.
+    const who = await resolveTradeParticipant(session.user.id, req.headers, trade)
+    if (!who.ok) return legacyParticipantRefusal(who)
+    const isSender = who.isSender
+    const myId = who.participantId
 
     // ── cancel ────────────────────────────────────────────────────────────────
     if (action === "cancel") {

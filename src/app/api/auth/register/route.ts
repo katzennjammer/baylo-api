@@ -5,6 +5,7 @@ import { clientIp, enforceRateLimit } from "@/lib/rate-limit-config"
 import { clearsAgeGate, parseBody, registerSchema, underAgeResponse } from "@/lib/validation"
 import { parseDateOfBirth, toStoredDate } from "@/lib/age"
 import { issueVerificationToken } from "@/lib/email-verification"
+import { publicBaseUrl } from "@/lib/public-url"
 
 export async function POST(req: NextRequest) {
   try {
@@ -59,7 +60,7 @@ export async function POST(req: NextRequest) {
     // cost them the account and leave a row behind that blocks retrying the
     // same address with a 409. issueVerificationToken() already swallows send
     // failures and reports them; the await is what makes `emailSent` truthful.
-    const emailSent = await issueVerificationToken(user)
+    const emailSent = await issueVerificationToken(user, publicBaseUrl(req))
 
     return NextResponse.json(
       {

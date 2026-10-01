@@ -43,9 +43,23 @@ export async function POST(req: NextRequest) {
   const user = await prisma.user.findUnique({ where: { email } })
 
   // One message and one status for "no such user", "Google-only account with no
-  // password", and "wrong password" alike. Distinguishing them would turn this
-  // endpoint into an account-enumeration oracle.
-  if (!user?.password || !(await bcrypt.compare(password, user.password))) {
+  // password", "an organisation's backing row" and "wrong password" alike.
+  // Distinguishing them would turn this endpoint into an account-enumeration
+  // oracle.
+  //
+  // `isOrgAccount` is named EXPLICITLY here rather than left to the null
+  // password that already refuses it. An organisation's backing row is created
+  // with `password: null` and nothing ever sets one — but "nothing ever sets
+  // one" is a property of the code as it stands today, and this is the line
+  // that would have to be got wrong for an organisation to become a
+  // login-able account with no human owner and no recovery path. Two reasons
+  // to refuse, one of which is about what the row IS rather than about what
+  // happens to be stored on it. See @/lib/organizations.
+  if (
+    !user?.password ||
+    user.isOrgAccount ||
+    !(await bcrypt.compare(password, user.password))
+  ) {
     return NextResponse.json({ error: "Invalid email or password" }, { status: 401 })
   }
 

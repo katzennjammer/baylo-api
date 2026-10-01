@@ -79,6 +79,10 @@ model User {
   // PREMIUM_MIN_BRACKET or above -- proposing for one, or accepting an offer
   // of one -- see @/lib/brackets. It never hides a listing and never gates
   // giving one away.
+  //
+  // BETA (provisional, 30 Sep 2026): Premium is a one-time lifetime purchase
+  // for now, stored as the sentinel PREMIUM_LIFETIME_UNTIL (9999-12-31) in
+  // @/lib/premium -- a real future date, so isPremium() is unchanged.
   premiumUntil DateTime?
 
   // VIP subscription (23 Sep 2026). Same shape and same caveats as

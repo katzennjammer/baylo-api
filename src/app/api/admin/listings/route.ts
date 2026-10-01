@@ -33,7 +33,7 @@ export async function GET(req: NextRequest) {
       ],
     },
     select: {
-      id: true, title: true, status: true, moderationHiddenAt: true,
+      id: true, title: true, category: true, status: true, moderationHiddenAt: true,
       createdAt: true, updatedAt: true,
       // BOTH values and the flag. The admin Listings page is the one surface
       // that shows what the model said next to what the owner asked for, which

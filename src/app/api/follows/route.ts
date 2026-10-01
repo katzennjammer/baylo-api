@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { resolveSession } from "@/lib/api-auth"
 import prisma from "@/lib/prisma"
 import { followSchema, parseBody } from "@/lib/validation"
+import { settleQuestsAsync } from "@/lib/quests"
 
 // GET /api/follows — incoming pending follow requests for current user
 export async function GET() {
@@ -35,6 +36,10 @@ export async function POST(req: NextRequest) {
   const follow = await prisma.follow.create({
     data: { followerId: session.user.id, followeeId, status: "ACCEPTED" },
   })
+
+  // A NEW follow only. The early return above for an existing one means
+  // re-following cannot re-trigger the check, though it would pay nothing anyway.
+  settleQuestsAsync(session.user.id, ["FOLLOW_TRADER"])
 
   await prisma.notification.create({
     data: {

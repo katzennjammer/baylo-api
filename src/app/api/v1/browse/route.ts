@@ -1,14 +1,23 @@
 import { NextRequest } from "next/server"
-import { z } from "zod"
 import { resolveSession } from "@/lib/api-auth"
 import prisma from "@/lib/prisma"
 import { preciseAccessItemIds } from "@/lib/item-visibility"
-import { visibleItemWhere } from "@/lib/blocking"
-import { CATEGORY_VALUES, conditionSchema } from "@/lib/validation"
+import { userNotBlocked, visibleItemWhere } from "@/lib/blocking"
+import { notSuspendedWhere } from "@/lib/moderation"
+import { BUSINESS_CATEGORY_LABEL } from "@/app/api/v1/organizations/route"
+import { browseQuerySchema, type BusinessCategory } from "@/lib/v1/browse-query"
 import { ok, unauthenticated, invalid } from "@/lib/v1/envelope"
-import { parseQuery, paginationShape } from "@/lib/v1/query"
+import { expirePerishableItems } from "@/lib/perishable"
+import { parseQuery } from "@/lib/v1/query"
 import { decodeCursor, encodeCursor, olderThan, paginate } from "@/lib/v1/cursor"
-import { V1_ITEM_SELECT, V1_ITEM_OWNER_SELECT, v1ItemStatsSelect, v1Item, type V1ItemRow } from "@/lib/v1/item"
+import {
+  V1_ITEM_SELECT,
+  V1_ITEM_OWNER_SELECT,
+  V1_ITEM_SAFEZONE_SELECT,
+  v1ItemStatsSelect,
+  v1Item,
+  type V1ItemRow,
+} from "@/lib/v1/item"
 import { categoryLabel } from "@/lib/v1/taxonomy"
 
 export const dynamic = "force-dynamic"
@@ -17,6 +26,9 @@ export const dynamic = "force-dynamic"
  * GET /api/v1/browse — the browse tab.
  *
  * THREE queries: items page (1), pickup access (2), category facets (3).
+ * Plus two that run only when asked for: organisations whose NAME matches `q`
+ * (4, first page of a search only), and business-category facets (5, only
+ * while the Organizations pill is on).
  *
  * Filters are optional and compose. `sort=nearest` REQUIRES lat/lng and 400s
  * without them rather than falling back to recent — a silent fallback returns a
@@ -29,96 +41,22 @@ export const dynamic = "force-dynamic"
  * someone who is not the owner or an accepted counterparty.
  */
 
-const MAX_RADIUS_KM = 200
 /** Ceiling on rows pulled for an in-memory distance sort. See sortNearest(). */
 const NEAREST_SCAN_CAP = 500
 
-/** MySQL signed INT upper bound — the real ceiling on Item.valueLeaves. */
-const INT_MAX = 2147483647
+/**
+ * Ceiling on perishables pulled for the in-memory expiry sort. The oldest are
+ * read first, and with windows of at most 24 hours the oldest are, roughly, the
+ * soonest to expire -- so past the cap it is mostly the far end that is cut.
+ */
+const EXPIRING_SCAN_CAP = 500
+const HOUR_MS = 60 * 60 * 1000
 
 /**
- * How many categories one request may name.
- *
- * Browsing two or three at once is the normal thing to want; browsing all
- * twenty is not a filter, it is the unfiltered feed with a longer URL. The cap
- * also bounds the `IN (...)` list, so a caller cannot hand the planner an
- * arbitrarily long disjunction.
+ * How many organisations a search puts above the item grid. A top result, not
+ * a directory: the item grid is still the answer to most searches.
  */
-const MAX_CATEGORIES = 5
-
-/**
- * `category` accepts one value or a COMMA-SEPARATED list: `?category=BOOKS` and
- * `?category=BOOKS,GAMING` are both valid.
- *
- * COMMA-SEPARATED AND NOT A REPEATED PARAMETER, and that is forced rather than
- * chosen: parseQuery() rejects `?category=A&category=B` outright — a repeated
- * parameter is refused before zod ever sees it, because resolving one by a
- * first-or-last rule is a guess about what the caller meant. So the list has to
- * arrive inside a single value.
- *
- * Parsed with superRefine rather than a bare `.transform` so that a bad member
- * names ITSELF in the error. "Unknown category: BOOSK" is actionable;
- * "invalid category" sends a client author looking through all five.
- */
-const categoryListSchema = z
-  .string()
-  .trim()
-  .min(1)
-  // 20 enum names plus separators cannot exceed this; a longer string is not a
-  // category list and is refused before it is split.
-  .max(400)
-  .transform((raw) => [...new Set(raw.split(",").map((c) => c.trim()).filter(Boolean))])
-  .superRefine((list, ctx) => {
-    if (list.length === 0) {
-      ctx.addIssue({ code: "custom", message: "category cannot be empty" })
-      return
-    }
-    if (list.length > MAX_CATEGORIES) {
-      ctx.addIssue({
-        code: "custom",
-        message: `at most ${MAX_CATEGORIES} categories (got ${list.length})`,
-      })
-    }
-    for (const c of list) {
-      if (!(CATEGORY_VALUES as readonly string[]).includes(c)) {
-        ctx.addIssue({ code: "custom", message: `Unknown category: ${c}` })
-      }
-    }
-  })
-  .transform((list) => list as (typeof CATEGORY_VALUES)[number][])
-
-/** A Leaf bound: a non-negative integer inside the column's range. */
-const leafBound = z.coerce
-  .number()
-  .int("must be a whole number")
-  .min(0, "cannot be negative")
-  .max(INT_MAX)
-
-const querySchema = z
-  .strictObject({
-    ...paginationShape,
-    category: categoryListSchema.optional(),
-    condition: conditionSchema.optional(),
-    minLeaves: leafBound.optional(),
-    maxLeaves: leafBound.optional(),
-    q: z.string().trim().min(1).max(100).optional(),
-    lat: z.coerce.number().min(-90).max(90).optional(),
-    lng: z.coerce.number().min(-180).max(180).optional(),
-    radiusKm: z.coerce.number().positive().max(MAX_RADIUS_KM).optional(),
-    sort: z.enum(["recent", "nearest"]).optional().default("recent"),
-  })
-  .refine((v) => v.sort !== "nearest" || (v.lat !== undefined && v.lng !== undefined), {
-    message: "sort=nearest requires lat and lng",
-  })
-  .refine((v) => v.radiusKm === undefined || (v.lat !== undefined && v.lng !== undefined), {
-    message: "radiusKm requires lat and lng",
-  })
-  // An inverted range returns nothing, silently and forever. Refusing it says
-  // so once instead of leaving a client to wonder why the list is empty.
-  .refine(
-    (v) => v.minLeaves === undefined || v.maxLeaves === undefined || v.minLeaves <= v.maxLeaves,
-    { message: "minLeaves cannot be greater than maxLeaves" },
-  )
+const MAX_ORG_MATCHES = 3
 
 /** Great-circle distance in km. */
 function haversineKm(aLat: number, aLng: number, bLat: number, bLng: number): number {
@@ -136,12 +74,40 @@ export async function GET(req: NextRequest) {
   if (!session?.user?.id) return unauthenticated()
   const viewerId = session.user.id
 
-  const parsed = parseQuery(req, querySchema)
+  const parsed = parseQuery(req, browseQuerySchema)
   if (!parsed.ok) return parsed.response
-  const { limit, category, condition, minLeaves, maxLeaves, q, lat, lng, radiusKm, sort } =
-    parsed.data
+  const {
+    limit,
+    category,
+    condition,
+    minLeaves,
+    maxLeaves,
+    q,
+    lat,
+    lng,
+    radiusKm,
+    sort,
+    orgsOnly,
+    businessCategory,
+    perishable,
+  } = parsed.data
   const cursor = decodeCursor(parsed.data.cursor)
   if (parsed.data.cursor && !cursor) return invalid("Malformed cursor")
+
+  // ── The perishable sweep, BEFORE the page is read ──────────────────────────
+  //
+  // The same arrangement expireStaleOffers() has, and for the same reason: this
+  // deployment runs nothing on a schedule, so the paths that would be WRONG if
+  // the sweep had not run are the paths that run it. Browse is the first of
+  // those -- a tray of fish whose six hours ran out an hour ago is AVAILABLE in
+  // the database until something moves it, and serving it here is serving a
+  // listing nobody can act on.
+  //
+  // Unscoped and awaited. Unscoped because browse is everyone's listings, not
+  // one person's; awaited because the very next statement reads the rows this
+  // updates, and firing it off would race its own page. It is one UPDATE over
+  // an index and it touches nothing when there is nothing to expire.
+  await expirePerishableItems(prisma)
 
   // A bounding box first: cheap in SQL, and it turns a whole-table distance
   // computation into one over a small candidate set. The circle is applied
@@ -187,15 +153,85 @@ export async function GET(req: NextRequest) {
     // no second code path that could disagree with this one.
     ...(category ? { category: { in: category } } : {}),
     ...(condition ? { condition } : {}),
+    // The expiry sweep above has already moved lapsed perishables out of
+    // AVAILABLE, so perishable=true never serves a tray whose window ran out.
+    ...(perishable !== undefined ? { isPerishable: perishable } : {}),
     ...leafRange,
-    ...(q ? { OR: [{ title: { contains: q, mode: "insensitive" as const } }, { description: { contains: q, mode: "insensitive" as const } }] } : {}),
+    // The search also matches the OWNER'S SHOP NAME (25 Sep 2026): searching
+    // "Baylo" returns the shop card from query 4 AND everything the shop has
+    // posted, not only listings that happen to repeat the shop's name in their
+    // title. The shop branch uses the card's own rule -- REJECTED is left out
+    // -- so a name that finds no card finds no listings through the name.
+    // Inside the OR, so it does not collide with visibleItemWhere()'s `user`
+    // key; block, suspension and every other filter still apply to it.
+    ...(q
+      ? {
+          OR: [
+            { title: { contains: q, mode: "insensitive" as const } },
+            { description: { contains: q, mode: "insensitive" as const } },
+            {
+              user: {
+                is: {
+                  isOrgAccount: true,
+                  organization: {
+                    is: {
+                      name: { contains: q, mode: "insensitive" as const },
+                      verificationStatus: { not: "REJECTED" as const },
+                    },
+                  },
+                },
+              },
+            },
+          ],
+        }
+      : {}),
     ...(box ?? {}),
+    // The Organizations pill. A predicate on the OWNER's discriminator column,
+    // which is why that column is stored rather than derived -- see the note on
+    // User.isOrgAccount. `organization: { isNot: null }` would say the same
+    // thing as a join, on the hottest list query in the app.
+    //
+    // isOrgAccount, NOT verificationStatus: the pill says "Organizations", so
+    // it shows organisations. Filtering to VERIFIED only would quietly hide
+    // every business still waiting on a review -- which is the state a business
+    // is in for its first days, exactly when it most needs to be findable. The
+    // badge on the card is what distinguishes verified from not.
+    //
+    // In an AND, NOT as a `user` key. visibleItemWhere() above already owns
+    // `user` (the block and suspension filters), and a second `user` spread
+    // here replaced it outright: with the pill on, blocked and suspended
+    // owners' listings came back.
+    //
+    // The business category rides in the same AND entry, so it is AND with
+    // everything else: Organizations + Apparel + Fashion is apparel shops'
+    // fashion listings. Several business categories are OR among themselves,
+    // exactly as several item categories are.
+    ...(orgsOnly
+      ? {
+          AND: [
+            {
+              user: {
+                is: {
+                  isOrgAccount: true,
+                  ...(businessCategory
+                    ? { organization: { is: { businessCategory: { in: businessCategory } } } }
+                    : {}),
+                },
+              },
+            },
+          ],
+        }
+      : {}),
   }
 
   const selection = {
     ...V1_ITEM_SELECT,
     user: { select: V1_ITEM_OWNER_SELECT },
     ...v1ItemStatsSelect(viewerId),
+    // The listing's Safe Zone hubs, for the card's place line ("New ·
+    // Lapu-Lapu"). Two batched statements per page, never one per item -- see
+    // the note on V1_ITEM_SAFEZONE_SELECT.
+    ...V1_ITEM_SAFEZONE_SELECT,
   }
 
   let page: unknown[]
@@ -231,6 +267,33 @@ export async function GET(req: NextRequest) {
         : withDistance
 
     const sliced = paginate(after, limit, (x) => encodeCursor(x.d, x.row.id))
+    page = sliced.page.map((x) => x.row)
+    nextCursor = sliced.nextCursor
+  } else if (sort === "expiring") {
+    // ── 1 (expiring) ── soonest trade window first; perishable=true only (the
+    // schema refuses it otherwise). The window is createdAt + tradeWithinHours,
+    // which Prisma cannot ORDER BY without raw SQL, so this is nearest's
+    // arrangement: a bounded scan, sorted and cursored in memory on a real
+    // (expiresAt, id) keyset. The sweep above has already moved lapsed rows out
+    // of AVAILABLE, so nothing past its window is in the scan.
+    const rows = await prisma.item.findMany({
+      where: { ...baseWhere, tradeWithinHours: { not: null } },
+      select: selection,
+      take: EXPIRING_SCAN_CAP,
+      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+    })
+
+    const withExpiry = rows
+      .map((r) => ({ row: r, t: r.createdAt.getTime() + (r.tradeWithinHours as number) * HOUR_MS }))
+      .sort((a, b) => (a.t === b.t ? (a.row.id < b.row.id ? -1 : 1) : a.t - b.t))
+
+    const afterT = cursor && typeof cursor.k === "number" ? cursor.k : null
+    const after =
+      afterT !== null && cursor
+        ? withExpiry.filter((x) => x.t > afterT || (x.t === afterT && x.row.id > cursor.id))
+        : withExpiry
+
+    const sliced = paginate(after, limit, (x) => encodeCursor(x.t, x.row.id))
     page = sliced.page.map((x) => x.row)
     nextCursor = sliced.nextCursor
   } else {
@@ -269,13 +332,118 @@ export async function GET(req: NextRequest) {
     orderBy: { _count: { id: "desc" } },
   })
 
+  // ── 4 ── organisations whose NAME matches the search.
+  //
+  // The "top account" above the content results: the shop itself. Its
+  // listings are in the grid below through the shop-name branch of `q` in
+  // baseWhere; this is the card that goes with them.
+  //
+  // First page only -- it is one card above the grid, and repeating it on every
+  // scroll page would be a wasted query per page. Honours the business-category
+  // sub-filter, so the card never contradicts the chips under it, and the same
+  // block and suspension rules the grid does: a shop you blocked is not a
+  // search result any more than its listings are.
+  //
+  // REJECTED organisations are left out. Their document review failed, and a
+  // prominent card is not where a business that could not be verified belongs;
+  // PENDING ones stay in, unbadged, for the reason the pill keeps them.
+  const orgRows =
+    q && !cursor
+      ? await prisma.organization.findMany({
+          where: {
+            name: { contains: q, mode: "insensitive" },
+            verificationStatus: { not: "REJECTED" },
+            ...(businessCategory ? { businessCategory: { in: businessCategory } } : {}),
+            orgUser: { is: { ...userNotBlocked(viewerId), ...notSuspendedWhere() } },
+          },
+          select: {
+            id: true,
+            orgUserId: true,
+            name: true,
+            logoUrl: true,
+            businessCategory: true,
+            verificationStatus: true,
+            // For the card's Follow button. Following a shop IS following its
+            // backing account -- the same Follow row as following a person --
+            // so the viewer's edge is at most one row by the unique pair.
+            orgUser: {
+              select: {
+                followers: { where: { followerId: viewerId }, select: { status: true }, take: 1 },
+                _count: { select: { followers: { where: { status: "ACCEPTED" } } } },
+              },
+            },
+            // A member is not offered Follow on their own shop.
+            members: { where: { userId: viewerId, status: "ACTIVE" }, select: { id: true }, take: 1 },
+          },
+          orderBy: [{ name: "asc" }],
+          // Over-fetched, then ranked below: Prisma cannot order by "how well
+          // the name matches", and an exact match belongs at the top.
+          take: 20,
+        })
+      : []
+  const needle = q?.toLowerCase() ?? ""
+  const matchRank = (name: string) => {
+    const n = name.toLowerCase()
+    return n === needle ? 0 : n.startsWith(needle) ? 1 : 2
+  }
+  const organizations = orgRows
+    .sort(
+      (a, b) =>
+        matchRank(a.name) - matchRank(b.name) ||
+        Number(b.verificationStatus === "VERIFIED") - Number(a.verificationStatus === "VERIFIED"),
+    )
+    .slice(0, MAX_ORG_MATCHES)
+    .map((o) => ({
+      id: o.id,
+      orgUserId: o.orgUserId,
+      name: o.name,
+      logoUrl: o.logoUrl,
+      businessCategory: o.businessCategory,
+      businessCategoryLabel: BUSINESS_CATEGORY_LABEL[o.businessCategory as BusinessCategory],
+      verified: o.verificationStatus === "VERIFIED",
+      follow: o.orgUser.followers[0]?.status ?? ("NONE" as const),
+      followers: o.orgUser._count.followers,
+      isMember: o.members.length > 0,
+    }))
+
+  // ── 5 ── business-category facets, for the chips under the Organizations pill.
+  //
+  // From the DATA, not the enum: a category appears only when some visible
+  // organisation in it has something AVAILABLE, so no chip leads to an empty
+  // grid. Counted in shops, not listings -- groupBy cannot group items by their
+  // owner's organisation's column, and the chip only needs "is there anything".
+  // Unfiltered by the other controls, like the item facets and for the same
+  // reason: chips that vanish as you pick them are a worse control.
+  const businessFacetRows = orgsOnly
+    ? await prisma.organization.groupBy({
+        by: ["businessCategory"],
+        where: {
+          orgUser: {
+            is: {
+              ...userNotBlocked(viewerId),
+              ...notSuspendedWhere(),
+              items: { some: { status: "AVAILABLE", moderationHiddenAt: null } },
+            },
+          },
+        },
+        _count: { id: true },
+        orderBy: { _count: { id: "desc" } },
+      })
+    : []
+
   return ok(
     {
       items: rowsOut.map((r) => v1Item(r, viewerId, access)),
+      organizations,
       facets: {
         categories: facetRows.map((f) => ({
           category: f.category,
           label: categoryLabel(f.category),
+          count: f._count.id,
+        })),
+        businessCategories: businessFacetRows.map((f) => ({
+          businessCategory: f.businessCategory,
+          label: BUSINESS_CATEGORY_LABEL[f.businessCategory as BusinessCategory],
           count: f._count.id,
         })),
       },
@@ -290,6 +458,9 @@ export async function GET(req: NextRequest) {
       // nothing consumed this echo — it is diagnostic, not data.
       applied: {
         categories: category ?? [],
+        orgsOnly,
+        businessCategories: businessCategory ?? [],
+        perishable: perishable ?? null,
         condition: condition ?? null,
         minLeaves: minLeaves ?? null,
         maxLeaves: maxLeaves ?? null,

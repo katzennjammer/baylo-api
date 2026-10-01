@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server"
 import { resolveSession } from "@/lib/api-auth"
+import prisma from "@/lib/prisma"
 import pusher from "@/lib/pusher"
 
 /** `presence-chat-<idA>-<idB>`, ids sorted. See the parse in POST below. */
 const PRESENCE_CHAT_PREFIX = "presence-chat-"
+const PRIVATE_USER_PREFIX = "private-user-"
 
 export async function POST(req: NextRequest) {
   const session = await resolveSession()
@@ -60,7 +62,26 @@ export async function POST(req: NextRequest) {
     return a === myId || b === myId
   })()
 
-  if (!isOwnPrivate && !isPresencePair) {
+  // A shop's channel, for its ACTIVE members (25 Sep 2026). Messages to a shop
+  // are published to its backing row's channel, and a member acting as the
+  // shop has to hear them. Exact name, then the membership row -- the same
+  // grant resolveActingIdentity() reads, re-read on every authorisation. No
+  // header is consulted: pusher-js authorises from its own request, and the
+  // question is only whether this person may read the shop's inbox at all.
+  // An authorised subscription outlives a removal until the socket reconnects;
+  // every read and write route re-checks on its own request.
+  const isShopPrivate =
+    !isOwnPrivate &&
+    channelName.startsWith(PRIVATE_USER_PREFIX) &&
+    (await prisma.organizationMember.count({
+      where: {
+        userId: myId,
+        status: "ACTIVE",
+        organization: { orgUserId: channelName.slice(PRIVATE_USER_PREFIX.length) },
+      },
+    })) > 0
+
+  if (!isOwnPrivate && !isPresencePair && !isShopPrivate) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 })
   }
 

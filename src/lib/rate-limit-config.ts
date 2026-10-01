@@ -45,6 +45,19 @@ export const RATE_LIMITS = {
   aiIdentify: { limit: 20, windowMs: HOUR },
   /** TWO vision calls per request, plus a full-catalogue scan. */
   aiPhash: { limit: 20, windowMs: HOUR },
+  /**
+   * One Haiku text call per message to the Premium search assistant, keyed on
+   * the person. A conversation is capped at 12 messages in the route, so this
+   * is a few conversations an hour -- generous for searching, and a ceiling on
+   * what a script holding a Premium token can bill.
+   */
+  aiAssistant: { limit: 40, windowMs: HOUR },
+  /**
+   * The same budget over a day. An hourly limit alone still lets one account
+   * run 960 calls a day; this caps a person at about $1 of Haiku daily (150
+   * calls at the longest conversation's ~5K input tokens each).
+   */
+  aiAssistantDaily: { limit: 150, windowMs: 24 * HOUR },
   /** Cloudinary bandwidth and storage, billed to us. */
   upload: { limit: 30, windowMs: HOUR },
   /** Nominatim search requests from the admin hub picker. */
@@ -118,6 +131,12 @@ export const RATE_LIMITS = {
    * reported before it is finished.
    */
   comment: { limit: 60, windowMs: HOUR },
+  /**
+   * Buying a Featured boost. The transaction already refuses a second boost on
+   * a listing that is featured, so this is not what stops double-charging; it
+   * bounds the retry loop a broken client could run against the balance check.
+   */
+  boost: { limit: 30, windowMs: HOUR },
 } as const satisfies Record<string, RateRule>
 
 export type RateLimitName = keyof typeof RATE_LIMITS

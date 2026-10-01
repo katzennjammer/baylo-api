@@ -1,8 +1,9 @@
-import { NextResponse } from "next/server"
+import { NextRequest, NextResponse } from "next/server"
 import prisma from "@/lib/prisma"
 import { resolveSession } from "@/lib/api-auth"
 import { enforceRateLimit } from "@/lib/rate-limit-config"
 import { issueVerificationToken } from "@/lib/email-verification"
+import { publicBaseUrl } from "@/lib/public-url"
 
 /**
  * Re-sends the verification email for the signed-in account.
@@ -17,7 +18,7 @@ import { issueVerificationToken } from "@/lib/email-verification"
  * A real static segment, not the NextAuth catch-all — see the note in
  * ../verify-email/route.ts.
  */
-export async function POST() {
+export async function POST(req: NextRequest) {
   const session = await resolveSession()
   if (!session?.user?.id) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
@@ -42,7 +43,7 @@ export async function POST() {
     return NextResponse.json({ ok: true, alreadyVerified: true, sent: false })
   }
 
-  const sent = await issueVerificationToken(user)
+  const sent = await issueVerificationToken(user, publicBaseUrl(req))
 
   // A send failure is reported honestly rather than swallowed — unlike the
   // registration path, the caller here is a user who explicitly asked for the

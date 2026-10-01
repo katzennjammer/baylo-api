@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server"
 import { consumeVerificationToken, type ConsumeResult } from "@/lib/email-verification"
+import { publicBaseUrl } from "@/lib/public-url"
 import { parseBody, verifyEmailSchema } from "@/lib/validation"
 
 /**
@@ -78,7 +79,7 @@ export async function GET(req: NextRequest) {
   // both directions: the token is already spent by this point either way.
   const wantsHtml = (req.headers.get("accept") ?? "").includes("text/html")
   if (wantsHtml) {
-    const base = process.env.NEXTAUTH_URL ?? req.nextUrl.origin
+    const base = publicBaseUrl(req)
     const target = result.ok
       ? new URL("/auth/verify-email?status=success", base)
       : new URL(`/auth/verify-email?status=error&reason=${result.reason}`, base)

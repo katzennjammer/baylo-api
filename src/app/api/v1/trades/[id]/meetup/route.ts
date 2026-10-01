@@ -2,8 +2,9 @@ import { NextRequest } from "next/server"
 import { z } from "zod"
 import { resolveSession } from "@/lib/api-auth"
 import prisma from "@/lib/prisma"
-import { ok, unauthenticated, notFound, forbidden, conflict, invalid } from "@/lib/v1/envelope"
+import { ok, unauthenticated, notFound, forbidden, conflict, fail, invalid } from "@/lib/v1/envelope"
 import { parseJsonBody } from "@/lib/v1/body"
+import { resolveTradeParticipant } from "@/lib/trade-participant"
 import { v1Hub } from "@/lib/safe-zones"
 import { MEETUP_SELECT, allHubs, listingHubIds, proposableHub, v1MeetupPlan } from "@/lib/meetup"
 import { notifyMeetupChanged } from "@/lib/meetup-events"
@@ -88,19 +89,22 @@ const TRADE_SELECT = {
 } as const
 
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const session = await resolveSession()
   if (!session?.user?.id) return unauthenticated()
-  const viewerId = session.user.id
   const { id } = await params
 
   const trade = await prisma.tradeRequest.findUnique({ where: { id }, select: TRADE_SELECT })
   if (!trade) return notFound("Trade not found")
-  if (trade.senderId !== viewerId && trade.receiverId !== viewerId) {
-    return forbidden("That trade is not yours")
+  // Either side: the person, or the shop they are acting as. See
+  // @/lib/trade-participant.
+  const who = await resolveTradeParticipant(session.user.id, req.headers, trade)
+  if (!who.ok) {
+    return who.kind === "org_refused" ? fail("ORG_CONTEXT_REFUSED", who.message) : forbidden("That trade is not yours")
   }
+  const viewerId = who.participantId
 
   /*
    * ── EVERY OPEN HUB IS ON THE TABLE; THE SHARED ONES ARE THE SUGGESTION ──────
@@ -151,7 +155,6 @@ export async function POST(
 ) {
   const session = await resolveSession()
   if (!session?.user?.id) return unauthenticated()
-  const viewerId = session.user.id
   const { id } = await params
 
   const parsed = await parseJsonBody(req, bodySchema)
@@ -160,9 +163,13 @@ export async function POST(
 
   const trade = await prisma.tradeRequest.findUnique({ where: { id }, select: TRADE_SELECT })
   if (!trade) return notFound("Trade not found")
-  if (trade.senderId !== viewerId && trade.receiverId !== viewerId) {
-    return forbidden("That trade is not yours")
+  // Either side: the person, or the shop they are acting as. See
+  // @/lib/trade-participant.
+  const who = await resolveTradeParticipant(session.user.id, req.headers, trade)
+  if (!who.ok) {
+    return who.kind === "org_refused" ? fail("ORG_CONTEXT_REFUSED", who.message) : forbidden("That trade is not yours")
   }
+  const viewerId = who.participantId
 
   /*
    * ACCEPTED ONLY, and both neighbours are excluded for their own reason.

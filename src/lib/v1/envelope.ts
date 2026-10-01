@@ -46,7 +46,16 @@ export type ApiErrorCode =
   // request will work. Deferred Points Agreements ended on 16 Sep 2026 and
   // older APKs still call their seven routes.
   | "GONE"
+  // X-Baylo-Org named an organisation this person may not act as right now.
+  // The same code POST /api/items has always sent in its own format; the phone
+  // drops its acting context on it. See @/lib/inbox.
+  | "ORG_CONTEXT_REFUSED"
   | "INTERNAL_ERROR"
+  // An upstream the route depends on (the Anthropic API) failed or answered
+  // with something unusable. Retryable, and not the caller's fault -- which is
+  // what separates it from a 400 and from a 500 in our own code. The search
+  // assistant's phone client falls back to its keyword matcher on this code.
+  | "UNAVAILABLE"
 
 const STATUS: Record<ApiErrorCode, number> = {
   VALIDATION_ERROR: 400,
@@ -55,8 +64,10 @@ const STATUS: Record<ApiErrorCode, number> = {
   NOT_FOUND:        404,
   CONFLICT:         409,
   GONE:             410,
+  ORG_CONTEXT_REFUSED: 403,
   RATE_LIMITED:     429,
   INTERNAL_ERROR:   500,
+  UNAVAILABLE:      503,
 }
 
 /** A success envelope. `meta` defaults to `{}` rather than being omitted. */

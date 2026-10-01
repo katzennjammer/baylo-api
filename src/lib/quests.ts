@@ -4,20 +4,37 @@ import prisma from "@/lib/prisma"
  * Daily quests: five a day -- 2 Easy, 2 Medium, 1 Hard -- refreshed every
  * midnight UTC.
  *
- * ── WHY RECONCILE, NOT AN EVENT HOOK AT EVERY MUTATION SITE ─────────────────
+ * ── ONE CHECK, TWO CALLERS: THE EVENT AND THE READ ─────────────────────────
  *
- * The task-reward system (@/lib/tasks) started exactly this way --
- * `reconcileTasks()` was "the only award path" before event-driven hooks were
- * added at the trade-settlement and item-creation sites for immediacy. Quests
- * take the earlier, safer shape on purpose: `reconcileQuests()` recomputes
- * completion from real rows (an Offer sent, an Item listed, a TradeRequest
- * completed) every time GET /api/v1/quests is called, rather than requiring a
- * new call from inside items/offers/reviews/follows/trade-settlement code.
- * That keeps this feature's blast radius to two files and an API route --
- * nothing about the offer or trade paths changes -- at the cost of a quest
- * showing "done" on next load rather than the instant it happens. If that
- * turns out to matter, add hooks the same way tasks did; reconcileQuests()
- * remains correct as the backfill either way.
+ * `reconcileQuests()` is the only thing that decides a quest is done. It
+ * recomputes completion from real rows (an Offer sent, an Item listed, a
+ * TradeRequest completed) and pays anything newly satisfied. It has two
+ * callers:
+ *
+ *   EVENT  `settleQuestsAsync()`, called from each route that writes a row a
+ *          quest counts: POST /api/offers (sender and receiver), POST
+ *          /api/items, POST /api/follows, POST /api/reviews, and trade
+ *          settlement in confirm/submit (both parties). It checks only the
+ *          kinds that action can satisfy, AFTER the action has committed.
+ *   READ   GET /api/v1/quests, which checks everything. It is the display and
+ *          the BACKFILL for anything an event missed. The event is
+ *          fire-and-forget and best-effort, exactly like awardTaskAsync().
+ *
+ * Until 25 Sep 2026 the read was the only caller, so a quest paid out only if
+ * its owner happened to open the Quests screen before midnight UTC. Somebody
+ * who completed a trade and never looked lost the Leaves.
+ *
+ * Both callers take the same claim guard in completeQuest(), so an event and
+ * a read racing each other pay once.
+ *
+ * ── NOT FOR ORGANISATION ACCOUNTS ───────────────────────────────────────────
+ *
+ * The event side skips org-backed User rows (`isOrgAccount`), so a staff
+ * member's listing posted for an org, which lands on the org's row, does not
+ * start paying daily quests into an account no person controls. The same
+ * reasoning sends FIRST_LISTING to the human in POST /api/items. Whether orgs
+ * should have quests at all is an open product decision, not a default. See
+ * settleQuestsAsync().
  *
  * ── EVERY QUEST IS A REAL ACTION ─────────────────────────────────────────────
  *
@@ -150,7 +167,14 @@ export interface QuestView {
 }
 
 /** True when the DB already shows the action `quest` needs, done by `userId`
- *  no earlier than `periodStart`. Read-only; completeQuest() does the writing. */
+ *  no earlier than `periodStart`. Read-only; completeQuest() does the writing.
+ *
+ *  The three trade quests key off `completedAt`, the moment settlement
+ *  committed, and NOT `updatedAt`. Any later write to a finished trade moves
+ *  `updatedAt` (a hide flag, for instance), and until 25 Sep 2026 that made an
+ *  old trade count toward today's quest. A trade completed before the column
+ *  existed has NULL there and never matches, which is correct for a check
+ *  that only asks about today. */
 async function questSatisfied(userId: string, quest: QuestKind, periodStart: Date): Promise<boolean> {
   switch (quest) {
     case "SEND_OFFER":
@@ -186,7 +210,7 @@ async function questSatisfied(userId: string, quest: QuestKind, periodStart: Dat
     case "COMPLETE_TRADE":
       return (await prisma.tradeRequest.findFirst({
         where: {
-          status: "COMPLETED", updatedAt: { gte: periodStart },
+          status: "COMPLETED", completedAt: { gte: periodStart },
           OR: [{ senderId: userId }, { receiverId: userId }],
         },
         select: { id: true },
@@ -194,7 +218,7 @@ async function questSatisfied(userId: string, quest: QuestKind, periodStart: Dat
     case "COMPLETE_BRIDGE_TRADE":
       return (await prisma.tradeRequest.findFirst({
         where: {
-          status: "COMPLETED", updatedAt: { gte: periodStart },
+          status: "COMPLETED", completedAt: { gte: periodStart },
           bridgeFeeLeaves: { gt: 0 },
           OR: [{ senderId: userId }, { receiverId: userId }],
         },
@@ -203,7 +227,7 @@ async function questSatisfied(userId: string, quest: QuestKind, periodStart: Dat
     case "COMPLETE_SAFEZONE_TRADE":
       return (await prisma.tradeRequest.findFirst({
         where: {
-          status: "COMPLETED", updatedAt: { gte: periodStart },
+          status: "COMPLETED", completedAt: { gte: periodStart },
           safeZoneHubId: { not: null },
           OR: [{ senderId: userId }, { receiverId: userId }],
         },
@@ -243,8 +267,17 @@ async function completeQuest(userId: string, assignmentId: string, amount: numbe
  * returns the day's quests as the client should see them. Safe to call on
  * every GET /api/v1/quests -- idempotent, and cheap once a day's rows exist
  * (one findMany plus up to five read-only satisfaction checks).
+ *
+ * `only` narrows the satisfaction checks to the kinds an event can have
+ * changed. An offer being sent cannot complete "List a new item", so the event
+ * path does not pay for the query that would ask. Omitted, every unclaimed
+ * quest is checked; that is the read path.
  */
-export async function reconcileQuests(userId: string, at: Date = new Date()): Promise<QuestView[]> {
+export async function reconcileQuests(
+  userId: string,
+  at: Date = new Date(),
+  only?: readonly QuestKind[],
+): Promise<QuestView[]> {
   const periodStart = dayStartUtc(at)
 
   const wanted = QUEST_TIERS.flatMap((tier) =>
@@ -275,7 +308,8 @@ export async function reconcileQuests(userId: string, at: Date = new Date()): Pr
     if (!a) continue // createMany lost a race and this reconcile didn't refetch its winner; next call fills it
 
     let completed = a.completedAt !== null
-    if (!completed && (await questSatisfied(userId, def.quest, periodStart))) {
+    const checked = !only || only.includes(def.quest)
+    if (!completed && checked && (await questSatisfied(userId, def.quest, periodStart))) {
       await completeQuest(userId, a.id, a.rewardLeaves, at)
       completed = true
     }
@@ -287,4 +321,34 @@ export async function reconcileQuests(userId: string, at: Date = new Date()): Pr
   }
 
   return views
+}
+
+/** The kinds a completed trade can satisfy, for the settlement hook. */
+export const TRADE_QUESTS: readonly QuestKind[] = [
+  "COMPLETE_TRADE", "COMPLETE_BRIDGE_TRADE", "COMPLETE_SAFEZONE_TRADE",
+]
+
+/**
+ * The event side: check `kinds` for `userId` now that the action behind them
+ * has committed. Fire-and-forget, and best-effort like awardTaskAsync() in
+ * @/lib/tasks. A failure here must never fail the offer, listing or trade
+ * that triggered it, and GET /api/v1/quests is the backfill for a miss.
+ *
+ * CALL IT AFTER THE COMMIT, never inside the action's transaction.
+ * reconcileQuests() reads through the global client, so it cannot see rows a
+ * still-open transaction has written, and would find the quest unsatisfied.
+ *
+ * Organisation accounts are skipped. See "NOT FOR ORGANISATION ACCOUNTS" in the
+ * header. The check is one indexed lookup, and it is the only thing standing
+ * between a staff member's org listing and a daily Leaf allowance on the org's
+ * row.
+ */
+export function settleQuestsAsync(userId: string, kinds: readonly QuestKind[]): void {
+  void (async () => {
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { isOrgAccount: true } })
+    if (!user || user.isOrgAccount) return
+    await reconcileQuests(userId, new Date(), kinds)
+  })().catch((err) => {
+    console.error("[quests] event settle failed; GET /api/v1/quests will backfill", err)
+  })
 }

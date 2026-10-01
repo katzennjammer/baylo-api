@@ -6,6 +6,8 @@ type SystemMessageInput = {
   receiverId: string
   tradeId?: string
   content: string
+  /** True for a copy addressed to the side that caused the event: it is news to nobody. */
+  read?: boolean
 }
 
 export async function createSystemMessage(input: SystemMessageInput) {
@@ -17,7 +19,7 @@ export async function createSystemMessage(input: SystemMessageInput) {
         receiverId: input.receiverId,
         tradeId: input.tradeId,
         content: input.content,
-        read: false,
+        read: input.read ?? false,
       },
     })
   } catch (error) {

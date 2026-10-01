@@ -4,6 +4,7 @@ import prisma from "@/lib/prisma"
 import { bracketOf } from "@/lib/brackets"
 import { valueCap } from "@/lib/trade-rules"
 import { VALUE_REJECTION_REASONS } from "@/lib/value-rejection"
+import { categoryLabel } from "@/lib/v1/taxonomy"
 import ListingActions from "./ListingActions"
 import { TakedownDisclosure } from "./TakedownDisclosure"
 import { FilterChips } from "@/components/admin/FilterChips"
@@ -62,7 +63,7 @@ export default async function ListingsPage({ searchParams }: Props) {
       ],
     },
     select: {
-      id: true, title: true, status: true, moderationHiddenAt: true, valueRejectionReason: true,
+      id: true, title: true, category: true, status: true, moderationHiddenAt: true, valueRejectionReason: true,
       createdAt: true, valueLeaves: true, suggestedLeaves: true, valueSetByUser: true,
       user: { select: { id: true, name: true, email: true } },
     },
@@ -107,6 +108,7 @@ export default async function ListingsPage({ searchParams }: Props) {
           <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1000, fontSize: 13 }}>
             <thead><tr style={{ textAlign: "left", color: "#888", fontSize: 12 }}>
               <th style={{ padding: "12px 14px" }}>Listing</th>
+              <th style={{ padding: "12px 14px" }}>Category</th>
               <th style={{ padding: "12px 14px" }}>Owner</th>
               <th style={{ padding: "12px 14px" }}>Lifecycle</th>
               <th style={{ padding: "12px 14px" }}>Created</th>
@@ -156,6 +158,7 @@ export default async function ListingsPage({ searchParams }: Props) {
                         </div>
                       ) : null}
                     </td>
+                    <td style={{ padding: "14px", whiteSpace: "nowrap" }}>{categoryLabel(listing.category)}</td>
                     <td style={{ padding: "14px" }}>
                       <strong>{listing.user.name}</strong>
                       <div style={{ color: "#777", marginTop: 3 }}>{listing.user.email}</div>
