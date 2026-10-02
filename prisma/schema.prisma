@@ -1659,6 +1659,9 @@ enum ReportTargetType {
   LISTING
   USER
   MESSAGE
+  /// A 24-hour story (1 Oct 2026). Added in its own migration and landed on
+  /// main before any code writes it -- see SETUP.md on enum values.
+  STORY
 }
 
 /**
