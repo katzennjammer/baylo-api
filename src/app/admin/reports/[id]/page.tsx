@@ -78,7 +78,7 @@ export default async function ReportDetailPage({
   // The reported content, by kind. Nulls are a real state, not an error: a
   // Report has no foreign key to its target precisely so it survives the target
   // being deleted — see the model note.
-  const [listing, subjectUser, message] = await Promise.all([
+  const [listing, subjectUser, message, story] = await Promise.all([
     targetType === "listing"
       ? prisma.item.findUnique({
           where: { id: report.targetId },
@@ -113,6 +113,16 @@ export default async function ReportDetailPage({
             id: true, content: true, createdAt: true,
             sender: { select: { id: true, name: true, email: true, suspendedAt: true, suspendedUntil: true } },
             receiver: { select: { id: true, name: true } },
+          },
+        })
+      : null,
+    targetType === "story"
+      ? prisma.story.findUnique({
+          where: { id: report.targetId },
+          select: {
+            id: true, caption: true, createdAt: true, expiresAt: true, deletedAt: true,
+            user: { select: { id: true, name: true, email: true, suspendedAt: true, suspendedUntil: true } },
+            item: { select: { id: true, title: true, images: true, status: true, moderationHiddenAt: true } },
           },
         })
       : null,
@@ -169,7 +179,8 @@ export default async function ReportDetailPage({
 
   // Who the action panel would act on. For a listing that is its owner; for a
   // message its sender; for a user report the user themselves.
-  const subjectRow = subjectUser ?? listing?.user ?? message?.sender ?? null
+  // For a story, its author.
+  const subjectRow = subjectUser ?? listing?.user ?? message?.sender ?? story?.user ?? null
   const subject = subjectRow
     ? {
         id: subjectRow.id,
@@ -316,6 +327,43 @@ export default async function ReportDetailPage({
               </>
             ) : (
               <p style={{ fontSize: 13, color: "#999" }}>That message no longer exists.</p>
+            ))}
+
+            {targetType === "story" && (story ? (
+              <>
+                <div style={label}>
+                  Story by {story.user.name} ({story.user.email}) · posted {story.createdAt.toLocaleString()} ·{" "}
+                  {story.deletedAt
+                    ? `deleted by the author ${story.deletedAt.toLocaleString()}`
+                    : story.expiresAt < new Date()
+                      ? "expired"
+                      : `live until ${story.expiresAt.toLocaleString()}`}
+                </div>
+                {story.caption && (
+                  <p style={{ fontSize: 14, lineHeight: 1.6, whiteSpace: "pre-wrap", background: "#f7f7f8", padding: 12, borderRadius: 10 }}>
+                    {story.caption}
+                  </p>
+                )}
+                {story.item ? (
+                  <>
+                    <p style={{ fontSize: 15, fontWeight: 700 }}>Shared listing: {story.item.title}</p>
+                    <div style={label}>
+                      status {story.item.status}
+                      {story.item.moderationHiddenAt && " · HIDDEN BY A MODERATOR"}
+                    </div>
+                    {parseImages(story.item.images).length > 0 && (
+                      <ReportImageViewer images={parseImages(story.item.images)} title={story.item.title} />
+                    )}
+                  </>
+                ) : (
+                  <p style={{ fontSize: 13, color: "#999" }}>The shared listing no longer exists.</p>
+                )}
+                <p style={{ fontSize: 12, color: "#888" }}>
+                  A story has no takedown of its own yet: suspending the author removes it from every row.
+                </p>
+              </>
+            ) : (
+              <p style={{ fontSize: 13, color: "#999" }}>That story no longer exists.</p>
             ))}
           </div>
 

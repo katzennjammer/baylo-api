@@ -79,6 +79,20 @@ async function resolveTargetOwner(
     return user && !user.deletedAt ? { ownerId: user.id, label: user.name } : null
   }
 
+  // STORY. Like a listing: the story exists, whoever can see it. Expired and
+  // deleted stories stay reportable -- the viewer may have watched it a minute
+  // before it ran out, and the row is kept for exactly this. The label is the
+  // caption, or the shared listing's title when there is none.
+  if (targetType === "story") {
+    const story = await prisma.story.findUnique({
+      where: { id: targetId },
+      select: { userId: true, caption: true, item: { select: { title: true } } },
+    })
+    return story
+      ? { ownerId: story.userId, label: story.caption ?? story.item?.title ?? "Story" }
+      : null
+  }
+
   // MESSAGE. Participation is required — see the oracle note above. A message
   // the reporter neither sent nor received is reported as "not found", the same
   // answer a nonexistent id gets, so the two are indistinguishable from outside.

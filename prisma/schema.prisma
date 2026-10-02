@@ -181,6 +181,9 @@ model User {
   // bottom of this file for the whole story -- this relation existed only as a
   // raw table in live until it was finally modelled here.
   achievements    UserAchievement[]
+  /// Stories this person posted, and the stories they have seen. See Story.
+  stories     Story[]     @relation("StoryAuthor")
+  storyViews  StoryView[] @relation("StoryViewer")
 
   // -- Organisation / MSME accounts -------------------------------------------
   //
@@ -474,6 +477,8 @@ model Item {
 
   /// One dHash per photo. See ItemImageHash.
   imageHashes ItemImageHash[]
+  /// 24-hour stories that share this listing. See Story.
+  stories Story[]
 
   // -- Perishables, and what the owner wants back -----------------------------
   //
@@ -1663,6 +1668,9 @@ enum ReportTargetType {
   LISTING
   USER
   MESSAGE
+  /// A 24-hour story (1 Oct 2026). Added in its own migration and landed on
+  /// main before any code writes it -- see SETUP.md on enum values.
+  STORY
 }
 
 /**
@@ -2733,4 +2741,65 @@ enum QuantityUnit {
   KG
   PCS
   LITERS
+}
+
+// ── Stories (1 Oct 2026) ────────────────────────────────────────────────────
+
+/// What a story shares. v1 is LISTING only; PHOTO is the planned second value
+/// and arrives as an `ADD VALUE` plus a nullable column, not a reshaped table.
+enum StoryType {
+  LISTING
+}
+
+/// A 24-hour story: a person sharing one of their own AVAILABLE listings to
+/// the row at the top of Community.
+///
+/// NOTHING SWEEPS THIS TABLE. A story is live while `expiresAt > now()`,
+/// `deletedAt` is null and its listing is still AVAILABLE and not
+/// moderation-hidden; every read applies that in SQL (liveStoryWhere() in
+/// @/lib/stories), so an expired, deleted or traded-away story simply stops
+/// matching. Expired rows are kept as the report trail for STORY reports.
+///
+/// PERSONAL ACCOUNTS ONLY in v1. The create path refuses an X-Baylo-Org
+/// context and only shares listings the person owns, which a shop listing
+/// (owned by the org's backing row) never is.
+model Story {
+  id     String    @id @default(cuid())
+  userId String
+  user   User      @relation("StoryAuthor", fields: [userId], references: [id], onDelete: Cascade)
+  type   StoryType @default(LISTING)
+
+  /// The shared listing. Required for LISTING; nullable so PHOTO can arrive
+  /// without reshaping. Cascade: a hard-deleted listing takes its stories.
+  itemId String?
+  item   Item?   @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  caption String? @db.VarChar(200)
+
+  createdAt DateTime  @default(now())
+  /// createdAt + 24 h, written by the application at create time.
+  expiresAt DateTime
+  /// Set when the author deletes the story. Kept rather than removed so a
+  /// report against it still has something to show a moderator.
+  deletedAt DateTime?
+
+  views StoryView[]
+
+  @@index([userId, createdAt])
+  @@index([expiresAt])
+  @@index([itemId])
+}
+
+/// "This viewer has seen this story" -- the ring colour in the stories row.
+/// Server-side so it follows a person across devices and reinstalls.
+model StoryView {
+  id       String   @id @default(cuid())
+  storyId  String
+  story    Story    @relation(fields: [storyId], references: [id], onDelete: Cascade)
+  viewerId String
+  viewer   User     @relation("StoryViewer", fields: [viewerId], references: [id], onDelete: Cascade)
+  seenAt   DateTime @default(now())
+
+  @@unique([storyId, viewerId])
+  @@index([viewerId])
 }

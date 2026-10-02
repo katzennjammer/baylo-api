@@ -132,6 +132,15 @@ export const RATE_LIMITS = {
    */
   comment: { limit: 60, windowMs: HOUR },
   /**
+   * Starting a story: the BURST guard. The real ceiling is STORY_DAILY_CAP
+   * (10 per rolling 24 h), counted in the database by createListingStory(),
+   * because this in-memory window resets on every deploy. This only stops a
+   * loop from spending the day's ten in a second.
+   */
+  storyCreate: { limit: 5, windowMs: FIFTEEN_MIN },
+  /** One call per story watched. A full row played end to end is ~100. */
+  storySeen: { limit: 600, windowMs: HOUR },
+  /**
    * Buying a Featured boost. The transaction already refuses a second boost on
    * a listing that is featured, so this is not what stops double-charging; it
    * bounds the retry loop a broken client could run against the balance check.

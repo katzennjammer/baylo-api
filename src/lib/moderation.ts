@@ -139,19 +139,21 @@ export const CATEGORY_LABEL: Record<ReportCategoryWire, string> = {
   other: "Other",
 }
 
-export const REPORT_TARGET_TYPES = ["listing", "user", "message"] as const
+export const REPORT_TARGET_TYPES = ["listing", "user", "message", "story"] as const
 export type ReportTargetWire = (typeof REPORT_TARGET_TYPES)[number]
-export type ReportTargetDb = "LISTING" | "USER" | "MESSAGE"
+export type ReportTargetDb = "LISTING" | "USER" | "MESSAGE" | "STORY"
 
 const TARGET_TO_DB: Record<ReportTargetWire, ReportTargetDb> = {
   listing: "LISTING",
   user: "USER",
   message: "MESSAGE",
+  story: "STORY",
 }
 const TARGET_TO_WIRE: Record<ReportTargetDb, ReportTargetWire> = {
   LISTING: "listing",
   USER: "user",
   MESSAGE: "message",
+  STORY: "story",
 }
 
 export const toDbTarget = (t: ReportTargetWire): ReportTargetDb => TARGET_TO_DB[t]

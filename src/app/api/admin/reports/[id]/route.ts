@@ -77,6 +77,19 @@ async function loadContent(targetType: ReportTargetWire, targetId: string) {
     }
   }
 
+  if (targetType === "story") {
+    const story = await prisma.story.findUnique({
+      where: { id: targetId },
+      select: {
+        id: true, caption: true, createdAt: true, expiresAt: true, deletedAt: true,
+        user: { select: { id: true, name: true, avatar: true, email: true } },
+        item: { select: { id: true, title: true, images: true, status: true, moderationHiddenAt: true } },
+      },
+    })
+    if (!story) return null
+    return { kind: "story" as const, story, owner: story.user }
+  }
+
   // MESSAGE. Loaded with a window of surrounding messages, because a single
   // line lifted out of a conversation is exactly how an innocent remark reads
   // as a threat and a threat reads as a joke. Ten messages either side is
