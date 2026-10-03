@@ -35,6 +35,7 @@ import { decideItemValue } from "../src/lib/valuation-server"
 import { findCategoryMatches } from "../src/lib/category-match"
 import { valueCap } from "../src/lib/trade-rules"
 import { bracketOf } from "../src/lib/brackets"
+import type { Category } from "@/generated/prisma/client"
 
 const RUN_TAG = `verify-orgs-${Date.now()}`
 
@@ -50,7 +51,8 @@ function check(name: string, condition: boolean, detail = "") {
 
 function guardLive() {
   const url = process.env.DATABASE_URL ?? ""
-  const looksLive = !/localhost|127\.0\.0\.1|scratch/i.test(url)
+  // A schema_v2_* copy is scratch too (schema v2, week 2).
+  const looksLive = !/localhost|127\.0\.0\.1|scratch|[?&]schema=schema_v2_/i.test(url)
   if (looksLive && process.env.BAYLO_ALLOW_LIVE !== "1") {
     console.error(
       "Refusing to write to what looks like a live database.\n" +
@@ -100,12 +102,13 @@ async function main() {
     check("backing row claims no signup grant", orgUser.signupGrantClaimed === true)
     check("backing row starts at zero Leaves", orgUser.leaves === 0)
 
-    const founderMembership = await prisma.organizationMember.findUnique({
-      where: { organizationId_userId: { organizationId: org.organizationId, userId: founder.id } },
-      select: { role: true, status: true, joinedAt: true },
+    // Schema v2: the owner is Organization.ownerId (staff were removed).
+    const ownership = await prisma.organization.findUniqueOrThrow({
+      where: { id: org.organizationId },
+      select: { ownerId: true, ownerJoinedAt: true },
     })
-    check("founder is an ACTIVE OWNER", founderMembership?.role === "OWNER" && founderMembership.status === "ACTIVE")
-    check("joinedAt stamped with ACTIVE", founderMembership?.joinedAt != null)
+    check("founder is the OWNER", ownership.ownerId === founder.id)
+    check("ownerJoinedAt stamped", ownership.ownerJoinedAt != null)
 
     // The biconditional. THE reason isOrgAccount is allowed to be a stored
     // column rather than a join — see the note on the User model.
@@ -140,19 +143,14 @@ async function main() {
     const stranger = await resolveActingIdentity(prisma, outsider.id, org.organizationId)
     check("a non-member is refused", !stranger.ok && stranger.reason === "not_a_member")
 
-    // A PENDING invitation is not a permission.
-    await prisma.organizationMember.create({
-      data: { organizationId: org.organizationId, userId: outsider.id, role: "STAFF", status: "PENDING" },
-    })
-    const invited = await resolveActingIdentity(prisma, outsider.id, org.organizationId)
-    check("a PENDING invitation is refused", !invited.ok && invited.reason === "membership_pending")
-
-    await prisma.organizationMember.update({
-      where: { organizationId_userId: { organizationId: org.organizationId, userId: outsider.id } },
-      data: { status: "ACTIVE", joinedAt: new Date() },
-    })
-    const staff = await resolveActingIdentity(prisma, outsider.id, org.organizationId)
-    check("an ACTIVE staff member may act", staff.ok && staff.acting.actingUserId === org.orgUserId)
+    // v2: ownership is the only membership. Hand the org to the outsider:
+    // they may act, and the founder, no longer the owner, may not.
+    await prisma.organization.update({ where: { id: org.organizationId }, data: { ownerId: outsider.id } })
+    const newOwner = await resolveActingIdentity(prisma, outsider.id, org.organizationId)
+    check("the new owner may act", newOwner.ok && newOwner.acting.actingUserId === org.orgUserId)
+    const formerOwner = await resolveActingIdentity(prisma, founder.id, org.organizationId)
+    check("the former owner is refused", !formerOwner.ok && formerOwner.reason === "not_a_member")
+    await prisma.organization.update({ where: { id: org.organizationId }, data: { ownerId: founder.id } })
 
     // ── 3 ── the perishable clamp ───────────────────────────────────────────
     console.log("\nperishable valuation")
@@ -197,12 +195,11 @@ async function main() {
       data: {
         title: `${RUN_TAG} outsider plants`,
         description: "x",
-        images: "[]",
         category: "PLANTS",
         condition: "GOOD",
         status: "AVAILABLE",
         userId: outsider.id,
-        lookingForCategories: ["FOOD"],
+        wantedCategories: { create: (["FOOD"] as Category[]).map((category) => ({ category })) },
       },
       select: { id: true },
     })
@@ -213,12 +210,11 @@ async function main() {
       data: {
         title: `${RUN_TAG} silent`,
         description: "x",
-        images: "[]",
         category: "BOOKS",
         condition: "GOOD",
         status: "AVAILABLE",
         userId: outsider.id,
-        lookingForCategories: [],
+        wantedCategories: { create: ([] as Category[]).map((category) => ({ category })) },
       },
       select: { id: true },
     })
@@ -228,12 +224,11 @@ async function main() {
       data: {
         title: `${RUN_TAG} founder food`,
         description: "x",
-        images: "[]",
         category: "FOOD",
         condition: "NEW",
         status: "AVAILABLE",
         userId: founder.id,
-        lookingForCategories: ["PLANTS"],
+        wantedCategories: { create: (["PLANTS"] as Category[]).map((category) => ({ category })) },
       },
       select: { id: true },
     })
@@ -263,7 +258,6 @@ async function main() {
       data: {
         title: `${RUN_TAG} stale fish`,
         description: "x",
-        images: "[]",
         category: "FOOD",
         condition: "NEW",
         status: "AVAILABLE",
@@ -282,7 +276,6 @@ async function main() {
       data: {
         title: `${RUN_TAG} fresh fish`,
         description: "x",
-        images: "[]",
         category: "FOOD",
         condition: "NEW",
         status: "AVAILABLE",
@@ -299,7 +292,6 @@ async function main() {
       data: {
         title: `${RUN_TAG} locked fish`,
         description: "x",
-        images: "[]",
         category: "FOOD",
         condition: "NEW",
         status: "IN_TRADE",

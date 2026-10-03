@@ -125,23 +125,20 @@ async function main() {
   }
   const item = (userId: string, title: string) =>
     prisma.item.create({
-      data: { title: `${tag} ${title}`, description: "x", images: "[]", category: "OTHER", condition: "GOOD", valueLeaves: 200, userId },
+      data: { title: `${tag} ${title}`, description: "x", category: "OTHER", condition: "GOOD", valueLeaves: 200, userId },
       select: { id: true },
     })
 
   const owner = await person("owner")
-  const staff = await person("staff")
+  // Schema v2: organisation staff were removed. The OWNER is the only person
+  // who acts as the shop, so the "staff" actor below IS the owner, and the
+  // former PENDING invitee is simply a person who is not the owner.
+  const staff = owner
   const pendingMember = await person("pending")
   const stranger = await person("stranger")
   const mary = await person("mary")
   const shop = await createOrganization({ founderUserId: owner.id, name: `${tag} Baylo`, businessCategory: "SARI_SARI" })
   await prisma.organization.update({ where: { id: shop.organizationId }, data: { verificationStatus: "VERIFIED" } })
-  await prisma.organizationMember.createMany({
-    data: [
-      { organizationId: shop.organizationId, userId: staff.id, role: "STAFF", status: "ACTIVE" },
-      { organizationId: shop.organizationId, userId: pendingMember.id, role: "STAFF", status: "PENDING" },
-    ],
-  })
   const shopChannel = `private-user-${shop.orgUserId}`
 
   head("1  channel auth for the shop's channel")
@@ -150,9 +147,9 @@ async function main() {
   const aOwner = await auth(owner.token)
   const aPending = await auth(pendingMember.token)
   const aStranger = await auth(stranger.token)
-  check("1: staff (ACTIVE) authorised", aStaff.status === 200, brief(aStaff))
+  check("1: the acting person (the owner) authorised", aStaff.status === 200, brief(aStaff))
   check("1: owner authorised", aOwner.status === 200, brief(aOwner))
-  check("1: PENDING member refused", aPending.status === 403, brief(aPending))
+  check("1: a person who is not the owner refused", aPending.status === 403, brief(aPending))
   check("1: stranger refused", aStranger.status === 403, brief(aStranger))
 
   const staffSock = listen(staff.token, shopChannel)

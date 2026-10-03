@@ -49,7 +49,7 @@ async function apply() {
       title: "Canon EOS M50 Mark II, kit lens",
       description:
         "24MP mirrorless with the 15-45mm kit lens, two batteries, strap and a 64GB card. Shutter count under 4,000. Demo listing for the appeals queue.",
-      images: JSON.stringify(["https://images.unsplash.com/photo-1516035069371-29a1b244cc32?w=800&q=75"]),
+      images: { create: [{ position: 0, url: "https://images.unsplash.com/photo-1516035069371-29a1b244cc32?w=800&q=75" }] },
       category: "ELECTRONICS",
       condition: "GOOD",
       valueLeaves: REQUESTED,
@@ -95,18 +95,19 @@ async function apply() {
     select: { id: true },
   })
 
-  const appeal = await prisma.listingAppeal.upsert({
+  const appeal = await prisma.moderationCase.upsert({
     where: { id: `${PREFIX}appeal` },
     create: {
       id: `${PREFIX}appeal`,
       itemId: item.id,
-      ownerId: owner.id,
-      kind: "VALUE_REJECTION",
+      type: "LISTING_APPEAL",
+      filedById: owner.id,
+      appealKind: "VALUE_REJECTION",
       actionId: action.id,
       message:
         "The comparables are body-only. Mine has the kit lens, a second battery and under 4,000 shutter actuations — the last one like this on here went for 2,100. Please look again.",
     },
-    update: { status: "OPEN", decidedById: null, decidedAt: null, decisionReason: null, actionId: action.id },
+    update: { status: "OPEN", decidedById: null, decidedAt: null, decisionNote: null, actionId: action.id },
     select: { id: true, status: true },
   })
 
@@ -117,7 +118,7 @@ async function apply() {
 }
 
 async function remove() {
-  const appeals = await prisma.listingAppeal.deleteMany({ where: { id: { startsWith: PREFIX } } })
+  const appeals = await prisma.moderationCase.deleteMany({ where: { id: { startsWith: PREFIX } } })
   // Decisions ON the demo appeal (if somebody upheld/overturned it while it
   // was up) and the demo rejection itself.
   const actions = await prisma.adminAction.deleteMany({

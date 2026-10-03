@@ -101,26 +101,11 @@ export async function GET() {
 
   const organizations = await activeOrgsFor(prisma, session.user.id)
 
-  // Invitations waiting on an answer. Listed SEPARATELY from `organizations`
-  // and never merged into it: a PENDING row is not a permission, and an org in
-  // the switcher that every write path then refuses is worse than no entry.
-  const invitations = await prisma.organizationMember.findMany({
-    where: { userId: session.user.id, status: "PENDING" },
-    select: {
-      id: true,
-      invitedAt: true,
-      organization: { select: { id: true, name: true, logoUrl: true } },
-    },
-    orderBy: { invitedAt: "desc" },
-  })
-
   return ok({
     organizations,
-    invitations: invitations.map((i) => ({
-      membershipId: i.id,
-      invitedAt: i.invitedAt,
-      organization: i.organization,
-    })),
+    // Staff invitations were removed in schema v2. Always empty; kept on the
+    // wire because shipped clients read the field.
+    invitations: [],
     businessCategories: BUSINESS_CATEGORIES.map((v) => ({
       value: v,
       label: BUSINESS_CATEGORY_LABEL[v],
@@ -156,13 +141,13 @@ export async function POST(req: NextRequest) {
   // mint organisations at will is an account that can mint listing identities
   // at will, and every one of them is a fresh, unreviewed profile. Raising this
   // is a product decision that should come with a reason.
-  const existingOwnership = await prisma.organizationMember.findFirst({
-    where: { userId, role: "OWNER", status: "ACTIVE" },
-    select: { organization: { select: { id: true, name: true } } },
+  const existingOwnership = await prisma.organization.findFirst({
+    where: { ownerId: userId },
+    select: { id: true, name: true },
   })
   if (existingOwnership) {
     return conflict("You already run an organisation on this account.", {
-      organization: existingOwnership.organization,
+      organization: existingOwnership,
     })
   }
 

@@ -118,6 +118,12 @@ async function main() {
       if ((m.endsWith("_ledger") && skip.has("ledger")) || (m.endsWith("_trade") && skip.has("trade"))) {
         console.log(`  SKIPPED ${m}`); continue
       }
+      // A phase not yet landed keeps its migration in prisma/schema-v2-pending/
+      // (see the README there). Only what is in prisma/migrations/ is applied,
+      // so the copy always matches schema.prisma on this commit.
+      if (!existsSync(new URL(`../../prisma/migrations/${m}/migration.sql`, import.meta.url))) {
+        console.log(`  not yet in prisma/migrations (pending phase): ${m}`); continue
+      }
       const t0 = Date.now()
       // One query string = one implicit transaction, as `migrate deploy` runs it.
       await pg.query(await v2Sql(m))

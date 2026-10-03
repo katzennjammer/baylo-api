@@ -55,9 +55,7 @@ export async function resolveInbox(
     return {
       ok: false,
       message:
-        result.reason === "membership_pending"
-          ? "Accept the invitation before acting for this organisation"
-          : "You are not a member of that organisation",
+        "You are not a member of that organisation",
     }
   }
   return { ok: true, inboxId: result.acting.actingUserId, acting: result.acting }

@@ -230,7 +230,7 @@ export async function loadSignals(db: Db, viewerId: string): Promise<Signal[]> {
       orderBy: { createdAt: "desc" },
       take: SIGNAL_SCAN_CAP,
     }),
-    db.postLike.findMany({
+    db.like.findMany({
       where: { userId: viewerId },
       select: { post: { select: { category: true } } },
       orderBy: { createdAt: "desc" },
@@ -284,8 +284,8 @@ export async function loadEngagement(
 
   const [offers, likes, comments] = await Promise.all([
     db.offer.groupBy({ by: ["postId"], where, _count: { _all: true } }),
-    db.postLike.groupBy({ by: ["postId"], where, _count: { _all: true } }),
-    db.postComment.groupBy({ by: ["postId"], where, _count: { _all: true } }),
+    db.like.groupBy({ by: ["postId"], where, _count: { _all: true } }),
+    db.comment.groupBy({ by: ["postId"], where, _count: { _all: true } }),
   ])
 
   const bump = (id: string, key: keyof Engagement, n: number) => {

@@ -131,7 +131,7 @@ async function snapshot(userId: string) {
       orderBy: { createdAt: "asc" },
       select: { type: true, amount: true, description: true, createdAt: true, eventAt: true },
     }),
-    prisma.emailVerificationToken.count({ where: { userId } }),
+    prisma.authToken.count({ where: { userId, type: "EMAIL_VERIFICATION" as const } }),
   ])
   return { ...u, txs, tokens }
 }
@@ -247,7 +247,7 @@ async function main() {
   if (!linkA) throw new Error("no verification link captured — cannot continue")
   console.log(`      link: ${linkA.replace(/token=([A-Za-z0-9]{8})[A-Za-z0-9]+/, "token=$1…")}`)
 
-  const storedHash = await prisma.emailVerificationToken.findFirstOrThrow({
+  const storedHash = await prisma.authToken.findFirstOrThrow({
     where: { userId: userA.id }, select: { tokenHash: true },
   })
   const rawA = new URL(linkA).searchParams.get("token") ?? ""
@@ -306,7 +306,7 @@ async function main() {
   // LIVE token against an account that is already verified — which is what a
   // resend issued just before verifying would leave behind. It must redeem
   // cleanly and pay nothing.
-  await prisma.emailVerificationToken.deleteMany({ where: { userId: userA.id } })
+  await prisma.authToken.deleteMany({ where: { userId: userA.id, type: "EMAIL_VERIFICATION" as const } })
   const resendA = await req("/api/auth/resend-verification", {
     method: "POST", headers: { ...jsonHeaders, authorization: `Bearer ${await bearerFor(emailA)}` },
   })
@@ -337,7 +337,7 @@ async function main() {
 
   // Age the token past its life. The expiry check reads the column, so moving
   // the column is the honest way to test it without waiting 24 hours.
-  await prisma.emailVerificationToken.updateMany({
+  await prisma.authToken.updateMany({
     where: { userId: userB.id },
     data: { expiresAt: new Date(Date.now() - 60_000) },
   })
@@ -365,7 +365,7 @@ async function main() {
     JSON.stringify(resend1.json))
   check("a fresh email arrived", linkFor(emailB) !== linkB)
   check("still exactly one live token — the previous one was purged",
-    (await prisma.emailVerificationToken.count({ where: { userId: userB.id } })) === 1)
+    (await prisma.authToken.count({ where: { userId: userB.id, type: "EMAIL_VERIFICATION" as const } })) === 1)
 
   const resend2 = await req("/api/auth/resend-verification", { method: "POST", headers: authB })
   const resend3 = await req("/api/auth/resend-verification", { method: "POST", headers: authB })

@@ -96,7 +96,7 @@ async function user(tag: string, leaves = 0) {
 async function item(userId: string, title: string, valueLeaves: number | null, status: "AVAILABLE" | "IN_TRADE" = "AVAILABLE") {
   return prisma.item.create({
     data: {
-      title: `${P}${title}`, description: "fixture", images: "[]", category: "OTHER", condition: "GOOD",
+      title: `${P}${title}`, description: "fixture", category: "OTHER", condition: "GOOD",
       valueLeaves, suggestedLeaves: valueLeaves, status, userId,
     },
     select: { id: true, title: true, valueLeaves: true },

@@ -68,9 +68,7 @@ export async function resolveTradeParticipant(
       ok: false,
       kind: "org_refused",
       message:
-        result.reason === "membership_pending"
-          ? "Accept the invitation before acting for this organisation"
-          : "You are not a member of that organisation",
+        "You are not a member of that organisation",
     }
   }
 
@@ -113,9 +111,7 @@ export async function resolveTradeViewer(
     return {
       ok: false,
       message:
-        result.reason === "membership_pending"
-          ? "Accept the invitation before acting for this organisation"
-          : "You are not a member of that organisation",
+        "You are not a member of that organisation",
     }
   }
   return { ok: true, viewerId: result.acting.actingUserId }
@@ -129,22 +125,21 @@ export async function resolveTradeViewer(
  * own shop's listing could only sit there. Once a member can accept as the
  * shop, one person controls both sides, and settlement would move the shop's
  * items and Leaves to the member -- and pay the person side a TRADE_REWARD for
- * a trade with themselves. So any membership row, PENDING or ACTIVE, between
- * the two sides refuses the trade. PENDING too: an invitation the person can
- * accept at any moment is control they can take whenever it suits them.
+ * a trade with themselves. So a trade between a shop and its OWNER is refused
+ * (schema v2: the owner is the only member a shop has).
  *
  * Either order: the person may be the sender or the receiver.
  */
 export async function isShopMemberPair(
-  db: Pick<PrismaClient, "organizationMember">,
+  db: Pick<PrismaClient, "organization">,
   a: string,
   b: string,
 ): Promise<boolean> {
-  const found = await db.organizationMember.findFirst({
+  const found = await db.organization.findFirst({
     where: {
       OR: [
-        { userId: a, organization: { orgUserId: b } },
-        { userId: b, organization: { orgUserId: a } },
+        { ownerId: a, orgUserId: b },
+        { ownerId: b, orgUserId: a },
       ],
     },
     select: { id: true },

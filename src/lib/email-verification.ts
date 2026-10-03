@@ -65,9 +65,10 @@ export async function issueVerificationToken(user: {
   // Purge first. Without this a resend leaves every previously mailed link
   // live, so "I lost the email, send another" quietly widens the window instead
   // of moving it.
-  await prisma.emailVerificationToken.deleteMany({ where: { userId: user.id } })
-  await prisma.emailVerificationToken.create({
-    data: { userId: user.id, tokenHash: hashToken(raw), expiresAt },
+  // AuthToken (schema v2): one table for every bearer secret, told apart by type.
+  await prisma.authToken.deleteMany({ where: { userId: user.id, type: "EMAIL_VERIFICATION" } })
+  await prisma.authToken.create({
+    data: { type: "EMAIL_VERIFICATION", userId: user.id, tokenHash: hashToken(raw), expiresAt },
   })
 
   // The raw token exists only here and in the email. Nothing writes it to a log.
@@ -104,18 +105,19 @@ export type ConsumeResult =
 export async function consumeVerificationToken(raw: string): Promise<ConsumeResult> {
   const tokenHash = hashToken(raw)
 
-  const record = await prisma.emailVerificationToken.findUnique({
+  const record = await prisma.authToken.findUnique({
     where: { tokenHash },
-    select: { userId: true, expiresAt: true },
+    select: { userId: true, expiresAt: true, type: true },
   })
-  if (!record) return { ok: false, reason: "invalid" }
+  // A hash of another token type is not a verification link.
+  if (!record || record.type !== "EMAIL_VERIFICATION") return { ok: false, reason: "invalid" }
 
   if (record.expiresAt < new Date()) {
-    await prisma.emailVerificationToken.deleteMany({ where: { tokenHash } })
+    await prisma.authToken.deleteMany({ where: { tokenHash, type: "EMAIL_VERIFICATION" } })
     return { ok: false, reason: "expired" }
   }
 
-  const claimed = await prisma.emailVerificationToken.deleteMany({ where: { tokenHash } })
+  const claimed = await prisma.authToken.deleteMany({ where: { tokenHash, type: "EMAIL_VERIFICATION" } })
   if (claimed.count !== 1) return { ok: false, reason: "invalid" }
 
   // Same entry point as both Google paths. Idempotent: verifying an account

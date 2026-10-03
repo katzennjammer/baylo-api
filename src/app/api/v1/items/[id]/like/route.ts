@@ -96,7 +96,7 @@ export async function POST(
   // opposite direction (there a duplicate is a 409 because the SECOND report
   // is a different act; a second like is not).
   try {
-    await prisma.postLike.upsert({
+    await prisma.like.upsert({
       where: { postId_userId: { postId: itemId, userId: viewerId } },
       create: { postId: itemId, userId: viewerId },
       update: {},
@@ -139,7 +139,7 @@ export async function DELETE(
 
   // deleteMany, not delete: `delete` throws P2025 when the row is absent, which
   // would make the ordinary double tap a 500.
-  await prisma.postLike.deleteMany({ where: { postId: itemId, userId: viewerId } })
+  await prisma.like.deleteMany({ where: { postId: itemId, userId: viewerId } })
 
   return ok({ stats: await currentStats(itemId, viewerId) })
 }

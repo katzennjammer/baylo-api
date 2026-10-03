@@ -31,6 +31,7 @@ import { valueCap } from "../src/lib/trade-rules"
 import { bracketOf } from "../src/lib/brackets"
 import { decideItemValue } from "../src/lib/valuation-server"
 import { requireScratchSchema } from "./lib/live-guard"
+import type { Category } from "@/generated/prisma/client"
 
 const BASE = process.env.BAYLO_BASE_URL ?? "http://localhost:3000"
 
@@ -118,24 +119,22 @@ async function main() {
       data: {
         title: `${tag} wanter plants`,
         description: "x",
-        images: "[]",
         category: "PLANTS",
         condition: "GOOD",
         status: "AVAILABLE",
         userId: wanter.id,
-        lookingForCategories: ["FOOD"],
+        wantedCategories: { create: (["FOOD"] as Category[]).map((category) => ({ category })) },
       },
     })
     await prisma.item.create({
       data: {
         title: `${tag} silent books`,
         description: "x",
-        images: "[]",
         category: "BOOKS",
         condition: "GOOD",
         status: "AVAILABLE",
         userId: silent.id,
-        lookingForCategories: [],
+        wantedCategories: { create: ([] as Category[]).map((category) => ({ category })) },
       },
     })
 

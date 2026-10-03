@@ -372,8 +372,8 @@ export async function GET(req: NextRequest) {
                 _count: { select: { followers: { where: { status: "ACCEPTED" } } } },
               },
             },
-            // A member is not offered Follow on their own shop.
-            members: { where: { userId: viewerId, status: "ACTIVE" }, select: { id: true }, take: 1 },
+            // The owner is not offered Follow on their own shop.
+            ownerId: true,
           },
           orderBy: [{ name: "asc" }],
           // Over-fetched, then ranked below: Prisma cannot order by "how well
@@ -403,7 +403,7 @@ export async function GET(req: NextRequest) {
       verified: o.verificationStatus === "VERIFIED",
       follow: o.orgUser.followers[0]?.status ?? ("NONE" as const),
       followers: o.orgUser._count.followers,
-      isMember: o.members.length > 0,
+      isMember: o.ownerId === viewerId,
     }))
 
   // ── 5 ── business-category facets, for the chips under the Organizations pill.

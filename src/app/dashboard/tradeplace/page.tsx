@@ -1,6 +1,7 @@
 import { auth } from "@/../auth"
 import { redirect } from "next/navigation"
 import prisma from "@/lib/prisma"
+import { ITEM_IMAGES, imagesJson, leadHash } from "@/lib/item-images"
 import TradeplaceClient from "./TradeplaceClient"
 import type { SerializedItem } from "./TradeplaceClient"
 import { preciseAccessItemIds, resolvePickup } from "@/lib/item-visibility"
@@ -58,7 +59,7 @@ export default async function TradeplacePage({
          recentTradePairs, trendingCatRaw, tickerTradesRaw] = await Promise.all([
     prisma.item.findMany({
       where: { status: "AVAILABLE" },
-      include: { user: { select: { id: true, name: true, avatar: true, rating: true, totalTrades: true, lifetimeLeaves: true } } },
+      include: { images: ITEM_IMAGES, user: { select: { id: true, name: true, avatar: true, rating: true, totalTrades: true, lifetimeLeaves: true } } },
       orderBy: { createdAt: "desc" },
     }),
     prisma.user.findUnique({
@@ -140,13 +141,14 @@ export default async function TradeplacePage({
     id: item.id,
     title: item.title,
     description: item.description,
-    images: item.images,
+    // The client component still takes the legacy JSON string and lead hash.
+    images: imagesJson(item.images),
     category: item.category as string,
     condition: item.condition as string,
     valueLeaves: item.valueLeaves,
     wanted: item.wantedItems,
     pickup: resolvePickup(item, session.user!.id, pickupAccess),
-    imageHash: item.imageHash,
+    imageHash: leadHash(item.images),
     userId: item.userId,
     tradeCount: tradeCountMap.get(item.id) ?? 0,
     user: {

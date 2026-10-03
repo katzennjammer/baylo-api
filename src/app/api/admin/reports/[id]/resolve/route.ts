@@ -5,6 +5,7 @@ import prisma from "@/lib/prisma"
 import { ok, notFound, conflict } from "@/lib/v1/envelope"
 import { parseJsonBody } from "@/lib/v1/body"
 import { resolveReport, writeAudit, OPEN_KEY } from "@/lib/moderation"
+import { REPORT } from "@/lib/report-case"
 
 export const dynamic = "force-dynamic"
 
@@ -57,9 +58,9 @@ export async function POST(
   if (!parsed.ok) return parsed.response
   const { action, note } = parsed.data
 
-  const report = await prisma.report.findUnique({
-    where: { id },
-    select: { id: true, status: true, reporterId: true, targetType: true, targetId: true },
+  const report = await prisma.moderationCase.findUnique({
+    where: { id, ...REPORT },
+    select: { id: true, status: true, filedById: true, targetType: true, targetId: true },
   })
   if (!report) return notFound("Report not found")
 
@@ -81,7 +82,7 @@ export async function POST(
     // openKey is untouched: REVIEWING is still LIVE, so the report keeps its
     // slot in the unique index and the reporter still cannot refile.
     await prisma.$transaction(async (tx) => {
-      await tx.report.update({ where: { id }, data: { status: "REVIEWING" } })
+      await tx.moderationCase.update({ where: { id, ...REPORT }, data: { status: "REVIEWING" } })
       await writeAudit(tx, {
         actorId: actor.id,
         action: "REPORT_REVIEWING",
@@ -103,7 +104,7 @@ export async function POST(
   await prisma.$transaction(async (tx) => {
     await resolveReport(tx, {
       reportId: id,
-      reporterId: report.reporterId,
+      reporterId: report.filedById,
       actorId: actor.id,
       status,
       note,

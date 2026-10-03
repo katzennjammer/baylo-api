@@ -91,7 +91,7 @@ async function apply() {
     const shared = {
       title: l.title,
       description: l.description,
-      images: JSON.stringify([l.image]),
+      images: { create: [{ position: 0, url: l.image }] },
       category: l.category as never,
       condition: l.condition as never,
       valueLeaves: l.valueLeaves,

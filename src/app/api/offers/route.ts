@@ -4,15 +4,10 @@ import prisma from "@/lib/prisma"
 import pusher from "@/lib/pusher"
 import { createOfferSchema, parseBody } from "@/lib/validation"
 import { enforceInitiateTrade } from "@/lib/reputation-gate"
+import { ITEM_IMAGES, toImageUrls, type ImagesLike } from "@/lib/item-images"
 
-function firstImage(raw: string | null | undefined): string | null {
-  if (!raw) return null
-  try {
-    const parsed: unknown = JSON.parse(raw)
-    return Array.isArray(parsed) && typeof parsed[0] === "string" ? parsed[0] : null
-  } catch {
-    return null
-  }
+function firstImage(raw: ImagesLike): string | null {
+  return toImageUrls(raw)[0] ?? null
 }
 import { enforceNotBlocked } from "@/lib/blocking"
 import { assessOffer, refusalStatus } from "@/lib/offer-check"
@@ -95,7 +90,7 @@ export async function POST(req: NextRequest) {
 
     const post = await prisma.item.findUniqueOrThrow({
       where: { id: postId },
-      select: { id: true, title: true, images: true, userId: true, user: { select: { id: true, name: true } } },
+      select: { id: true, title: true, images: ITEM_IMAGES, userId: true, user: { select: { id: true, name: true } } },
     })
 
     // An offer is a trade initiation and creates a chat message as a side

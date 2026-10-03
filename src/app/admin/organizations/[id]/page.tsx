@@ -104,23 +104,16 @@ export default async function OrganizationReviewPage({ params }: Props) {
       reviewedAt: true,
       reviewedBy: { select: { name: true } },
       orgUser: { select: { id: true, _count: { select: { items: true } } } },
-      members: {
-        select: {
-          id: true,
-          role: true,
-          status: true,
-          joinedAt: true,
-          user: { select: { id: true, name: true, email: true, createdAt: true } },
-        },
-        orderBy: [{ role: "asc" }, { joinedAt: "asc" }],
-      },
+      // The one person behind the organisation (schema v2; staff removed).
+      ownerJoinedAt: true,
+      owner: { select: { id: true, name: true, email: true, createdAt: true } },
     },
   })
 
   if (!org) notFound()
 
   const pending = org.verificationStatus === "PENDING"
-  const owner = org.members.find((m) => m.role === "OWNER" && m.status === "ACTIVE")?.user
+  const owner = org.owner
   const ownerAgeDays = owner ? accountAgeDays(owner.createdAt) : null
 
   // Minted per render, never stored. Null once the document has been destroyed,
@@ -246,12 +239,6 @@ export default async function OrganizationReviewPage({ params }: Props) {
               label="Listings already posted"
               value={org.orgUser._count.items}
             />
-            <Field
-              label="Members"
-              value={`${org.members.filter((m) => m.status === "ACTIVE").length} active, ${
-                org.members.filter((m) => m.status === "PENDING").length
-              } invited`}
-            />
             {org.reviewedAt && (
               <>
                 <Field label="Decided" value={org.reviewedAt.toLocaleString()} />
@@ -290,35 +277,16 @@ export default async function OrganizationReviewPage({ params }: Props) {
         </div>
       </div>
 
-      {/* ── Staff ── */}
+      {/* ── Owner (staff were removed in schema v2) ── */}
       <div style={card}>
-        <p style={{ fontSize: 15, fontWeight: 800, marginBottom: 10 }}>Staff</p>
-        {org.members.length === 0 ? (
-          <p style={{ fontSize: 13, color: "#888" }}>Nobody. This organisation cannot be acted as.</p>
-        ) : (
-          org.members.map((m) => (
-            <div
-              key={m.id}
-              style={{
-                display: "flex",
-                gap: 12,
-                alignItems: "center",
-                fontSize: 13,
-                padding: "6px 0",
-                borderTop: "1px solid rgba(0,0,0,.05)",
-              }}
-            >
-              <span style={{ fontWeight: 700, minWidth: 60 }}>{m.role}</span>
-              <span style={{ color: m.status === "ACTIVE" ? "#15803d" : "#b45309", minWidth: 70 }}>
-                {m.status}
-              </span>
-              <span style={{ flex: 1 }}>
-                {m.user.name}{" "}
-                <span style={{ color: "#888" }}>{m.user.email}</span>
-              </span>
-            </div>
-          ))
-        )}
+        <p style={{ fontSize: 15, fontWeight: 800, marginBottom: 10 }}>Owner</p>
+        <div style={{ display: "flex", gap: 12, alignItems: "center", fontSize: 13, padding: "6px 0" }}>
+          <span style={{ flex: 1 }}>
+            {org.owner.name}{" "}
+            <span style={{ color: "#888" }}>{org.owner.email}</span>
+          </span>
+          <span style={{ color: "#888" }}>since {org.ownerJoinedAt.toLocaleDateString()}</span>
+        </div>
       </div>
     </div>
   )

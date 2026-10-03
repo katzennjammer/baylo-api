@@ -6,6 +6,7 @@ import { ok, fail, unauthenticated, invalid } from "@/lib/v1/envelope"
 import { resolveInbox, shopBellWhere } from "@/lib/inbox"
 import { parseQuery, paginationShape } from "@/lib/v1/query"
 import { decodeCursor, encodeCursor, paginate, olderThan } from "@/lib/v1/cursor"
+import { ITEM_IMAGES, toImageUrls, type ImagesLike } from "@/lib/item-images"
 
 export const dynamic = "force-dynamic"
 
@@ -56,14 +57,8 @@ const querySchema = z.strictObject({
  */
 const ACTOR_BRIEF = { id: true, name: true, avatar: true, isOrgAccount: true } as const
 
-function firstImage(raw: string | null | undefined): string | null {
-  if (!raw) return null
-  try {
-    const images: unknown = JSON.parse(raw)
-    return Array.isArray(images) && typeof images[0] === "string" ? images[0] : null
-  } catch {
-    return null
-  }
+function firstImage(raw: ImagesLike): string | null {
+  return toImageUrls(raw)[0] ?? null
 }
 
 export async function GET(req: NextRequest) {
@@ -116,7 +111,7 @@ export async function GET(req: NextRequest) {
   if (itemIds.length > 0) {
     const items = await prisma.item.findMany({
       where: { id: { in: itemIds } },
-      select: { id: true, images: true },
+      select: { id: true, images: ITEM_IMAGES },
     })
     for (const item of items) itemImages.set(item.id, firstImage(item.images))
   }
@@ -128,23 +123,12 @@ export async function GET(req: NextRequest) {
   // as a blank grey tile while every other kind of notification had a face or
   // a photo. The subject of both is a shop, so the shop's logo is the picture.
   //
-  // 'org_invite' carries an OrganizationMember id, 'organization' an
-  // Organization id. A membership that is gone (withdrawn, answered) simply
-  // has no entry; its notification is deleted with it anyway.
-  const memberIds = rows
-    .filter((row) => row.entityType === "org_invite" && row.entityId)
-    .map((row) => row.entityId as string)
+  // 'organization' carries an Organization id. ('org_invite' notifications
+  // went with organisation staff in schema v2; the migration deleted them.)
   const orgIds = rows
     .filter((row) => row.entityType === "organization" && row.entityId)
     .map((row) => row.entityId as string)
   const orgBriefs = new Map<string, { id: string; name: string; logoUrl: string | null }>()
-  if (memberIds.length > 0) {
-    const members = await prisma.organizationMember.findMany({
-      where: { id: { in: memberIds } },
-      select: { id: true, organization: { select: { id: true, name: true, logoUrl: true } } },
-    })
-    for (const m of members) orgBriefs.set(`org_invite:${m.id}`, m.organization)
-  }
   if (orgIds.length > 0) {
     const orgs = await prisma.organization.findMany({
       where: { id: { in: orgIds } },

@@ -59,14 +59,17 @@ export async function POST(
   if (!parsed.ok) return parsed.response
   const { decision, reason } = parsed.data
 
-  const appeal = await prisma.listingAppeal.findUnique({
-    where: { id },
+  // A LISTING_APPEAL row of ModerationCase (schema v2). Mapped to the old
+  // field names so the decision code below reads as it did.
+  const row = await prisma.moderationCase.findUnique({
+    where: { id, type: "LISTING_APPEAL" },
     select: {
-      id: true, kind: true, status: true, actionId: true, ownerId: true, message: true,
+      id: true, appealKind: true, status: true, actionId: true, filedById: true, message: true,
       item: { select: { id: true, title: true, status: true, moderationHiddenAt: true, valueLeaves: true, suggestedLeaves: true } },
     },
   })
-  if (!appeal) return notFound("Appeal not found")
+  if (!row || !row.item || !row.appealKind || !row.actionId) return notFound("Appeal not found")
+  const appeal = { ...row, kind: row.appealKind, actionId: row.actionId, ownerId: row.filedById, item: row.item }
   if (appeal.status !== "OPEN") {
     return conflict("That appeal was already decided", { code: "ALREADY_DECIDED", status: appeal.status })
   }
@@ -80,13 +83,13 @@ export async function POST(
   const item = appeal.item
 
   const outcome = await prisma.$transaction(async (tx) => {
-    const decided = await tx.listingAppeal.updateMany({
-      where: { id, status: "OPEN" },
+    const decided = await tx.moderationCase.updateMany({
+      where: { id, type: "LISTING_APPEAL", status: "OPEN" },
       data: {
         status: overturn ? "OVERTURNED" : "UPHELD",
         decidedById: actor.id,
         decidedAt: new Date(),
-        decisionReason: reason,
+        decisionNote: reason,
       },
     })
     if (decided.count !== 1) return "raced" as const

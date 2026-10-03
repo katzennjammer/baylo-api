@@ -68,7 +68,7 @@ export async function POST(
     // Idempotent only while both codes are still live AND still guessable. A
     // pair that has been burned by MAX_CODE_ATTEMPTS must fall through to
     // regeneration below, otherwise a locked-out trade could never be restarted.
-    const existing = await prisma.swapConfirmationCode.findMany({
+    const existing = await prisma.swapCode.findMany({
       where: {
         tradeId,
         expiresAt: { gt: now },
@@ -109,12 +109,12 @@ export async function POST(
       // reissue the previous seal has to be replaced or overwritten with null,
       // never left behind -- a stale seal beside a fresh hash is the one state
       // that would show somebody a code their partner cannot accept.
-      prisma.swapConfirmationCode.upsert({
+      prisma.swapCode.upsert({
         where:  { tradeId_userId: { tradeId, userId: trade.senderId } },
         create: { tradeId, userId: trade.senderId,   codeHash: senderHash,   codeSealed: senderSealed,   used: false, attempts: 0, expiresAt },
         update: { codeHash: senderHash,   codeSealed: senderSealed,   used: false, attempts: 0, expiresAt },
       }),
-      prisma.swapConfirmationCode.upsert({
+      prisma.swapCode.upsert({
         where:  { tradeId_userId: { tradeId, userId: trade.receiverId } },
         create: { tradeId, userId: trade.receiverId, codeHash: receiverHash, codeSealed: receiverSealed, used: false, attempts: 0, expiresAt },
         update: { codeHash: receiverHash, codeSealed: receiverSealed, used: false, attempts: 0, expiresAt },

@@ -1,4 +1,5 @@
 import prisma from "@/lib/prisma"
+import { ITEM_IMAGES, imagesJson, leadHash, type ImageRow } from "@/lib/item-images"
 
 /**
  * Who is allowed to see an item's exact pickup point, and what everyone else
@@ -128,7 +129,9 @@ export const ITEM_PUBLIC_SELECT = {
   id: true,
   title: true,
   description: true,
-  images: true,
+  // Ordered ItemImage rows (schema v2). shapeItem() turns them back into the
+  // `images` JSON string and `imageHash` this shape has always carried.
+  images: ITEM_IMAGES,
   category: true,
   condition: true,
   valueLeaves: true,
@@ -140,7 +143,6 @@ export const ITEM_PUBLIC_SELECT = {
   valuationSource: true,
   status: true,
   wantedItems: true,
-  imageHash: true,
   createdAt: true,
   updatedAt: true,
   userId: true,
@@ -181,5 +183,13 @@ export function shapeItem<T extends ItemRow>(
   delete rest.pickupLat
   delete rest.pickupLng
   delete rest.pickupAddress
+  // Schema v2: photos are ItemImage rows. The legacy shape sent `images` as a
+  // JSON string plus the cover photo's `imageHash`; rebuilt here so the wire
+  // does not change.
+  if (Array.isArray(item.images)) {
+    const rows = item.images as ImageRow[]
+    rest.images = imagesJson(rows)
+    rest.imageHash = leadHash(rows)
+  }
   return { ...rest, wanted: item.wantedItems ?? null, pickup }
 }

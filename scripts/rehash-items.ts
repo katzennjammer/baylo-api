@@ -44,9 +44,10 @@ async function computeDHash(buffer: Buffer): Promise<string> {
 
 async function main() {
   requireScratchSchema("scripts/rehash-items.ts")
+  // Every listing with a cover photo (ItemImage position 0, schema v2).
   const items = await prisma.item.findMany({
-    where:  { images: { not: "" } },
-    select: { id: true, images: true },
+    where:  { images: { some: { position: 0 } } },
+    select: { id: true, images: { where: { position: 0 }, select: { url: true } } },
   })
 
   console.log(`Found ${items.length} items to rehash…\n`)
@@ -56,11 +57,7 @@ async function main() {
   let failed  = 0
 
   for (const item of items) {
-    let firstUrl = ""
-    try {
-      const urls = JSON.parse(item.images) as string[]
-      firstUrl = urls[0] ?? ""
-    } catch { /* ignore */ }
+    const firstUrl = item.images[0]?.url ?? ""
 
     if (!firstUrl) { skipped++; continue }
 
@@ -69,7 +66,8 @@ async function main() {
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const buffer = Buffer.from(await res.arrayBuffer())
       const hash   = await computeDHash(buffer)
-      await prisma.item.update({ where: { id: item.id }, data: { imageHash: hash } })
+      // The cover photo's hash -- what the duplicate scan reads (was Item.imageHash).
+      await prisma.itemImage.update({ where: { itemId_position: { itemId: item.id, position: 0 } }, data: { hash } })
       updated++
       process.stdout.write(`  ✓ ${updated}/${items.length}\r`)
     } catch (e) {

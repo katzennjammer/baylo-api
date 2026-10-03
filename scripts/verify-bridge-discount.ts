@@ -50,7 +50,7 @@ async function cleanup() {
 function mkItem(ownerId: string, title: string, valueLeaves: number) {
   return prisma.item.create({
     data: {
-      title: `${P}${title}`, description: "x", images: "[]",
+      title: `${P}${title}`, description: "x", 
       category: "OTHER", condition: "GOOD", valueLeaves, userId: ownerId,
     },
   })

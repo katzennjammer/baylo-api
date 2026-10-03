@@ -83,12 +83,12 @@ async function main() {
   head("4  permanence after lapse")
   await prisma.user.update({ where: { id: premiumUser.id }, data: { premiumUntil: past } })
   check("still shows unlocked after the subscription lapses", await hasBadge(premiumUser.id))
-  const row = await prisma.userAchievement.findUnique({
+  const row = await prisma.userProgress.findUnique({
     where: { userId_achievementId: { userId: premiumUser.id, achievementId: def.id } },
   })
   check("the UserAchievement row itself still exists", row !== null)
 
-  await prisma.userAchievement.deleteMany({ where: { achievementId: def.id } })
+  await prisma.userProgress.deleteMany({ where: { achievementId: def.id } })
   await prisma.achievement.delete({ where: { id: def.id } })
   await cleanup()
   console.log(`\n${pass} passed, ${fail} failed`)

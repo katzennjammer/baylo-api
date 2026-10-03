@@ -65,7 +65,7 @@ export function appealableAction(db: Db, itemId: string, kind: ListingAppealKind
 
 /** TRUE while an appeal on this listing is waiting for a decision. */
 export async function hasOpenAppeal(db: Db, itemId: string): Promise<boolean> {
-  const n = await db.listingAppeal.count({ where: { itemId, status: "OPEN" } })
+  const n = await db.moderationCase.count({ where: { type: "LISTING_APPEAL", itemId, status: "OPEN" } })
   return n > 0
 }
 
@@ -80,7 +80,8 @@ export async function ownerAppealState(db: Db, item: { id: string; status: strin
   if (kind === null) return { id: null, status: null, kind: null, message: null, createdAt: null, decidedAt: null, canAppeal: false }
   const action = await appealableAction(db, item.id, kind)
   if (!action) return { id: null, status: null, kind, message: null, createdAt: null, decidedAt: null, canAppeal: false }
-  const appeal = await db.listingAppeal.findUnique({
+  // actionId is unique across ModerationCase and only appeals carry one.
+  const appeal = await db.moderationCase.findUnique({
     where: { actionId: action.id },
     select: { id: true, status: true, message: true, createdAt: true, decidedAt: true },
   })

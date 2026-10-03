@@ -56,13 +56,20 @@ async function liveCounts(): Promise<{ perishable: number; expired: number; due:
   return { perishable: Number(row.perishable), expired: Number(row.expired), due: Number(row.due) }
 }
 
+/** LISTING_EXPIRED notices in live (`public`), by name. Read only. */
+async function liveExpiredNotices(): Promise<number> {
+  // `::text` because live may not have the enum value yet.
+  const [row] = await prisma.$queryRaw<Array<{ n: bigint }>>`
+    SELECT COUNT(*) AS n FROM "public"."Notification" WHERE "type"::text = 'LISTING_EXPIRED'`
+  return Number(row.n)
+}
+
 /** A due perishable in whatever schema the client is bound to. */
 async function fixture(userId: string, title: string): Promise<string> {
   const item = await prisma.item.create({
     data: {
       title: `${TAG} ${title}`,
       description: "perishable fixture",
-      images: "[]",
       category: "OTHER",
       condition: "GOOD",
       status: "AVAILABLE",
@@ -89,6 +96,7 @@ async function main() {
   }
 
   const before = await liveCounts()
+  const liveNoticesBefore = await liveExpiredNotices()
   console.log(
     `  live (public) before: perishable=${before.perishable} EXPIRED=${before.expired} due=${before.due}\n`,
   )
@@ -103,40 +111,24 @@ async function main() {
 
     const first = await fixture(userId, "tray of fish")
 
-    // The fixture must be visible to the model API (which is schema-aware) and
-    // INVISIBLE to an unqualified raw read. That second half is what makes the
-    // 0-vs-1 below mean "wrong schema" rather than "clause matched nothing".
+    // ── SCHEMA V2: the connection's search_path IS the copy ─────────────────
+    // Until v2 an unqualified raw statement resolved to public (live) from a
+    // scratch connection, and this harness proved it with a raw UPDATE that
+    // had to move 0 rows. @/lib/prisma now pins search_path to the copy (plus
+    // `extensions`), so the same statement lands HERE -- the bug class is closed
+    // at the connection, not per call site. The controls are inverted to match.
     const [seen] = await prisma.$queryRaw<Array<{ n: bigint }>>`
       SELECT COUNT(*) AS n FROM "Item" WHERE "id" = ${first}`
     check(
-      "fixture is invisible to an UNQUALIFIED raw read (raw SQL leaves the schema)",
-      Number(seen.n) === 0,
-      `unqualified SELECT found ${seen.n} row(s) for a scratch-only id`,
+      "an UNQUALIFIED raw read now sees the scratch fixture (search_path is the copy)",
+      Number(seen.n) === 1,
+      `unqualified SELECT found ${seen.n} row(s)`,
     )
-
-    // ── 1 ── the original failure, reproduced verbatim: unqualified first.
-    const unqualified = await prisma.$executeRaw`
-      UPDATE "Item"
-         SET "status" = 'EXPIRED', "updatedAt" = now()
-       WHERE "userId" = ${userId}
-         AND "isPerishable" = true
-         AND "status" = 'AVAILABLE'
-         AND "tradeWithinHours" IS NOT NULL
-         AND "createdAt" + make_interval(hours => "tradeWithinHours") < now()`
+    const [path] = await prisma.$queryRaw<Array<{ schemas: string[] }>>`SELECT current_schemas(false)::text[] AS schemas`
     check(
-      "unqualified UPDATE moves 0 rows (it is looking at public, not scratch)",
-      unqualified === 0,
-      `moved ${unqualified}`,
-    )
-
-    const stillAvailable = await prisma.item.findUnique({
-      where: { id: first },
-      select: { status: true },
-    })
-    check(
-      "fixture is untouched by the unqualified UPDATE",
-      stillAvailable?.status === "AVAILABLE",
-      `status is ${stillAvailable?.status}`,
+      "public (live) is not on the connection's search_path at all",
+      !path.schemas.includes("public") && path.schemas.length > 0,
+      JSON.stringify(path.schemas),
     )
 
     // ── 2 ── the function under test, on the same connection, same clause.
@@ -194,9 +186,9 @@ async function main() {
   check("live EXPIRED count unchanged", after.expired === before.expired, `${before.expired} -> ${after.expired}`)
   // `::text` because live may not have the enum value yet, and comparing an
   // enum column to a label it lacks is an error rather than a zero.
-  const [liveNotices] = await prisma.$queryRaw<Array<{ n: bigint }>>`
-    SELECT COUNT(*) AS n FROM "public"."Notification" WHERE "type"::text = 'LISTING_EXPIRED'`
-  check("no LISTING_EXPIRED notice was written to live", Number(liveNotices.n) === 0, `${liveNotices.n} row(s)`)
+  // Before vs after, not against zero: live already carries real notices.
+  const liveNoticesAfter = await liveExpiredNotices()
+  check("no LISTING_EXPIRED notice was written to live", liveNoticesAfter === liveNoticesBefore, `${liveNoticesBefore} -> ${liveNoticesAfter}`)
 
   console.log(failures === 0 ? "\n  all checks passed\n" : `\n  ${failures} check(s) failed\n`)
   await prisma.$disconnect()

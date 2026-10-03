@@ -77,30 +77,34 @@ export async function POST(
     return conflict("This decision has no record to appeal against", { code: "NO_DECISION_RECORD" })
   }
 
-  const existing = await prisma.listingAppeal.findUnique({
+  const existing = await prisma.moderationCase.findUnique({
     where: { actionId: action.id },
     select: { id: true, status: true },
   })
   if (existing) return alreadyAppealed(existing.status)
 
   try {
-    const appeal = await prisma.listingAppeal.create({
+    // A LISTING_APPEAL row of ModerationCase (schema v2).
+    const created = await prisma.moderationCase.create({
       data: {
+        type: "LISTING_APPEAL",
         itemId: item.id,
         // The LISTING's owner, not the member who typed it: the decision is
         // addressed to whoever owns the listing, which for a shop's is the
         // backing row.
-        ownerId: item.userId,
-        kind,
+        filedById: item.userId,
+        appealKind: kind,
         actionId: action.id,
         message: parsed.data.message,
       },
-      select: { id: true, status: true, kind: true, message: true, createdAt: true },
+      select: { id: true, status: true, appealKind: true, message: true, createdAt: true },
     })
-    return ok({ appeal })
+    // The wire shape is unchanged: `kind`, not the column name.
+    const { appealKind, ...rest } = created
+    return ok({ appeal: { ...rest, kind: appealKind } })
   } catch (err) {
     if (isUniqueViolation(err)) {
-      const raced = await prisma.listingAppeal.findUnique({ where: { actionId: action.id }, select: { status: true } })
+      const raced = await prisma.moderationCase.findUnique({ where: { actionId: action.id }, select: { status: true } })
       return alreadyAppealed(raced?.status ?? "OPEN")
     }
     throw err

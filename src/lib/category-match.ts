@@ -160,7 +160,8 @@ export async function findCategoryMatches(
       status: "AVAILABLE",
       moderationHiddenAt: null,
       // The recipient's stated want. THE DIRECTION — see the header.
-      lookingForCategories: { has: input.category as never },
+      // ItemWantedCategory rows since schema v2 (was the array `has`).
+      wantedCategories: { some: { category: input.category as never } },
       user: {
         deletedAt: null,
         ...userNotBlocked(input.authorUserId),
@@ -281,7 +282,7 @@ export async function findPerishableMatches(
         })
       : Promise.resolve([]),
     db.item.findMany({
-      where: { ...base, lookingForCategories: { has: input.category as never } },
+      where: { ...base, wantedCategories: { some: { category: input.category as never } } },
       select: { id: true, userId: true, updatedAt: true },
       distinct: ["userId"],
       orderBy: { updatedAt: "desc" },

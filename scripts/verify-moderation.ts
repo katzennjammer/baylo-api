@@ -79,23 +79,21 @@ async function cleanup() {
   // before the users they name. That constraint is deliberate (see the model)
   // and this is the one place that has to work around it.
   await prisma.adminAction.deleteMany({ where: { OR: [{ actorId: { in: ids } }, { targetId: { in: ids } }] } })
-  await prisma.report.deleteMany({ where: { OR: [{ reporterId: { in: ids } }, { resolvedById: { in: ids } }] } })
+  await prisma.moderationCase.deleteMany({ where: { OR: [{ filedById: { in: ids } }, { decidedById: { in: ids } }] } })
   const items = await prisma.item.findMany({ where: { userId: { in: ids } }, select: { id: true } })
   const itemIds = items.map((i) => i.id)
   await prisma.adminAction.deleteMany({ where: { targetId: { in: itemIds } } })
-  await prisma.report.deleteMany({ where: { targetId: { in: [...ids, ...itemIds] } } })
+  await prisma.moderationCase.deleteMany({ where: { type: "REPORT", targetId: { in: [...ids, ...itemIds] } } })
   await prisma.block.deleteMany({ where: { OR: [{ blockerId: { in: ids } }, { blockedId: { in: ids } }] } })
-  await prisma.deferredContract.deleteMany({ where: { OR: [{ debtorId: { in: ids } }, { creditorId: { in: ids } }] } })
   await prisma.leafTransaction.deleteMany({ where: { userId: { in: ids } } })
   await prisma.notification.deleteMany({ where: { OR: [{ userId: { in: ids } }, { actorId: { in: ids } }] } })
   await prisma.message.deleteMany({ where: { OR: [{ senderId: { in: ids } }, { receiverId: { in: ids } }] } })
   await prisma.review.deleteMany({ where: { OR: [{ reviewerId: { in: ids } }, { revieweeId: { in: ids } }] } })
-  await prisma.swapConfirmationCode.deleteMany({ where: { userId: { in: ids } } })
+  await prisma.swapCode.deleteMany({ where: { userId: { in: ids } } })
   await prisma.tradeRequest.deleteMany({ where: { OR: [{ senderId: { in: ids } }, { receiverId: { in: ids } }] } })
   await prisma.offer.deleteMany({ where: { OR: [{ senderId: { in: ids } }, { receiverId: { in: ids } }] } })
   await prisma.taskCompletion.deleteMany({ where: { userId: { in: ids } } })
-  await prisma.refreshToken.deleteMany({ where: { userId: { in: ids } } })
-  await prisma.emailVerificationToken.deleteMany({ where: { userId: { in: ids } } })
+  await prisma.authToken.deleteMany({ where: { userId: { in: ids } } })
   await prisma.item.deleteMany({ where: { userId: { in: ids } } })
   await prisma.user.deleteMany({ where: { id: { in: ids } } })
 }
@@ -117,7 +115,7 @@ async function makeUser(tag: string, role: "USER" | "ADMIN" = "USER") {
 async function makeItem(userId: string, title: string) {
   return prisma.item.create({
     data: {
-      title, description: `${title} description`, images: "[]",
+      title, description: `${title} description`, 
       category: "BOOKS", condition: "GOOD", valueLeaves: 100,
       status: "AVAILABLE", userId,
     },
@@ -206,8 +204,8 @@ async function main() {
   check("a different reporter, same target -> 200 (not a global lock)", r3.status === 200,
     `got ${r3.status}`)
 
-  const openRows = await prisma.report.findMany({
-    where: { reporterId: alice.id, targetId: malloryItem.id },
+  const openRows = await prisma.moderationCase.findMany({
+    where: { type: "REPORT", filedById: alice.id, targetId: malloryItem.id },
     select: { id: true, status: true, openKey: true },
   })
   check(`exactly one live report row for (alice, listing) [openKey='live']`,
@@ -363,20 +361,8 @@ async function main() {
     },
     select: { id: true, status: true },
   })
-  const contract = await prisma.deferredContract.create({
-    data: {
-      tradeId: trade.id,
-      debtorId: dave.id, creditorId: erin.id,
-      amountLeaves: 300, amountPaidLeaves: 50,
-      deadline: new Date(Date.now() + 14 * 24 * 60 * 60 * 1000),
-      status: "ACTIVE", acceptedAt: new Date(),
-    },
-    select: { id: true, status: true, amountLeaves: true, amountPaidLeaves: true, deadline: true },
-  })
 
   console.log(`  BEFORE  trade ${trade.id} status=${trade.status}`)
-  console.log(`  BEFORE  contract ${contract.id} status=${contract.status} ` +
-    `owed=${contract.amountLeaves - contract.amountPaidLeaves} deadline=${contract.deadline.toISOString()}`)
 
   // Dave — the DEBTOR — blocks Erin, his CREDITOR. This is the exact abuse the
   // design refuses: if a block voided the contract, this would be how you clear
@@ -390,29 +376,18 @@ async function main() {
   const tradeAfter = await prisma.tradeRequest.findUnique({
     where: { id: trade.id }, select: { status: true },
   })
-  const contractAfter = await prisma.deferredContract.findUnique({
-    where: { id: contract.id },
-    select: { status: true, amountLeaves: true, amountPaidLeaves: true, deadline: true, defaultedAt: true },
-  })
 
   console.log(`  AFTER   trade ${trade.id} status=${tradeAfter?.status}`)
-  console.log(`  AFTER   contract ${contract.id} status=${contractAfter?.status} ` +
-    `owed=${(contractAfter?.amountLeaves ?? 0) - (contractAfter?.amountPaidLeaves ?? 0)} ` +
-    `deadline=${contractAfter?.deadline.toISOString()}`)
 
   check("the ACCEPTED trade is NOT cancelled by the block", tradeAfter?.status === "ACCEPTED",
     `status is ${tradeAfter?.status}`)
-  check("the DPA is NOT voided — status unchanged", contractAfter?.status === "ACTIVE",
-    `status is ${contractAfter?.status}`)
-  check("the DPA principal is unchanged", contractAfter?.amountLeaves === 300)
-  check("the DPA amount paid is unchanged (debt survives)", contractAfter?.amountPaidLeaves === 50)
-  check("the DPA deadline is unchanged",
-    contractAfter?.deadline.getTime() === contract.deadline.getTime())
   check("the block response REPORTS the surviving trade",
     (midBlock.body?.data?.effects?.unchanged?.activeTrades ?? []).length === 1,
     JSON.stringify(midBlock.body?.data?.effects?.unchanged))
-  check("the block response REPORTS the surviving contract",
-    (midBlock.body?.data?.effects?.unchanged?.openContracts ?? []).length === 1)
+  // DPAs were retired (16 Sep 2026) and their table dropped in schema v2:
+  // the field stays on the wire, always empty.
+  check("the block response still carries openContracts, empty",
+    (midBlock.body?.data?.effects?.unchanged?.openContracts ?? null)?.length === 0)
   check("the block response says so in words", !!midBlock.body?.data?.effects?.note,
     String(midBlock.body?.data?.effects?.note))
   console.log(`  NOTE TO USER: ${midBlock.body?.data?.effects?.note}`)
@@ -441,7 +416,7 @@ async function main() {
     where: { targetId: malloryItem.id, action: "LISTING_HIDDEN" },
     select: {
       id: true, actorId: true, action: true, targetType: true, targetId: true,
-      reportId: true, reason: true, detail: true, createdAt: true,
+      caseId: true, reason: true, detail: true, createdAt: true,
       actor: { select: { name: true } },
     },
   })
@@ -455,13 +430,13 @@ async function main() {
     console.log(`    what       ${row.action} on ${row.targetType} ${row.targetId}`)
     console.log(`    when       ${row.createdAt.toISOString()}`)
     console.log(`    why        ${row.reason}`)
-    console.log(`    report     ${row.reportId}`)
+    console.log(`    report     ${row.caseId}`)
     console.log(`    detail     ${row.detail}`)
     check("audit row names WHO", row.actorId === mod.id)
     check("audit row names WHAT", row.action === "LISTING_HIDDEN" && row.targetId === malloryItem.id)
     check("audit row names WHEN", row.createdAt instanceof Date)
     check("audit row names WHY (non-empty)", row.reason.length > 0)
-    check("audit row links the report it answers", row.reportId === reportId)
+    check("audit row links the report it answers", row.caseId === reportId)
     check("audit row snapshots the listing title",
       !!row.detail && row.detail.includes("Mallory Manual"), String(row.detail))
   }
@@ -530,15 +505,15 @@ async function main() {
   check("the notification points back at the report", notif?.entityId === reportId)
   console.log(`  Reporter sees: "${notif?.message}"`)
 
-  const resolvedRow = await prisma.report.findUnique({
+  const resolvedRow = await prisma.moderationCase.findUnique({
     where: { id: reportId },
-    select: { status: true, openKey: true, resolvedById: true, resolvedAt: true, resolutionNote: true },
+    select: { status: true, openKey: true, decidedById: true, decidedAt: true, decisionNote: true },
   })
   check("report status ACTIONED", resolvedRow?.status === "ACTIONED")
   check("openKey nulled, so the reporter may report this target again later",
     resolvedRow?.openKey === null)
-  check("resolvedBy recorded", resolvedRow?.resolvedById === mod.id)
-  check("resolvedAt recorded", resolvedRow?.resolvedAt !== null)
+  check("resolvedBy recorded", resolvedRow?.decidedById === mod.id)
+  check("resolvedAt recorded", resolvedRow?.decidedAt !== null)
 
   // Re-resolving is refused: it would fire a second notification and overwrite
   // the first decision with no trace.

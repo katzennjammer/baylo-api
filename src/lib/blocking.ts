@@ -201,7 +201,7 @@ export async function enforceNotBlocked(
  * matters, with the actual trade in front of the user.
  */
 export async function blockConsequences(viewerId: string, otherId: string) {
-  const [trades, contracts] = await Promise.all([
+  const [trades] = await Promise.all([
     prisma.tradeRequest.findMany({
       where: {
         status: { in: ["PENDING", "ACCEPTED", "CONFIRMING"] },
@@ -217,23 +217,6 @@ export async function blockConsequences(viewerId: string, otherId: string) {
         offeredItem: { select: { title: true } },
       },
     }),
-    prisma.deferredContract.findMany({
-      where: {
-        status: { in: ["PENDING_ACCEPT", "ACTIVE", "DEFAULTED"] },
-        OR: [
-          { debtorId: viewerId, creditorId: otherId },
-          { debtorId: otherId, creditorId: viewerId },
-        ],
-      },
-      select: {
-        id: true,
-        status: true,
-        amountLeaves: true,
-        amountPaidLeaves: true,
-        deadline: true,
-        debtorId: true,
-      },
-    }),
   ])
 
   return {
@@ -244,12 +227,8 @@ export async function blockConsequences(viewerId: string, otherId: string) {
       offeredItem: t.offeredItem.title,
       requestedItem: t.requestedItem.title,
     })),
-    openContracts: contracts.map((c) => ({
-      id: c.id,
-      status: c.status,
-      outstanding: c.amountLeaves - c.amountPaidLeaves,
-      deadline: c.deadline,
-      youOwe: c.debtorId === viewerId,
-    })),
+    // Deferred Points Agreements were retired 16 Sep 2026 and their table was
+    // dropped in schema v2. Always empty; kept on the wire for shipped clients.
+    openContracts: [] as { id: string; status: string; outstanding: number; deadline: Date; youOwe: boolean }[],
   }
 }

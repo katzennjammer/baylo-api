@@ -25,11 +25,11 @@ export async function POST(req: NextRequest) {
   const raw = typeof body.refreshToken === "string" ? body.refreshToken.trim() : ""
   if (!raw) return NextResponse.json({ error: "refreshToken is required" }, { status: 400 })
 
-  const stored = await prisma.refreshToken.findUnique({
+  const stored = await prisma.authToken.findUnique({
     where: { tokenHash: hashRefreshToken(raw) },
-    select: { familyId: true },
+    select: { familyId: true, type: true },
   })
 
-  const revoked = stored ? await revokeTokenFamily(stored.familyId) : 0
+  const revoked = stored?.type === "REFRESH" && stored.familyId ? await revokeTokenFamily(stored.familyId) : 0
   return NextResponse.json({ ok: true, revoked })
 }

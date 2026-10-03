@@ -58,9 +58,9 @@ async function cleanup() {
   if (ids.length === 0) return
   const items = await prisma.item.findMany({ where: { userId: { in: ids } }, select: { id: true } })
   const itemIds = items.map((i) => i.id)
-  const appeals = await prisma.listingAppeal.findMany({ where: { itemId: { in: itemIds } }, select: { id: true } })
+  const appeals = await prisma.moderationCase.findMany({ where: { type: "LISTING_APPEAL", itemId: { in: itemIds } }, select: { id: true } })
   await prisma.adminAction.deleteMany({ where: { OR: [{ actorId: { in: ids } }, { targetId: { in: [...ids, ...itemIds, ...appeals.map((a) => a.id)] } }] } })
-  await prisma.listingAppeal.deleteMany({ where: { itemId: { in: itemIds } } })
+  await prisma.moderationCase.deleteMany({ where: { itemId: { in: itemIds } } })
   await prisma.notification.deleteMany({ where: { OR: [{ userId: { in: ids } }, { actorId: { in: ids } }] } })
   await prisma.item.deleteMany({ where: { userId: { in: ids } } })
   await prisma.user.deleteMany({ where: { id: { in: ids } } })
@@ -75,7 +75,7 @@ async function makeUser(tag: string, role: "USER" | "ADMIN" = "USER") {
 async function makeItem(userId: string, title: string, status: "PENDING_REVIEW" | "AVAILABLE") {
   return prisma.item.create({
     data: {
-      title, description: title, images: "[]", category: "BOOKS", condition: "GOOD",
+      title, description: title, category: "BOOKS", condition: "GOOD",
       valueLeaves: status === "PENDING_REVIEW" ? 2500 : 100, suggestedLeaves: status === "PENDING_REVIEW" ? 300 : 100,
       valueSetByUser: status === "PENDING_REVIEW", status, userId,
     },
@@ -126,12 +126,15 @@ async function main() {
   check("empty message → 400", a4.status === 400, `${a4.status}`)
   const a5 = await appeal(r1.id, "x".repeat(301))
   check("301 characters → 400", a5.status === 400, `${a5.status}`)
+  // Counted before and after, not against zero: a copy of live data already
+  // carries decided appeals and their audit rows.
+  const appealAuditsBefore = await prisma.adminAction.count({ where: { targetType: "LISTING_APPEAL" } })
   const a6 = await appeal(r1.id, "x".repeat(300))
   check("300 characters → 200", a6.status === 200, `${a6.status} ${JSON.stringify(a6.body)}`)
-  const row1 = await prisma.listingAppeal.findUnique({ where: { id: a6.body?.data?.appeal?.id ?? "" } })
+  const row1 = await prisma.moderationCase.findUnique({ where: { id: a6.body?.data?.appeal?.id ?? "" } })
   const act1 = await rejectedAction(r1.id)
-  check("row: OPEN, VALUE_REJECTION, actionId = the rejection's audit row", row1?.status === "OPEN" && row1.kind === "VALUE_REJECTION" && row1.actionId === act1?.id, JSON.stringify(row1))
-  check("filing wrote NO AdminAction", (await prisma.adminAction.count({ where: { targetType: "LISTING_APPEAL" } })) === 0)
+  check("row: OPEN, VALUE_REJECTION, actionId = the rejection's audit row", row1?.status === "OPEN" && row1.appealKind === "VALUE_REJECTION" && row1.actionId === act1?.id, JSON.stringify(row1))
+  check("filing wrote NO AdminAction", (await prisma.adminAction.count({ where: { targetType: "LISTING_APPEAL" } })) === appealAuditsBefore)
 
   head("2  one per decision; filing changes nothing")
   const dup = await appeal(r1.id, "again")
@@ -157,11 +160,11 @@ async function main() {
   const delR = await DEL(`/api/items/${r6.id}`, tOwner)
   check("DELETE with an open appeal → 200, appealWithdrawn true", delR.status === 200 && delR.body?.appealWithdrawn === true, `${delR.status} ${JSON.stringify(delR.body)}`)
   const r6After = await prisma.item.findUnique({ where: { id: r6.id } })
-  const ap6 = await prisma.listingAppeal.findUnique({ where: { id: a6r.body?.data?.appeal?.id ?? "" } })
-  check("listing REMOVED; appeal WITHDRAWN, no decider, reason says so; audit row for the rejection still there", r6After?.status === "REMOVED" && ap6?.status === "WITHDRAWN" && ap6.decidedById === null && !!ap6.decidedAt && (ap6.decisionReason ?? "").includes("deleted") && (await rejectedAction(r6.id)) !== null, JSON.stringify(ap6))
+  const ap6 = await prisma.moderationCase.findUnique({ where: { id: a6r.body?.data?.appeal?.id ?? "" } })
+  check("listing REMOVED; appeal WITHDRAWN, no decider, reason says so; audit row for the rejection still there", r6After?.status === "REMOVED" && ap6?.status === "WITHDRAWN" && ap6.decidedById === null && !!ap6.decidedAt && (ap6.decisionNote ?? "").includes("deleted") && (await rejectedAction(r6.id)) !== null, JSON.stringify(ap6))
   const decide6 = await POST(`/api/admin/appeals/${ap6?.id}`, tB, { decision: "uphold", reason: "late" })
   check("deciding a withdrawn appeal → 409 ALREADY_DECIDED", decide6.status === 409 && code(decide6) === "ALREADY_DECIDED", `${decide6.status}`)
-  check("r1's own appeal is still OPEN (a different listing)", (await prisma.listingAppeal.findUnique({ where: { id: row1!.id } }))?.status === "OPEN")
+  check("r1's own appeal is still OPEN (a different listing)", (await prisma.moderationCase.findUnique({ where: { id: row1!.id } }))?.status === "OPEN")
 
   head("4  the queue")
   const q403 = await GET(`/api/admin/appeals`, tOwner)
@@ -184,8 +187,8 @@ async function main() {
   check("overturn → 200, sameReviewer false", ov.status === 200 && ov.body?.data?.appeal?.status === "OVERTURNED" && ov.body.data.appeal.sameReviewer === false, `${ov.status} ${JSON.stringify(ov.body)}`)
   const r1After = await prisma.item.findUnique({ where: { id: r1.id } })
   check("listing AVAILABLE at 2,500, reason cleared", r1After?.status === "AVAILABLE" && r1After.valueLeaves === 2500 && r1After.valueRejectionReason === null, JSON.stringify({ s: r1After?.status, v: r1After?.valueLeaves }))
-  const ap1 = await prisma.listingAppeal.findUnique({ where: { id: row1!.id } })
-  check("appeal OVERTURNED by adminB with the reason", ap1?.status === "OVERTURNED" && ap1.decidedById === adminB.id && ap1.decisionReason === "first edition, comparables support it" && !!ap1.decidedAt)
+  const ap1 = await prisma.moderationCase.findUnique({ where: { id: row1!.id } })
+  check("appeal OVERTURNED by adminB with the reason", ap1?.status === "OVERTURNED" && ap1.decidedById === adminB.id && ap1.decisionNote === "first edition, comparables support it" && !!ap1.decidedAt)
   const aud1 = await prisma.adminAction.findFirst({ where: { targetType: "LISTING_APPEAL", targetId: row1!.id } })
   const d1 = JSON.parse(aud1?.detail ?? "{}")
   check("audit: LISTING_APPEAL_OVERTURNED by adminB, detail names the appealed row, both brackets, no sameReviewer", aud1?.action === "LISTING_APPEAL_OVERTURNED" && aud1.actorId === adminB.id && d1.appealedActionId === act1?.id && d1.appealedActorId === adminA.id && d1.requestedBracket === 6 && d1.suggestedBracket === 3 && d1.sameReviewer === undefined, JSON.stringify(aud1))
@@ -229,7 +232,7 @@ async function main() {
   await hide(h2.id)
   const hideAct1 = await prisma.adminAction.findFirst({ where: { targetId: h1.id, action: "LISTING_HIDDEN" } })
   const ah1 = await appeal(h1.id, "This is my own photo of my own bag; the report was wrong.")
-  check("appeal on a hidden listing → 200, kind MODERATION_HIDE against the LISTING_HIDDEN row", ah1.status === 200 && ah1.body?.data?.appeal?.kind === "MODERATION_HIDE" && (await prisma.listingAppeal.findUnique({ where: { id: ah1.body.data.appeal.id } }))?.actionId === hideAct1?.id, `${ah1.status} ${JSON.stringify(ah1.body)}`)
+  check("appeal on a hidden listing → 200, kind MODERATION_HIDE against the LISTING_HIDDEN row", ah1.status === 200 && ah1.body?.data?.appeal?.kind === "MODERATION_HIDE" && (await prisma.moderationCase.findUnique({ where: { id: ah1.body.data.appeal.id } }))?.actionId === hideAct1?.id, `${ah1.status} ${JSON.stringify(ah1.body)}`)
   const qH = await GET(`/api/admin/appeals`, tB)
   const rowH = (qH.body?.data?.appeals ?? []).find((a: Body) => a.id === ah1.body?.data?.appeal?.id)
   check("queue row: Takedown, decision.reason 'counterfeit', listing.hidden true", rowH?.kind === "MODERATION_HIDE" && rowH.decision?.reason === "counterfeit" && rowH.listing.hidden === true, JSON.stringify(rowH))
@@ -257,7 +260,7 @@ async function main() {
   await prisma.item.update({ where: { id: r5.id }, data: { status: "OWNED" } })
   const ov5 = await POST(`/api/admin/appeals/${a5r.body?.data?.appeal?.id}`, tB, { decision: "overturn", reason: "fine" })
   check("overturn → 409 STATE_CHANGED", ov5.status === 409 && code(ov5) === "STATE_CHANGED", `${ov5.status} ${JSON.stringify(ov5.body)}`)
-  const ap5 = await prisma.listingAppeal.findUnique({ where: { id: a5r.body?.data?.appeal?.id ?? "" } })
+  const ap5 = await prisma.moderationCase.findUnique({ where: { id: a5r.body?.data?.appeal?.id ?? "" } })
   check("appeal still OPEN, nothing audited, owner not notified", ap5?.status === "OPEN" && (await prisma.adminAction.count({ where: { targetType: "LISTING_APPEAL", targetId: ap5?.id ?? "" } })) === 0)
   const up5 = await POST(`/api/admin/appeals/${ap5?.id}`, tB, { decision: "uphold", reason: "moot" })
   check("uphold still works (nothing to move)", up5.status === 200, `${up5.status}`)

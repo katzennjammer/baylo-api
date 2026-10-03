@@ -11,6 +11,7 @@ import { decodeCursor, encodeCursor, paginate, cursorDate } from "@/lib/v1/curso
 import { SAFE_ZONE_HUB_SELECT, v1Hub, type SafeZoneHubRow } from "@/lib/safe-zones"
 import { MEETUP_SELECT, v1MeetupPlan } from "@/lib/meetup"
 import { MAX_CODE_ATTEMPTS } from "@/lib/swap-code"
+import { ITEM_IMAGES, toImageUrls, type ImagesLike } from "@/lib/item-images"
 
 export const dynamic = "force-dynamic"
 
@@ -49,14 +50,8 @@ const querySchema = z.strictObject({
 })
 
 /** First image of an item, or null. Stored as a JSON string. */
-function firstImage(raw: string | null | undefined): string | null {
-  if (!raw) return null
-  try {
-    const parsed: unknown = JSON.parse(raw)
-    return Array.isArray(parsed) && typeof parsed[0] === "string" ? parsed[0] : null
-  } catch {
-    return null
-  }
+function firstImage(raw: ImagesLike): string | null {
+  return toImageUrls(raw)[0] ?? null
 }
 
 /**
@@ -77,7 +72,7 @@ function firstImage(raw: string | null | undefined): string | null {
 const ITEM_BRIEF = {
   id: true,
   title: true,
-  images: true,
+  images: ITEM_IMAGES,
   status: true,
   valueLeaves: true,
 } as const
@@ -181,7 +176,7 @@ export async function GET(req: NextRequest) {
       // Code state, so canConfirm is a real answer rather than a guess from
       // status alone. At most two rows per trade. `attempts` is for codesLive:
       // a pair burned by MAX_CODE_ATTEMPTS is as dead as an expired one.
-      swapConfirmationCodes: { select: { userId: true, used: true, expiresAt: true, attempts: true } },
+      swapCodes: { select: { userId: true, used: true, expiresAt: true, attempts: true } },
     },
     orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
     take: limit + 1,
@@ -232,7 +227,7 @@ export async function GET(req: NextRequest) {
 
     // The viewer submits their PARTNER's code, so it is the partner's row that
     // records whether this viewer has already confirmed.
-    const partnerCode = t.swapConfirmationCodes.find((c) => c.userId === partnerId)
+    const partnerCode = t.swapCodes.find((c) => c.userId === partnerId)
     const partnerCodeLive = !!partnerCode && partnerCode.expiresAt.getTime() > now
     const canConfirm =
       t.status === "ACCEPTED" ||
@@ -251,7 +246,7 @@ export async function GET(req: NextRequest) {
      * that instant is still ahead, INCLUDING a burned pair: that is how the
      * client tells "locked" (attempts spent, window open) from "expired".
      */
-    const codes = t.swapConfirmationCodes
+    const codes = t.swapCodes
     const codesLive =
       codes.length === 2 &&
       codes.every((c) => c.expiresAt.getTime() > now && c.attempts < MAX_CODE_ATTEMPTS)

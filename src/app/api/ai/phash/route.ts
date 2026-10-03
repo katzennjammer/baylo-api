@@ -6,6 +6,17 @@ import Anthropic from "@anthropic-ai/sdk"
 import { fetchAllowedImage, isAllowedImageUrl } from "@/lib/safe-image-url"
 import { enforceRateLimit } from "@/lib/rate-limit-config"
 import { imageUrlSchema, parseBody } from "@/lib/validation"
+import { ITEM_IMAGES, imageUrls } from "@/lib/item-images"
+import type { Prisma } from "@/generated/prisma/client"
+
+/** Every HASHED photo matching `where` -- the duplicate pool. Unhashed photos (hash NULL) are not in it. */
+async function hashedPhotos(where: Prisma.ItemImageWhereInput): Promise<{ itemId: string; position: number; hash: string }[]> {
+  const rows = await prisma.itemImage.findMany({
+    where: { ...where, hash: { not: null } },
+    select: { itemId: true, position: true, hash: true },
+  })
+  return rows.filter((r): r is { itemId: string; position: number; hash: string } => r.hash !== null)
+}
 
 // Presence only — see the note in ../identify/route.ts.
 if (!process.env.ANTHROPIC_API_KEY) {
@@ -153,10 +164,9 @@ export async function POST(req: NextRequest) {
   // single lookup by id. Selecting them inline would drag every candidate's
   // whole JSON array across for the sake of at most one of them — and would
   // have grown fivefold with this change rather than shrinking.
-  const ownHashes = await prisma.itemImageHash.findMany({
-    where: { item: { userId: session.user.id } },
-    select: { itemId: true, position: true, hash: true },
-  })
+  // ItemImage since schema v2: the hashed photos are exactly the old
+  // ItemImageHash pool (a photo never hashed has hash NULL and is skipped).
+  const ownHashes = await hashedPhotos({ item: { userId: session.user.id } })
   console.log(`[phash] Own photo hashes (any status): ${ownHashes.length}`)
   for (const row of ownHashes) {
     const dist = hammingDistance(hash, row.hash)
@@ -167,10 +177,7 @@ export async function POST(req: NextRequest) {
   }
 
   // ── Stage 1C: compare against other users' photos ─────────────────────────
-  const otherHashes = await prisma.itemImageHash.findMany({
-    where: { item: { userId: { not: session.user.id } } },
-    select: { itemId: true, position: true, hash: true },
-  })
+  const otherHashes = await hashedPhotos({ item: { userId: { not: session.user.id } } })
 
   console.log(`[phash] Candidate photo hashes (other users, any status): ${otherHashes.length}`)
   console.log(`[phash] New upload hash: ${hash}`)
@@ -221,9 +228,9 @@ export async function POST(req: NextRequest) {
   try {
     const matched = await prisma.item.findUnique({
       where: { id: candidate.id },
-      select: { images: true },
+      select: { images: ITEM_IMAGES },
     })
-    const urls = JSON.parse(matched?.images ?? "[]") as string[]
+    const urls = imageUrls(matched?.images)
     existingImageUrl = urls[candidate.position] ?? urls[0] ?? ""
   } catch { /* leave empty — handled immediately below */ }
 

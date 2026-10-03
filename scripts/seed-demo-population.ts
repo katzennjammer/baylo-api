@@ -87,6 +87,7 @@ import { decidePerishableValue } from "../src/lib/perishable"
 import { bracketOf } from "../src/lib/brackets"
 import { ORGS, PERISHABLE, PERISHABLE_EXTRA, STANDARD, type OrgSeed, type Row } from "./lib/demo-population-catalogue"
 import LISTING_IMAGES from "./lib/demo-listing-images.json"
+import type { Category } from "@/generated/prisma/client"
 
 const DOMAIN = "baylo-demo.test"
 const ID_PREFIX = "demo-pop-"
@@ -271,7 +272,8 @@ async function upsertOrg(a: PlannedAccount) {
         // row claiming one did would be a false audit record.
         verificationStatus: "VERIFIED",
         reviewedAt: new Date(),
-        members: { create: { userId: a.id, role: "OWNER", status: "ACTIVE", joinedAt: new Date() } },
+        ownerId: a.id,
+        ownerJoinedAt: new Date(),
       },
     })
   }
@@ -281,7 +283,7 @@ async function upsertItem(ownerId: string, p: PlannedItem, hubIds: string[], hub
   const [title, category, condition, asked, description, wanted, lookingFor] = p.row
   const existing = await prisma.item.findUnique({
     where: { id: p.id },
-    select: { status: true, isPerishable: true, images: true, _count: { select: { offers: true, offeredIn: true, requestedIn: true } } },
+    select: { status: true, isPerishable: true, images: { select: { url: true }, orderBy: { position: "asc" } }, _count: { select: { offers: true, offeredIn: true, requestedIn: true } } },
   })
 
   if (existing) {
@@ -290,8 +292,10 @@ async function upsertItem(ownerId: string, p: PlannedItem, hubIds: string[], hub
     // The photo is the one column a re-run corrects on an untouched listing,
     // so a fix to the image map reaches rows --remove had to keep (an account
     // with ledger rows is never deleted -- see remove()).
-    const images = JSON.stringify([imageFor(title, category)])
-    const rephoto = existing.images !== images
+    // One photo, as ItemImage rows since schema v2.
+    const url = imageFor(title, category)
+    const rephoto = existing.images.length !== 1 || existing.images[0].url !== url
+    const images = { deleteMany: {}, create: [{ position: 0, url }] }
     if (existing.isPerishable && existing.status === "EXPIRED") {
       await prisma.item.update({ where: { id: p.id }, data: { status: "AVAILABLE", createdAt: new Date(), images } })
       return "refreshed" as const
@@ -320,13 +324,13 @@ async function upsertItem(ownerId: string, p: PlannedItem, hubIds: string[], hub
       id: p.id,
       title,
       description,
-      images: JSON.stringify([imageFor(title, category)]),
+      images: { create: [{ position: 0, url: imageFor(title, category) }] },
       category: category as never,
       condition: condition as never,
       ...data,
       status: "AVAILABLE",
       wantedItems: wanted,
-      lookingForCategories: lookingFor as never,
+      wantedCategories: { create: (lookingFor as Category[]).map((category) => ({ category })) },
       userId: ownerId,
       createdAt: p.createdAt,
       ...(p.perishable
@@ -400,7 +404,7 @@ async function remove() {
       _count: {
         select: {
           sentOffers: true, receivedOffers: true, sentRequests: true, receivedRequests: true,
-          sentMessages: true, receivedMessages: true, leafTransactions: true, contractsAsDebtor: true, contractsAsCreditor: true,
+          sentMessages: true, receivedMessages: true, leafTransactions: true,
         },
       },
     },

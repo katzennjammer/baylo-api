@@ -235,7 +235,12 @@ export function orgPostingRefusal(
 
 // ── Acting as an organisation ────────────────────────────────────────────────
 
-export type OrgMemberRole = "OWNER" | "STAFF"
+/**
+ * Always "OWNER" since schema v2: organisation staff were removed, and the owner
+ * (Organization.ownerId) is the only person who may act as an organisation.
+ * Kept as a type, and on the wire, because shipped clients read `role`.
+ */
+export type OrgMemberRole = "OWNER"
 
 /**
  * Who a request is acting AS, once the org context has been checked.
@@ -262,7 +267,7 @@ export interface ActingIdentity {
 export type ActingResult =
   | { ok: true; acting: ActingIdentity }
   /** The header named an org this person may not act as, or that is not there. */
-  | { ok: false; reason: "not_a_member" | "membership_pending" | "unknown_org" }
+  | { ok: false; reason: "not_a_member" | "unknown_org" }
 
 /**
  * Resolve "who am I acting as" from a person's id and a requested org id.
@@ -274,7 +279,7 @@ export type ActingResult =
  * the person acts as themselves.
  */
 export async function resolveActingIdentity(
-  db: Pick<PrismaClient, "organizationMember">,
+  db: Pick<PrismaClient, "organization">,
   humanUserId: string,
   requestedOrgId: string | null | undefined,
 ): Promise<ActingResult> {
@@ -282,24 +287,17 @@ export async function resolveActingIdentity(
     return { ok: true, acting: { actingUserId: humanUserId, humanUserId, organization: null } }
   }
 
-  const membership = await db.organizationMember.findUnique({
-    where: { organizationId_userId: { organizationId: requestedOrgId, userId: humanUserId } },
-    select: {
-      role: true,
-      status: true,
-      organization: {
-        select: { id: true, name: true, orgUserId: true, verificationStatus: true, rejectionReason: true },
-      },
-    },
+  // Schema v2: the OWNER is the only person who may act as an organisation.
+  const org = await db.organization.findUnique({
+    where: { id: requestedOrgId },
+    select: { id: true, name: true, orgUserId: true, ownerId: true, verificationStatus: true, rejectionReason: true },
   })
 
-  // Absent membership and absent organisation are ONE answer to the caller,
-  // which then returns one status. Telling them apart would let anybody probe
-  // for which organisation ids exist by watching the error change.
-  if (!membership) return { ok: false, reason: "not_a_member" }
-  if (membership.status !== "ACTIVE") return { ok: false, reason: "membership_pending" }
+  // Absent organisation and "not yours" are ONE answer to the caller, which
+  // then returns one status. Telling them apart would let anybody probe for
+  // which organisation ids exist by watching the error change.
+  if (!org || org.ownerId !== humanUserId) return { ok: false, reason: "not_a_member" }
 
-  const org = membership.organization
   return {
     ok: true,
     acting: {
@@ -308,7 +306,7 @@ export async function resolveActingIdentity(
       organization: {
         id: org.id,
         name: org.name,
-        role: membership.role as OrgMemberRole,
+        role: "OWNER",
         verified: org.verificationStatus === "VERIFIED",
         verificationStatus: org.verificationStatus as OrgVerificationStatus,
         rejectionReason: org.rejectionReason ?? null,
@@ -318,14 +316,11 @@ export async function resolveActingIdentity(
 }
 
 /**
- * The organisations this person may act as right now, for the context switcher.
- *
- * ACTIVE only. A PENDING row is an invitation that has not been accepted, and
- * an invitation is not a permission — listing it here would put an org in the
- * switcher that every write path then refuses.
+ * The organisations this person may act as right now, for the context switcher:
+ * the ones they own (schema v2; staff memberships were removed).
  */
 export async function activeOrgsFor(
-  db: Pick<PrismaClient, "organizationMember">,
+  db: Pick<PrismaClient, "organization">,
   userId: string,
 ): Promise<{
   id: string
@@ -351,27 +346,23 @@ export async function activeOrgsFor(
    */
   leaves: number
 }[]> {
-  const rows = await db.organizationMember.findMany({
-    where: { userId, status: "ACTIVE" },
+  const orgs = await db.organization.findMany({
+    where: { ownerId: userId },
     select: {
-      role: true,
-      organization: {
-        select: {
-          ...ORG_PUBLIC_SELECT,
-          orgUserId: true,
-          rejectionReason: true,
-          orgUser: { select: { leaves: true } },
-        },
-      },
+      ...ORG_PUBLIC_SELECT,
+      orgUserId: true,
+      rejectionReason: true,
+      orgUser: { select: { leaves: true } },
     },
-    orderBy: { joinedAt: "asc" },
+    orderBy: { ownerJoinedAt: "asc" },
   })
+  const rows = orgs.map((organization) => ({ organization }))
   return rows.map((r) => ({
     id: r.organization.id,
     orgUserId: r.organization.orgUserId,
     name: r.organization.name,
     logoUrl: r.organization.logoUrl,
-    role: r.role as OrgMemberRole,
+    role: "OWNER" as OrgMemberRole,
     verified: r.organization.verificationStatus === "VERIFIED",
     verificationStatus: r.organization.verificationStatus as OrgVerificationStatus,
     postingRefusal: (() => {
@@ -434,28 +425,26 @@ export async function hasPersonalActivity(
 }
 
 /**
- * Refuse anyone who is not an OWNER of this organisation.
- *
- * Staff management and org settings are the two things only an owner may do.
- * Everything else an organisation can do — posting, trading, messaging — is
- * open to STAFF, which is what makes staff worth having.
+ * Is this person the OWNER of this organisation? Since schema v2 the owner is
+ * the only person who may act as one (Organization.ownerId), so this is also
+ * the whole permission for org settings.
  */
 export async function isOrgOwner(
-  db: Pick<PrismaClient, "organizationMember">,
+  db: Pick<PrismaClient, "organization">,
   organizationId: string,
   userId: string,
 ): Promise<boolean> {
-  const row = await db.organizationMember.findUnique({
-    where: { organizationId_userId: { organizationId, userId } },
-    select: { role: true, status: true },
+  const row = await db.organization.findFirst({
+    where: { id: organizationId, ownerId: userId },
+    select: { id: true },
   })
-  return row?.status === "ACTIVE" && row.role === "OWNER"
+  return row !== null
 }
 
 // ── Creating one ─────────────────────────────────────────────────────────────
 
 export interface CreateOrganizationInput {
-  /** The person creating it. Becomes the first ACTIVE OWNER. */
+  /** The person creating it. Becomes its owner (Organization.ownerId). */
   founderUserId: string
   name: string
   businessCategory: string
@@ -531,14 +520,8 @@ export async function createOrganization(
         dtiRegistrationNumber: input.dtiRegistrationNumber ?? null,
         // PENDING by default. The org can trade while it waits, but it cannot
         // post until it is VERIFIED (see orgPostingRefusal).
-        members: {
-          create: {
-            userId: input.founderUserId,
-            role: "OWNER",
-            status: "ACTIVE",
-            joinedAt: new Date(),
-          },
-        },
+        ownerId: input.founderUserId,
+        ownerJoinedAt: new Date(),
       },
       select: { id: true },
     })

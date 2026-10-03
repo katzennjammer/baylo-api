@@ -47,7 +47,7 @@ async function cleanup() {
   const users = await prisma.user.findMany({ where: { email: { startsWith: P } }, select: { id: true } })
   const ids = users.map((u) => u.id)
   if (ids.length === 0) return
-  await prisma.report.deleteMany({ where: { reporterId: { in: ids } } })
+  await prisma.moderationCase.deleteMany({ where: { filedById: { in: ids } } })
   await prisma.block.deleteMany({ where: { OR: [{ blockerId: { in: ids } }, { blockedId: { in: ids } }] } })
   // Story and StoryView cascade from User and Item; deleting the items and
   // users is the cascade test's other half (section 8).
@@ -68,7 +68,7 @@ async function makeUser(tag: string, extra: { isOrgAccount?: boolean } = {}) {
 async function makeItem(userId: string, title: string) {
   return prisma.item.create({
     data: {
-      title: `${P}${title}`, description: "fixture", images: "[]",
+      title: `${P}${title}`, description: "fixture", 
       category: "BOOKS", condition: "GOOD", valueLeaves: 100,
       status: "AVAILABLE", userId,
     },
@@ -244,8 +244,8 @@ async function main() {
   check("a LISTING story without an item is refused by the CHECK", checkFired)
 
   check("wire 'story' maps to STORY", toDbTarget("story") === "STORY")
-  const report = await prisma.report.create({
-    data: { reporterId: alice.id, targetType: "STORY", targetId: s1id, category: "SPAM", openKey: "live" },
+  const report = await prisma.moderationCase.create({
+    data: { type: "REPORT", filedById: alice.id, targetType: "STORY", targetId: s1id, category: "SPAM", openKey: "live" },
   })
   check("a Report with targetType STORY is writable", report.targetType === "STORY")
 
@@ -257,7 +257,7 @@ async function main() {
     (await prisma.story.count({ where: { id: lampId } })) === 0)
   check("and their views", (await prisma.storyView.count({ where: { storyId: lampId } })) === 0)
 
-  await prisma.report.deleteMany({ where: { reporterId: { in: [alice.id] } } })
+  await prisma.moderationCase.deleteMany({ where: { filedById: { in: [alice.id] } } })
   await cleanup()
   check("deleting the users cascades every fixture story",
     (await prisma.story.count({ where: { user: { email: { startsWith: P } } } })) === 0)

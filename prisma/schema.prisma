@@ -99,10 +99,11 @@ model User {
   vipUntil DateTime?
 
   items                  Item[]
-  /// Every deal this account proposed, or was proposed to -- the offer phase
-  /// and the trade phase are one Trade row (schema v2). See Trade.
-  sentTrades             Trade[]           @relation("TradeSender")
-  receivedTrades         Trade[]           @relation("TradeReceiver")
+  sentRequests           TradeRequest[]    @relation("SentRequests")
+  receivedRequests       TradeRequest[]    @relation("ReceivedRequests")
+  sentOffers             Offer[]           @relation("SentOffers")
+  receivedOffers         Offer[]           @relation("ReceivedOffers")
+  taskCompletions        TaskCompletion[]
   sentMessages           Message[]         @relation("SentMessages")
   receivedMessages       Message[]         @relation("ReceivedMessages")
   notifications          Notification[]    @relation("NotificationRecipient")
@@ -446,11 +447,11 @@ model Item {
   userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  /// Deals that offered this item, and deals that asked for it. See Trade.
-  tradesOffered   Trade[]   @relation("TradeOfferedItem")
-  tradesRequested Trade[]   @relation("TradeRequestedItem")
-  likes           Like[]    @relation("ItemPostLikes")
-  comments        Comment[] @relation("ItemPostComments")
+  offeredIn   TradeRequest[] @relation("OfferedItem")
+  requestedIn TradeRequest[] @relation("RequestedItem")
+  offers      Offer[]        @relation("ItemOffers")
+  likes       Like[]         @relation("ItemPostLikes")
+  comments    Comment[]      @relation("ItemPostComments")
 
   /// Public meetup points this listing is offered at. ZERO IS NORMAL and means
   /// delivery-only or arrange-it-in-chat -- it is not an incomplete listing.
@@ -578,83 +579,19 @@ model ItemWantedCategory {
   @@index([category])
 }
 
-/// ONE DEAL, FROM PROPOSAL TO HANDOFF, IN ONE ROW (schema v2).
-///
-/// Was two tables. An Offer was the proposal ("my item for your listing"); on
-/// accept, the accept route created a SEPARATE TradeRequest and copied half the
-/// offer's columns onto it, with nothing linking the two rows -- the old
-/// correlation (sender + listing + ACCEPTED + a substring match on a JSON list)
-/// was ambiguous for 21 of 36 trades and settled only by "closest timestamp".
-/// A deal is now one row that moves through two phases:
-///
-///   OFFER PHASE  `offerStatus` -- PENDING, then DECLINED / WITHDRAWN / EXPIRED,
-///                or ACCEPTED. NULL on a deal that never had an offer phase (a
-///                legacy direct trade request from the web, or a seeded trade).
-///   TRADE PHASE  `status` -- ACCEPTED, CONFIRMING, COMPLETED, CANCELLED, or
-///                PENDING/REJECTED for a legacy direct request. NULL until the
-///                deal is accepted into a trade; `tradeCreatedAt` is set in the
-///                same statement. An offer that was accepted and still has
-///                `status` NULL is a legacy Leaves-only offer (June 2026) that
-///                never became a trade -- 11 such rows were migrated.
-///
-/// CHECK constraints in 20261003000002_schema_v2_trade hold the shape:
-///   offerStatus IS NOT NULL OR status IS NOT NULL
-///   (status IS NULL) = (tradeCreatedAt IS NULL)
-///   status IS NULL OR offeredItemId IS NOT NULL
-///
-/// IDS. A migrated deal that had a TradeRequest keeps the TradeRequest's id, so
-/// every Message, Review, SwapCode, AdminAction, Notification and ledger row
-/// that pointed at the trade still does. The Offer's id survives in
-/// `legacyOfferId` (unique), because chat message payloads written before
-/// v2 embed it -- resolve an id from a client by `id` first, then by
-/// `legacyOfferId`. A deal that was only ever an offer keeps the Offer's id as
-/// its `id` AND in `legacyOfferId`.
-model Trade {
-  id            String  @id @default(cuid())
-  legacyOfferId String? @unique
-
-  senderId   String
-  sender     User   @relation("TradeSender", fields: [senderId], references: [id])
-  receiverId String
-  receiver   User   @relation("TradeReceiver", fields: [receiverId], references: [id])
-
-  /// The listing the sender asked for (Offer.postId / TradeRequest.requestedItemId).
-  /// Restrict, which is NEW: Offer.post used to Cascade, so hard-deleting a
-  /// listing silently deleted its offers -- and with them the only row that
-  /// explained a BRIDGE_FEE_HOLD on the ledger. Listings are soft-deleted
-  /// (status REMOVED); a hard delete of one with deal history now fails loudly.
-  requestedItemId String
-  requestedItem   Item   @relation("TradeRequestedItem", fields: [requestedItemId], references: [id], onDelete: Restrict)
-
-  /// The item the sender put up, as a real foreign key. Was a client-written
-  /// JSON list (`Offer.offeredItems`) matched with a substring LIKE. NULL only
-  /// on legacy Leaves-only offers that named no item (15 migrated rows) -- the
-  /// CHECK above makes it required once a deal is a trade.
-  offeredItemId String?
-  offeredItem   Item?   @relation("TradeOfferedItem", fields: [offeredItemId], references: [id], onDelete: Restrict)
-
-  /// The offer phase. NULL = no offer phase (see the model note).
-  offerStatus OfferStatus?
-  /// The trade phase. NULL = not (yet) a trade (see the model note).
-  status      TradeStatus?
-
-  message String? @db.Text
-
-  /// When the deal was first proposed: the Offer's createdAt, or the
-  /// TradeRequest's for a deal with no offer phase. The offer-expiry window is
-  /// measured from here.
-  createdAt      DateTime  @default(now())
-  /// When the deal became a trade -- what TradeRequest.createdAt used to mean.
-  /// Equal to createdAt on a deal with no offer phase.
-  tradeCreatedAt DateTime?
-  updatedAt      DateTime  @updatedAt
+model TradeRequest {
+  id          String      @id @default(cuid())
+  status      TradeStatus @default(PENDING)
+  message     String?     @db.Text
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
   /// The moment settlement committed -- written once, inside the completion
   /// transaction in confirm/submit, and never touched again. `updatedAt` is
   /// NOT this: any later write to the row (a hide flag, a meetup field) moves
   /// it, which is how an old trade could count toward TODAY's trade quest.
   /// NULL on every trade completed before 25 Sep 2026, when the column was
   /// added; nothing backfills it, and nothing that reads it needs the past.
-  completedAt    DateTime?
+  completedAt DateTime?
 
   hiddenBySender   Boolean @default(false)
   hiddenByReceiver Boolean @default(false)
@@ -747,6 +684,16 @@ model Trade {
   /// and it leaves something on the table instead of a hole.
   meetupAgreedAt DateTime?
 
+  senderId   String
+  sender     User   @relation("SentRequests", fields: [senderId], references: [id])
+  receiverId String
+  receiver   User   @relation("ReceivedRequests", fields: [receiverId], references: [id])
+
+  offeredItemId   String
+  offeredItem     Item   @relation("OfferedItem", fields: [offeredItemId], references: [id])
+  requestedItemId String
+  requestedItem   Item   @relation("RequestedItem", fields: [requestedItemId], references: [id])
+
   // Leaves moving from sender to receiver as part of this trade. NULL means
   // none — the same thing the `?? 0` at each old recovery site meant.
   //
@@ -786,33 +733,20 @@ model Trade {
    */
   bridgeFeePaidBySender Boolean?
 
-  // ── Offer-phase snapshots (were Offer columns) ─────────────────────────────
-  //
-  // `offeredBracket` / `targetBracket` are SNAPSHOTS of the two brackets at
-  // proposal, for the audit trail and for the accept-time re-check to name what
-  // moved. They are not read as the rule -- the rule is re-derived from
-  // `Item.valueLeaves` on every check. `consentAt` / `policyVersion` record the
-  // PAYER ticking "I agree to the bridging fee and the trading policy";
-  // required on a bridge, absent on a same-bracket deal. See @/lib/bridge-fee.
-  offeredBracket Int?
-  targetBracket  Int?
-  consentAt      DateTime?
-  policyVersion  String?   @db.VarChar(32)
-
   messages  Message[]
   reviews   Review[]
   swapCodes SwapCode[]
 
+  // FK-backing indexes. MySQL/InnoDB created these implicitly for every
+  // foreign key; Postgres does not, and neither does Prisma on Postgres.
+  // Declared so the migration to Postgres keeps every index the live
+  // MySQL database had (see the 2026-09-15 baseline).
   @@index([senderId])
   @@index([receiverId])
   @@index([offeredItemId])
   @@index([requestedItemId])
   @@index([safeZoneHubId])
   @@index([meetupHubId])
-  /// The lazy offer-expiry sweep and the "pending offers" lists.
-  @@index([offerStatus, createdAt])
-  /// Live trades: the escrow check and the trades screen.
-  @@index([status])
 }
 
 model Message {
@@ -828,7 +762,7 @@ model Message {
   receiver   User   @relation("ReceivedMessages", fields: [receiverId], references: [id])
 
   tradeId String?
-  trade   Trade?  @relation(fields: [tradeId], references: [id])
+  trade   TradeRequest? @relation(fields: [tradeId], references: [id])
 
   // FK-backing indexes. MySQL/InnoDB created these implicitly for every
   // foreign key; Postgres does not, and neither does Prisma on Postgres.
@@ -917,7 +851,7 @@ model Review {
   reviewee   User   @relation("ReviewsReceived", fields: [revieweeId], references: [id])
 
   tradeId String
-  trade   Trade  @relation(fields: [tradeId], references: [id])
+  trade   TradeRequest @relation(fields: [tradeId], references: [id])
 
   @@unique([tradeId, reviewerId])
   // FK-backing indexes. MySQL/InnoDB created these implicitly for every
@@ -926,6 +860,25 @@ model Review {
   // MySQL database had (see the 2026-09-15 baseline).
   @@index([reviewerId])
   @@index([revieweeId])
+}
+
+// Task reward system: one row per completed task.
+// One-time tasks use refId "" (MySQL treats NULLs as distinct in unique
+// indexes, so an empty-string default is what enforces once-per-user);
+// repeatable tasks (VERIFIED_SWAP, SAFEZONE_MEETUP) use refId = tradeId.
+// The @@unique below is what makes every award idempotent — do not relax it.
+model TaskCompletion {
+  id        String   @id @default(cuid())
+  task      TaskKind
+  refId     String   @default("")
+  leaves    Int
+  createdAt DateTime @default(now())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, task, refId])
+  @@index([userId])
 }
 
 enum TaskKind {
@@ -967,13 +920,13 @@ enum QuestKind {
 /// schema v2, columns unchanged). It belongs to a TRADE, which is why it is not
 /// folded into AuthToken: it dies with the trade and is never a login credential.
 model SwapCode {
-  id       String  @id @default(cuid())
+  id       String       @id @default(cuid())
   tradeId  String
-  trade    Trade   @relation(fields: [tradeId], references: [id], onDelete: Cascade)
+  trade    TradeRequest @relation(fields: [tradeId], references: [id], onDelete: Cascade)
   userId   String
-  user     User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user     User         @relation(fields: [userId], references: [id], onDelete: Cascade)
   codeHash String
-  used     Boolean @default(false)
+  used     Boolean      @default(false)
 
   /**
    * The same code, sealed so its OWNER can be shown it. AES-256-GCM, keyed from
@@ -1256,6 +1209,71 @@ model Comment {
   @@index([parentId])
 }
 
+model Offer {
+  id            String      @id @default(cuid())
+  postId        String
+  post          Item        @relation("ItemOffers", fields: [postId], references: [id], onDelete: Cascade)
+  senderId      String
+  sender        User        @relation("SentOffers", fields: [senderId], references: [id])
+  receiverId    String
+  receiver      User        @relation("ReceivedOffers", fields: [receiverId], references: [id])
+  offeredItems  String      @db.Text
+  /**
+   * LEGACY. Leaves the sender added on top of their item, from before trading
+   * became bracket-based (16 Sep 2026). New offers never carry one -- the
+   * schema refuses the field -- and the column exists only so the offers and
+   * trades that were already in flight settle the way they were agreed.
+   * `availableLeaves()` still subtracts it for PENDING rows for that reason.
+   */
+  offeredLeaves Int?
+  message       String?     @db.Text
+  status        OfferStatus @default(PENDING)
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  /**
+   * ── THE BRIDGE ────────────────────────────────────────────────────────────
+   * An offer is one item for one item, and the offered item is either in the
+   * SAME bracket as the listing or exactly ONE below it. The second case is a
+   * bridge, and it costs the proposer `bridgingFee(offeredBracket)` Leaves --
+   * see @/lib/trade-rules for the formula, which is never written out here.
+   * `bridgeFeeLeaves` NULL means same-bracket, no fee. Non-null means the fee
+   * was HELD when the offer was created: a BRIDGE_FEE_HOLD ledger row on the
+   * proposer and the same amount off their balance, in the same transaction
+   * as this row. It is released (BRIDGE_FEE_RELEASE) when the offer or the
+   * trade it becomes dies, and paid to the receiver (BRIDGE_FEE_PAID) when the
+   * trade completes. The trade carries its own copy, see TradeRequest.
+   * `offeredBracket` / `targetBracket` are SNAPSHOTS of the two brackets at
+   * proposal, for the audit trail and for the accept-time re-check to name
+   * what moved. They are not read as the rule -- the rule is re-derived from
+   * `Item.valueLeaves` on every check.
+   * `consentAt` / `policyVersion` record the PAYER ticking "I agree to the
+   * bridging fee and the trading policy". Required on a bridge, absent on a
+   * same-bracket offer, and the version is TRADING_POLICY_VERSION at the time.
+   * WHICH SIDE consented, and therefore WHEN these are written, depends on the
+   * direction: the proposer pays when they offer the lower item, so their
+   * consent is recorded with the offer; the receiver pays when they are
+   * offered the higher item, so theirs is recorded at accept, onto this same
+   * row. `bridgeFeeLeaves` is the QUOTE from the moment the offer was made and
+   * is set either way -- it is not evidence that anything has been held. What
+   * is held is exactly: a proposer-pays offer that is still PENDING, and any
+   * live trade. See @/lib/bridge-fee.
+   */
+  bridgeFeeLeaves Int?
+  offeredBracket  Int?
+  targetBracket   Int?
+  consentAt       DateTime?
+  policyVersion   String?   @db.VarChar(32)
+
+  // FK-backing indexes. MySQL/InnoDB created these implicitly for every
+  // foreign key; Postgres does not, and neither does Prisma on Postgres.
+  // Declared so the migration to Postgres keeps every index the live
+  // MySQL database had (see the 2026-09-15 baseline).
+  @@index([postId])
+  @@index([senderId])
+  @@index([receiverId])
+}
+
 enum OfferStatus {
   PENDING
   ACCEPTED
@@ -1368,41 +1386,17 @@ model LeafTransaction {
   amount      Int // positive = credit, negative = debit (in Pasa Leaves)
   description String
 
-  /// The deal (Trade.id) that caused this row. A plain column rather than a
-  /// relation: the ledger points at things, nothing points back at the ledger.
-  /// Since schema v2 this is ALSO where a fee HOLD/RELEASE points -- those rows
-  /// used to carry an `offerId`, and the v2 trade migration rewrote each one
-  /// to the id of the Trade that offer became (Trade.legacyOfferId keeps the
-  /// old id). scripts/schema-v2/verify-v2.ts asserts every value resolves.
+  // Optional references to the trade/offer that caused this debit/credit
+  offerId    String?
   tradeId    String?
-  /// LEGACY. The DeferredContract this row paid down, for CONTRACT_PAY /
-  /// CONTRACT_COLLECT. DPAs were retired on 16 Sep 2026 and the table was
-  /// dropped in schema v2; the one FULFILLED contract's pair keeps its id here
-  /// so the two rows still explain each other. Nothing writes it.
+  // The DeferredContract this row paid down, for CONTRACT_PAY / CONTRACT_COLLECT.
+  // A plain column rather than a relation, matching offerId and tradeId above:
+  // the ledger points at things, nothing points back at the ledger.
   contractId String?
-
-  // ── Task rewards (schema v2; was the TaskCompletion table) ─────────────────
-  //
-  // A row with `task` set IS the task completion: the claim and the payment are
-  // one row, so they can no longer disagree. One-time tasks use taskRefId ""
-  // and repeatable ones the tradeId; the @@unique below is what makes every
-  // award idempotent -- do not relax it. Postgres treats NULLs as distinct, so
-  // every non-task row (task NULL) is outside the constraint.
-  //
-  // A DENIED award is a row too: amount 0, written when a rule (repeat partner,
-  // weekly cap) refused it, so that the denial is permanent rather than
-  // retried. SUM(amount) is unchanged by it, so the invariant is untouched.
-  //
-  // CHECKs in 20261003000001_schema_v2_ledger:
-  //   (task IS NULL) = (taskRefId IS NULL)
-  //   task IS NULL OR type = 'TASK_REWARD'
-  task      TaskKind?
-  taskRefId String?
 
   createdAt DateTime @default(now())
   eventAt   DateTime
 
-  @@unique([userId, task, taskRefId])
   @@index([userId])
   @@index([userId, createdAt])
   @@index([userId, eventAt])
@@ -2002,13 +1996,13 @@ model SafeZoneHub {
 
   /// Trades whose parties CLAIMED they met here. Restrict on that side too, so
   /// a hub carrying meetup history is as undeletable as one carrying listings.
-  trades Trade[] @relation("MeetupClaim")
+  trades TradeRequest[] @relation("MeetupClaim")
 
   /// Trades that have ARRANGED to meet here and not yet confirmed. The claim
   /// above is what happened; this is what is planned. Named relations because
   /// there are now two of them between this pair of models -- see the block on
   /// `TradeRequest.meetupHubId` for why they are not one column.
-  meetupPlans Trade[] @relation("MeetupPlan")
+  meetupPlans TradeRequest[] @relation("MeetupPlan")
 
   /// The picker's query: active hubs in one city. Both filter columns, in the
   /// order the WHERE clause names them.

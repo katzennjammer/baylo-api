@@ -10,6 +10,7 @@ import AvatarImage from "@/components/AvatarImage"
 import RelistButton from "@/app/dashboard/shelf/RelistButton"
 import { CompactRepBadge, LeafRankBadge } from "@/components/RepBadge"
 import ReportBlockMenu from "@/components/ReportBlockMenu"
+import { ITEM_IMAGES, imageUrls, imagesJson } from "@/lib/item-images"
 
 export default async function ItemDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
@@ -17,6 +18,7 @@ export default async function ItemDetailPage({ params }: { params: Promise<{ id:
   const item = await prisma.item.findUnique({
     where: { id },
     include: {
+      images: ITEM_IMAGES,
       user: {
         select: { id: true, name: true, avatar: true, rating: true, totalTrades: true, lifetimeLeaves: true, location: true, createdAt: true },
       },
@@ -28,14 +30,14 @@ export default async function ItemDetailPage({ params }: { params: Promise<{ id:
   const session = await auth()
   const isOwner = session?.user?.id === item.userId
 
-  const images: string[] = JSON.parse(item.images || "[]")
+  const images: string[] = imageUrls(item.images)
 
   let ownedItems: { id: string; title: string; images: string }[] = []
   if (session?.user?.id && !isOwner) {
     ownedItems = await prisma.item.findMany({
       where: { userId: session.user.id, status: "AVAILABLE" },
-      select: { id: true, title: true, images: true },
-    })
+      select: { id: true, title: true, images: ITEM_IMAGES },
+    }).then((rows) => rows.map((r) => ({ ...r, images: imagesJson(r.images) })))
   }
 
   return (

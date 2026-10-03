@@ -1,6 +1,7 @@
 import { auth } from "@/../auth"
 import { redirect } from "next/navigation"
 import prisma from "@/lib/prisma"
+import { ITEM_IMAGES, firstImageUrl } from "@/lib/item-images"
 import { preciseAccessItemIds, resolvePickup } from "@/lib/item-visibility"
 import BayloDashboard from "./baylo-dashboard"
 import {
@@ -128,6 +129,7 @@ export default async function DashboardPage() {
     prisma.item.findMany({
       where: { status: "AVAILABLE" },
       include: {
+        images: ITEM_IMAGES,
         user: { select: { id: true, name: true, location: true } },
         likes: { select: { userId: true } },
         _count: { select: { comments: true } },
@@ -385,11 +387,8 @@ export default async function DashboardPage() {
   const feedPickupAccess = await preciseAccessItemIds(user.id, items.map((i) => i.id))
 
   const feedPosts = items.map((item) => {
-    let imageUrl: string | undefined
-    try {
-      const imgs = JSON.parse(item.images)
-      if (Array.isArray(imgs) && imgs[0]) imageUrl = imgs[0]
-    } catch { /* malformed JSON — use gradient placeholder */ }
+    // No photo -> undefined -> the gradient placeholder.
+    const imageUrl: string | undefined = firstImageUrl(item.images) ?? undefined
     const wantsDisplay = wantedDisplay(item.wantedItems)
     const pickup = resolvePickup(item, user.id, feedPickupAccess)
     const tags = [CATEGORY_LABEL[item.category] ?? item.category]

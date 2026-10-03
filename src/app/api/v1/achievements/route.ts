@@ -75,11 +75,12 @@ export async function PATCH(req: NextRequest) {
   // Only the badges this user has actually earned may be displayed. Reading the
   // earned set and intersecting is what makes an unearned or foreign id a
   // no-op rather than a hole.
-  const earned = await prisma.userAchievement.findMany({
-    where: { userId },
+  // ACHIEVEMENT rows of UserProgress (schema v2).
+  const earned = await prisma.userProgress.findMany({
+    where: { userId, type: "ACHIEVEMENT" as const },
     select: { achievementId: true },
   })
-  const earnedIds = new Set(earned.map((row) => row.achievementId))
+  const earnedIds = new Set(earned.map((row) => row.achievementId).filter((id): id is string => id !== null))
 
   const shelf = parsed.data.achievementIds
     .filter((id) => earnedIds.has(id))
@@ -94,21 +95,21 @@ export async function PATCH(req: NextRequest) {
       // Clear the shelf for every earned row, then set the chosen order. Two
       // statements, no dynamic SQL: the first is a blanket reset, the second
       // walks the picks.
-      await tx.userAchievement.updateMany({
-        where: { userId },
+      await tx.userProgress.updateMany({
+        where: { userId, type: "ACHIEVEMENT" as const },
         data: { displayOrder: null, homeDisplayOrder: null },
       })
 
       for (let index = 0; index < shelf.length; index++) {
-        await tx.userAchievement.updateMany({
-          where: { userId, achievementId: shelf[index] },
+        await tx.userProgress.updateMany({
+          where: { userId, type: "ACHIEVEMENT" as const, achievementId: shelf[index] },
           data: { displayOrder: index + 1 },
         })
       }
 
       if (featured) {
-        await tx.userAchievement.updateMany({
-          where: { userId, achievementId: featured },
+        await tx.userProgress.updateMany({
+          where: { userId, type: "ACHIEVEMENT" as const, achievementId: featured },
           data: { homeDisplayOrder: 1 },
         })
       }

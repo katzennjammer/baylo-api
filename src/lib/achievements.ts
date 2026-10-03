@@ -129,7 +129,7 @@ async function readActivity(db: Db, userId: string): Promise<Activity | null> {
           OR: [{ senderId: userId }, { receiverId: userId }],
         },
       }),
-      db.report.count({ where: { reporterId: userId } }),
+      db.moderationCase.count({ where: { type: "REPORT", filedById: userId } }),
       isIdVerified(userId, db),
     ])
 
@@ -204,8 +204,9 @@ export async function evaluateAchievements(
         orderBy: [{ sortOrder: "asc" }, { name: "asc" }],
       }),
       readActivity(db, userId),
-      db.userAchievement.findMany({
-        where: { userId },
+      // ACHIEVEMENT rows of UserProgress (schema v2).
+      db.userProgress.findMany({
+        where: { userId, type: "ACHIEVEMENT" as const },
         select: { achievementId: true, unlockedAt: true, displayOrder: true, homeDisplayOrder: true },
       }),
     ])
@@ -235,8 +236,11 @@ export async function evaluateAchievements(
       .sort((a, b) => a.key.localeCompare(b.key))
 
     if (toGrant.length > 0) {
-      await db.userAchievement.createMany({
-        data: toGrant.map((def) => ({ userId, achievementId: def.id })),
+      // unlockedAt is written explicitly: UserProgress has no default for it
+      // (it is NULL on quest rows), and the ACHIEVEMENT shape check requires it.
+      const unlockedAt = new Date()
+      await db.userProgress.createMany({
+        data: toGrant.map((def) => ({ type: "ACHIEVEMENT" as const, userId, achievementId: def.id, unlockedAt })),
         skipDuplicates: true,
       })
       // Reflect the grants in the returned view without a second query. The
@@ -317,8 +321,8 @@ export async function backfillAchievement(
       if (!activity) continue
       if (progressFor(def.criterion, activity) < def.threshold) continue
 
-      const { count } = await db.userAchievement.createMany({
-        data: [{ userId: user.id, achievementId: def.id }],
+      const { count } = await db.userProgress.createMany({
+        data: [{ type: "ACHIEVEMENT" as const, userId: user.id, achievementId: def.id, unlockedAt: new Date() }],
         skipDuplicates: true,
       })
       granted += count

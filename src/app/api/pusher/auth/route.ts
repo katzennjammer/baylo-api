@@ -62,7 +62,7 @@ export async function POST(req: NextRequest) {
     return a === myId || b === myId
   })()
 
-  // A shop's channel, for its ACTIVE members (25 Sep 2026). Messages to a shop
+  // A shop's channel, for its OWNER (25 Sep 2026; staff removed in schema v2). Messages to a shop
   // are published to its backing row's channel, and a member acting as the
   // shop has to hear them. Exact name, then the membership row -- the same
   // grant resolveActingIdentity() reads, re-read on every authorisation. No
@@ -73,12 +73,8 @@ export async function POST(req: NextRequest) {
   const isShopPrivate =
     !isOwnPrivate &&
     channelName.startsWith(PRIVATE_USER_PREFIX) &&
-    (await prisma.organizationMember.count({
-      where: {
-        userId: myId,
-        status: "ACTIVE",
-        organization: { orgUserId: channelName.slice(PRIVATE_USER_PREFIX.length) },
-      },
+    (await prisma.organization.count({
+      where: { ownerId: myId, orgUserId: channelName.slice(PRIVATE_USER_PREFIX.length) },
     })) > 0
 
   if (!isOwnPrivate && !isPresencePair && !isShopPrivate) {

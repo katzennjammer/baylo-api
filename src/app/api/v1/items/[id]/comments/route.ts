@@ -143,7 +143,7 @@ export async function GET(
   const itemId = await visibleItemId(id, viewerId)
   if (!itemId) return notFound("That listing is no longer available")
 
-  const rows = await prisma.postComment.findMany({
+  const rows = await prisma.comment.findMany({
     where: {
       postId: itemId,
       // Top level only. Replies hang off their parent and would otherwise
@@ -198,14 +198,14 @@ export async function POST(
     // On THIS listing, and itself top level. Both halves matter: the first
     // stops a reply being filed under a stranger's comment, the second stops an
     // arbitrarily deep chain forming under a list that only renders one level.
-    const parent = await prisma.postComment.findFirst({
+    const parent = await prisma.comment.findFirst({
       where: { id: parentId, postId: itemId, parentId: null },
       select: { id: true },
     })
     if (!parent) return notFound("That comment is no longer there")
   }
 
-  const created = await prisma.postComment.create({
+  const created = await prisma.comment.create({
     data: { postId: itemId, userId: viewerId, content, parentId: parentId ?? null },
     select: {
       id: true,

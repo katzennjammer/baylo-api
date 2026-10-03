@@ -5,6 +5,7 @@ import prisma from "@/lib/prisma"
 import { ok, invalid } from "@/lib/v1/envelope"
 import { parseQuery, paginationShape } from "@/lib/v1/query"
 import { decodeCursor, encodeCursor, olderThan, paginate } from "@/lib/v1/cursor"
+import { REPORT, asReport } from "@/lib/report-case"
 import {
   REPORT_CATEGORIES,
   REPORT_TARGET_TYPES,
@@ -60,8 +61,8 @@ export async function GET(req: NextRequest) {
   }
 
   // ── 1 ── the page. Keyset on (createdAt, id), same as every other list here.
-  const rows = await prisma.report.findMany({
-    where: { ...where, ...(olderThan(cursor) ?? {}) },
+  const rows = await prisma.moderationCase.findMany({
+    where: { ...REPORT, ...where, ...(olderThan(cursor) ?? {}) },
     select: {
       id: true,
       targetType: true,
@@ -70,9 +71,9 @@ export async function GET(req: NextRequest) {
       notes: true,
       status: true,
       createdAt: true,
-      resolvedAt: true,
-      reporter: { select: { id: true, name: true, avatar: true } },
-      resolvedBy: { select: { id: true, name: true } },
+      decidedAt: true,
+      filedBy: { select: { id: true, name: true, avatar: true } },
+      decidedBy: { select: { id: true, name: true } },
     },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take: limit + 1,
@@ -82,9 +83,10 @@ export async function GET(req: NextRequest) {
   // ── 2 ── counts per status, for the tabs. NOT filtered by the current
   // status — a tab that disappears when you select another one is a worse
   // control than one that stays put, the same call /browse makes for its facets.
-  const statusCounts = await prisma.report.groupBy({
+  const statusCounts = await prisma.moderationCase.groupBy({
     by: ["status"],
     where: {
+      ...REPORT,
       ...(targetType ? { targetType: toDbTarget(targetType) } : {}),
       ...(category ? { category: toDbCategory(category) } : {}),
     },
@@ -93,7 +95,7 @@ export async function GET(req: NextRequest) {
 
   return ok(
     {
-      reports: page.map((r) => ({
+      reports: page.map(asReport).map((r) => ({
         id: r.id,
         targetType: toWireTarget(r.targetType),
         targetId: r.targetId,

@@ -16,6 +16,7 @@
  * listing can show fewer rows than were written for it.
  */
 import prisma from "../src/lib/prisma"
+import { WANTED_CATEGORIES, wantedList } from "@/lib/wanted-categories"
 import {
   MATCH_NOTIFY_CAP,
   PERISHABLE_MATCH_NOTIFY_CAP,
@@ -40,14 +41,14 @@ async function main() {
   const item = await prisma.item.findUnique({
     where: { id: itemId },
     select: {
-      id: true, title: true, userId: true, category: true, lookingForCategories: true,
+      id: true, title: true, userId: true, category: true, wantedCategories: WANTED_CATEGORIES,
       isPerishable: true, tradeWithinHours: true, status: true, createdAt: true,
       user: { select: { email: true } },
     },
   })
   if (!item) throw new Error(`no listing ${itemId}`)
   const perishable = item.isPerishable
-  const wants = item.lookingForCategories as string[]
+  const wants = wantedList(item.wantedCategories) as string[]
   const input = { itemId: item.id, authorUserId: item.userId, category: item.category as string, lookingForCategories: wants }
 
   console.log(`${item.id} "${item.title}" by ${item.user.email}`)
@@ -76,12 +77,12 @@ async function main() {
     where: {
       id: { not: item.id },
       OR: [
-        { lookingForCategories: { has: item.category } },
-        ...(perishable && wants.length > 0 ? [{ category: { in: item.lookingForCategories } }] : []),
+        { wantedCategories: { some: { category: item.category } } },
+        ...(perishable && wants.length > 0 ? [{ category: { in: wantedList(item.wantedCategories) } }] : []),
       ],
     },
     select: {
-      userId: true, category: true, lookingForCategories: true, status: true, moderationHiddenAt: true,
+      userId: true, category: true, wantedCategories: WANTED_CATEGORIES, status: true, moderationHiddenAt: true,
       user: { select: { email: true, deletedAt: true, isOrgAccount: true, suspendedAt: true, suspendedUntil: true } },
     },
   })
@@ -106,7 +107,7 @@ async function main() {
     const u = items[0].user
     const rules = new Set<string>()
     for (const c of items) {
-      if ((c.lookingForCategories as string[]).includes(item.category)) rules.add("wants")
+      if (wantedList(c.wantedCategories).includes(item.category)) rules.add("wants")
       if (perishable && wants.includes(c.category as string)) rules.add("has")
     }
     const rule = rules.size === 2 ? "mutual" : [...rules][0]

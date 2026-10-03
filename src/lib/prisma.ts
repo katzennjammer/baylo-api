@@ -67,7 +67,22 @@ function createPrismaClient() {
     connectionString = url.toString()
   }
   const adapter = new PrismaPg(
-    { connectionString, max: 5, connectionTimeoutMillis: 10_000 },
+    {
+      connectionString,
+      max: 5,
+      connectionTimeoutMillis: 10_000,
+      // ── RAW SQL STAYS ON THE COPY (schema v2) ──────────────────────────────
+      // The adapter's `schema` option qualifies MODEL queries only. A
+      // $queryRaw/$executeRaw with a bare "Message" resolves through the
+      // connection's search_path, which defaults to public -- live -- so a
+      // process on a scratch schema read (or wrote) live rows. That is how
+      // live data was lost on 23 Sep 2026. Setting search_path on every pooled
+      // connection makes an unqualified table resolve to the scratch schema;
+      // public is not on the path at all. `extensions` stays on it: Supabase
+      // installs extension objects there (pg_stat_statements, gen_random_uuid)
+      // and it holds no app tables.
+      ...(schema !== "public" ? { options: `-c search_path="${schema}",extensions` } : {}),
+    },
     schema !== "public" ? { schema } : undefined,
   )
   return new PrismaClient({ adapter })

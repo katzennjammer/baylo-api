@@ -117,7 +117,7 @@ async function main() {
   const item = (ownerId: string, title: string) =>
     prisma.item.create({
       data: {
-        title: `${tag} ${title}`, description: "x", images: "[]",
+        title: `${tag} ${title}`, description: "x", 
         category: "OTHER", condition: "GOOD", valueLeaves: 20, userId: ownerId,
       },
       select: { id: true },
@@ -127,8 +127,10 @@ async function main() {
     const alice = await person("alice")
     const bob = await person("bob")
     const owner = await person("owner")
-    const staff = await person("staff")
-    created.users.push(alice.id, bob.id, owner.id, staff.id)
+    // Schema v2: organisation staff were removed. The OWNER is the only person
+    // who acts as the shop, so the "staff" actor of every check below is the owner.
+    const staff = owner
+    created.users.push(alice.id, bob.id, owner.id)
 
     const org = await createOrganization({
       founderUserId: owner.id,
@@ -141,10 +143,6 @@ async function main() {
       where: { id: org.organizationId },
       data: { verificationStatus: "VERIFIED" },
     })
-    await prisma.organizationMember.create({
-      data: { organizationId: org.organizationId, userId: staff.id, role: "STAFF", status: "ACTIVE" },
-    })
-
     const aliceToken = await signAccessToken(alice.id)
     const bobToken = await signAccessToken(bob.id)
     const staffToken = await signAccessToken(staff.id)
@@ -214,16 +212,11 @@ async function main() {
 
     // ── D ───────────────────────────────────────────────────────────────────
     console.log("\nD: a shop and its own members cannot trade")
-    const invitee = await person("invitee")
-    created.users.push(invitee.id)
-    await prisma.organizationMember.create({
-      data: { organizationId: org.organizationId, userId: invitee.id, role: "STAFF", status: "PENDING" },
-    })
     const ownerToken = await signAccessToken(owner.id)
-    const inviteeToken = await signAccessToken(invitee.id)
     const orgItem3 = await item(org.orgUserId, "org salt")
+    // v2: the owner is the shop's only member (no staff, no PENDING invitees).
     for (const [who, token, ownerId] of [
-      ["staff", staffToken, staff.id], ["owner", ownerToken, owner.id], ["a PENDING invitee", inviteeToken, invitee.id],
+      ["owner", ownerToken, owner.id],
     ] as const) {
       const theirs = await item(ownerId, `${who} personal thing`)
       const self = await call("/api/offers", {
@@ -260,17 +253,16 @@ async function main() {
     const leaver = await person("leaver")
     created.users.push(leaver.id)
     const leaverToken = await signAccessToken(leaver.id)
-    const membership = await prisma.organizationMember.create({
-      data: { organizationId: org.organizationId, userId: leaver.id, role: "STAFF", status: "ACTIVE" },
-      select: { id: true },
-    })
+    // v2: membership is ownership. The leaver owns the shop for a while...
+    await prisma.organization.update({ where: { id: org.organizationId }, data: { ownerId: leaver.id } })
     const orgItem4 = await item(org.orgUserId, "org flour")
     const bobItem3 = await item(bob.id, "bob pan")
     const toOrg2 = await call("/api/offers", {
       token: bobToken, method: "POST", body: { postId: orgItem4.id, offeredItemId: bobItem3.id },
     })
     check("bob offers on another org listing", toOrg2.status === 201, brief(toOrg2))
-    await prisma.organizationMember.delete({ where: { id: membership.id } })
+    // ...and hands it back, which is what "removed" means now.
+    await prisma.organization.update({ where: { id: org.organizationId }, data: { ownerId: owner.id } })
     if (toOrg2.status === 201) {
       const removed = await call(`/api/offers/${toOrg2.body.offerId}`, {
         token: leaverToken, orgId: org.organizationId, method: "PATCH", body: { action: "accept" },
@@ -298,7 +290,7 @@ async function main() {
     // ── quests, through the event hook alone ────────────────────────────────
     console.log("\nquests: settled by POST /api/offers, no GET /api/v1/quests")
     const aliceDay = await poll(
-      () => prisma.questAssignment.findMany({ where: { userId: alice.id } }),
+      () => prisma.userProgress.findMany({ where: { userId: alice.id, type: "QUEST" } }),
       (rows) => rows.length === 5,
     )
     check("alice (sender) has today's 5 assignments from the event alone", aliceDay.length === 5,
@@ -306,7 +298,7 @@ async function main() {
     const aliceSend = aliceDay.find((a) => a.quest === "SEND_OFFER")
     if (aliceSend) {
       const settled = await poll(
-        () => prisma.questAssignment.findUnique({ where: { id: aliceSend.id } }),
+        () => prisma.userProgress.findUnique({ where: { id: aliceSend.id } }),
         (a) => a?.completedAt != null,
       )
       check("alice's SEND_OFFER is paid without her opening Quests", settled?.completedAt != null)
@@ -314,12 +306,12 @@ async function main() {
       console.log("  ..    alice did not draw SEND_OFFER today; the assignment check above still stands")
     }
     const bobDay = await poll(
-      () => prisma.questAssignment.findMany({ where: { userId: bob.id } }),
+      () => prisma.userProgress.findMany({ where: { userId: bob.id, type: "QUEST" } }),
       (rows) => rows.length === 5,
     )
     check("bob (receiver, then sender) has today's 5 assignments", bobDay.length === 5, `${bobDay.length} rows`)
     await new Promise((r) => setTimeout(r, 1500))
-    const orgRows = await prisma.questAssignment.count({ where: { userId: org.orgUserId } })
+    const orgRows = await prisma.userProgress.count({ where: { userId: org.orgUserId, type: "QUEST" } })
     check("the org's backing row got NO quest assignments", orgRows === 0, `${orgRows} rows`)
   } finally {
     const ids = created.users

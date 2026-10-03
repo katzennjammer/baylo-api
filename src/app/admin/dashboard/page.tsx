@@ -3,6 +3,7 @@ import { IdCard, Gavel, Scale, type LucideIcon } from "lucide-react"
 import prisma from "@/lib/prisma"
 import { CountUp } from "@/components/admin/CountUp"
 import { OverviewCards, type OverviewMetric } from "./OverviewCards"
+import { REPORT } from "@/lib/report-case"
 
 export const dynamic = "force-dynamic"
 export const revalidate = 0
@@ -42,7 +43,7 @@ function initials(name: string | null) {
 export default async function AdminDashboardPage() {
   const [reportCounts, pendingIds, suspendedUsers, hiddenListings, inactiveHubs, defaults, openAppeals, activeAchievements, recentAudit] =
     await Promise.all([
-      prisma.report.groupBy({ by: ["status"], _count: { id: true } }),
+      prisma.moderationCase.groupBy({ by: ["status"], where: REPORT, _count: { id: true } }),
       prisma.idVerification.count({ where: { status: "PENDING" } }),
       prisma.user.count({
         where: {
@@ -54,7 +55,7 @@ export default async function AdminDashboardPage() {
       prisma.item.count({ where: { moderationHiddenAt: { not: null } } }),
       prisma.safeZoneHub.count({ where: { isActive: false } }),
       prisma.item.count({ where: { status: "PENDING_REVIEW" } }),
-      prisma.listingAppeal.count({ where: { status: "OPEN" } }),
+      prisma.moderationCase.count({ where: { type: "LISTING_APPEAL", status: "OPEN" } }),
       prisma.achievement.count({ where: { isActive: true }}),
       prisma.adminAction.findMany({
         take: 8,

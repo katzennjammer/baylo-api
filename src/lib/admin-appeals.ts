@@ -1,6 +1,7 @@
 import prisma from "@/lib/prisma"
 import { bracketOf } from "@/lib/brackets"
 import { VALUE_REJECTION_REASONS } from "@/lib/value-rejection"
+import { ITEM_IMAGES, toImageUrls, type ImagesLike } from "@/lib/item-images"
 
 /**
  * The appeals queue's rows, loaded and shaped once for both readers: the
@@ -8,29 +9,23 @@ import { VALUE_REJECTION_REASONS } from "@/lib/value-rejection"
  * A route file may export only handlers, which is why this is not in one.
  */
 
-function parseFirstImage(raw: string | null | undefined): string | null {
-  if (!raw) return null
-  try {
-    const parsed: unknown = JSON.parse(raw)
-    if (!Array.isArray(parsed)) return null
-    const first = parsed.find((value): value is string => typeof value === "string" && value.trim().length > 0)
-    return first ?? null
-  } catch {
-    return null
-  }
+function parseFirstImage(raw: ImagesLike): string | null {
+  return toImageUrls(raw)[0] ?? null
 }
 
 export async function loadAppeals(status: "open" | "decided", limit: number) {
-  const appeals = await prisma.listingAppeal.findMany({
-    where: status === "open" ? { status: "OPEN" } : { status: { in: ["UPHELD", "OVERTURNED", "WITHDRAWN"] } },
+  // LISTING_APPEAL rows of ModerationCase (schema v2), mapped back to the
+  // appeal shape below so the queue pages and shapeAppeal() are unchanged.
+  const rows = await prisma.moderationCase.findMany({
+    where: { type: "LISTING_APPEAL", ...(status === "open" ? { status: "OPEN" as const } : { status: { in: ["UPHELD" as const, "OVERTURNED" as const, "WITHDRAWN" as const] } }) },
     select: {
-      id: true, kind: true, status: true, message: true, actionId: true, createdAt: true,
-      decidedAt: true, decisionReason: true,
+      id: true, appealKind: true, status: true, message: true, actionId: true, createdAt: true,
+      decidedAt: true, decisionNote: true,
       decidedBy: { select: { id: true, name: true } },
-      owner: { select: { id: true, name: true, email: true } },
+      filedBy: { select: { id: true, name: true, email: true } },
       item: {
         select: {
-          id: true, title: true, status: true, category: true, condition: true, images: true,
+          id: true, title: true, status: true, category: true, condition: true, images: ITEM_IMAGES,
           valueLeaves: true, suggestedLeaves: true, moderationHiddenAt: true, valueRejectionReason: true,
         },
       },
@@ -38,6 +33,16 @@ export async function loadAppeals(status: "open" | "decided", limit: number) {
     orderBy: status === "open" ? [{ createdAt: "asc" }, { id: "asc" }] : [{ decidedAt: "desc" }, { id: "desc" }],
     take: limit,
   })
+  // The CHECK constraint guarantees every LISTING_APPEAL row has these four.
+  const appeals = rows.map(({ appealKind, decisionNote, filedBy, item, actionId, message, ...rest }) => ({
+    ...rest,
+    kind: appealKind!,
+    decisionReason: decisionNote,
+    owner: filedBy,
+    item: item!,
+    actionId: actionId!,
+    message: message!,
+  }))
 
   // The decisions being appealed, in one query. actionId is a plain string
   // (the audit is pointed at, never joined), so this is the join by hand.

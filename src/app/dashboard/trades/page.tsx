@@ -5,6 +5,7 @@ import { CO2_PER_CATEGORY, computeImpactData } from "@/lib/impact-constants"
 import { isLeavesOnlyTrade } from "@/lib/trade-format"
 import TradesClient from "./TradesClient"
 import { describeMessage } from "@/lib/chat-helpers"
+import { ITEM_IMAGES, toImageUrls, type ImagesLike } from "@/lib/item-images"
 
 const CATEGORY_HASHTAG: Record<string, string> = {
   ELECTRONICS: "#Electronics",
@@ -22,13 +23,8 @@ const CATEGORY_HASHTAG: Record<string, string> = {
 export const dynamic = "force-dynamic"
 export const revalidate = 0
 
-function firstImage(raw: string): string | null {
-  try {
-    const imgs = JSON.parse(raw)
-    return Array.isArray(imgs) && imgs[0] ? (imgs[0] as string) : null
-  } catch {
-    return null
-  }
+function firstImage(raw: ImagesLike): string | null {
+  return toImageUrls(raw)[0] ?? null
 }
 
 function timeAgo(date: Date): string {
@@ -74,8 +70,8 @@ export default async function TradesPage() {
         hiddenBySender: true, hiddenByReceiver: true,
         senderId: true, receiverId: true,
         offeredItemId: true, requestedItemId: true,
-        offeredItem:   { select: { id: true, title: true, images: true, category: true, status: true, valueLeaves: true } },
-        requestedItem: { select: { id: true, title: true, images: true, category: true, status: true, valueLeaves: true } },
+        offeredItem:   { select: { id: true, title: true, images: ITEM_IMAGES, category: true, status: true, valueLeaves: true } },
+        requestedItem: { select: { id: true, title: true, images: ITEM_IMAGES, category: true, status: true, valueLeaves: true } },
         sender:        { select: { id: true, name: true, avatar: true } },
         receiver:      { select: { id: true, name: true, avatar: true } },
         reviews:       { where: { reviewerId: myId }, select: { id: true, rating: true } },
@@ -86,7 +82,7 @@ export default async function TradesPage() {
     prisma.offer.findMany({
       where: { receiverId: myId, status: "PENDING" },
       include: {
-        post:   { select: { id: true, title: true, images: true, valueLeaves: true } },
+        post:   { select: { id: true, title: true, images: ITEM_IMAGES, valueLeaves: true } },
         sender: { select: { id: true, name: true, avatar: true, rating: true, totalTrades: true } },
       },
       orderBy: { createdAt: "desc" },
@@ -154,7 +150,7 @@ export default async function TradesPage() {
     allOfferedItemIds.size > 0
       ? await prisma.item.findMany({
           where: { id: { in: [...allOfferedItemIds] } },
-          select: { id: true, title: true, images: true, valueLeaves: true },
+          select: { id: true, title: true, images: ITEM_IMAGES, valueLeaves: true },
         })
       : []
 

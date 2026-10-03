@@ -94,7 +94,7 @@ async function mkUser(tag: string) {
 async function mkItem(userId: string, tag: string) {
   return prisma.item.create({
     data: {
-      title: `${P}${tag}`, description: "fixture", images: "[]", category: "OTHER", condition: "GOOD",
+      title: `${P}${tag}`, description: "fixture", category: "OTHER", condition: "GOOD",
       valueLeaves: 100, suggestedLeaves: 100, status: "AVAILABLE", userId,
     },
     select: { id: true },

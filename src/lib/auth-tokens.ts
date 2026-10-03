@@ -106,8 +106,9 @@ export interface TokenPair {
  */
 export async function issueTokenPair(userId: string, familyId?: string): Promise<TokenPair> {
   const raw = newRefreshToken()
-  await prisma.refreshToken.create({
+  await prisma.authToken.create({
     data: {
+      type: "REFRESH",
       userId,
       tokenHash: hashRefreshToken(raw),
       familyId: familyId ?? randomUUID(),
@@ -127,8 +128,8 @@ export async function issueTokenPair(userId: string, familyId?: string): Promise
  * re-authenticate.
  */
 export async function revokeTokenFamily(familyId: string): Promise<number> {
-  const res = await prisma.refreshToken.updateMany({
-    where: { familyId, revokedAt: null },
+  const res = await prisma.authToken.updateMany({
+    where: { type: "REFRESH", familyId, revokedAt: null },
     data: { revokedAt: new Date() },
   })
   return res.count

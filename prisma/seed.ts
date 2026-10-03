@@ -519,7 +519,7 @@ async function seedItems() {
     const shared = {
       title: it.title,
       description: it.description,
-      images: JSON.stringify([it.image]),
+      images: { create: [{ position: 0, url: it.image }] },
       category: it.category as never,
       condition: it.condition as never,
       valueLeaves: it.valueLeaves,

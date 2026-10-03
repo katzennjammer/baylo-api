@@ -40,7 +40,7 @@ async function mkUser(tag: string) {
 }
 async function mkItem(userId: string, tag: string) {
   return prisma.item.create({
-    data: { title: P + tag, description: "d", images: "[]", category: "BOOKS", condition: "GOOD", userId },
+    data: { title: P + tag, description: "d", category: "BOOKS", condition: "GOOD", userId },
   })
 }
 

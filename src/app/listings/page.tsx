@@ -1,4 +1,5 @@
 import prisma from "@/lib/prisma"
+import { ITEM_IMAGES, imagesJson } from "@/lib/item-images"
 import ItemCard from "@/components/ItemCard"
 import { CATEGORIES } from "@/lib/utils"
 import Link from "next/link"
@@ -16,7 +17,7 @@ export default async function ListingsPage({
       ...(category && category !== "ALL" ? { category: category as never } : {}),
       ...(q ? { OR: [{ title: { contains: q, mode: "insensitive" as const } }, { description: { contains: q, mode: "insensitive" as const } }] } : {}),
     },
-    include: { user: { select: { id: true, name: true, avatar: true, rating: true, totalTrades: true } } },
+    include: { images: ITEM_IMAGES, user: { select: { id: true, name: true, avatar: true, rating: true, totalTrades: true } } },
     orderBy: { createdAt: "desc" },
   })
 
@@ -64,7 +65,7 @@ export default async function ListingsPage({
           <p className="text-sm text-gray-500 mb-4">{items.length} item{items.length !== 1 ? "s" : ""} found</p>
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-5">
             {items.map((item) => (
-              <ItemCard key={item.id} item={item} />
+              <ItemCard key={item.id} item={{ ...item, images: imagesJson(item.images) }} />
             ))}
           </div>
         </>

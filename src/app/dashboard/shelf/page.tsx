@@ -5,6 +5,7 @@ import { computeImpactData } from "@/lib/impact-constants"
 import ShelfClient from "./ShelfClient"
 import type { ShelfItem } from "./ShelfClient"
 import { describeMessage } from "@/lib/chat-helpers"
+import { ITEM_IMAGES, toImageUrls, type ImagesLike } from "@/lib/item-images"
 
 export const dynamic = "force-dynamic"
 export const revalidate = 0
@@ -32,13 +33,8 @@ const NOTIF_ICON: Record<string, string> = {
   NEW_REVIEW:      "star",
 }
 
-function firstImage(raw: string): string | null {
-  try {
-    const imgs = JSON.parse(raw)
-    return Array.isArray(imgs) && imgs[0] ? (imgs[0] as string) : null
-  } catch {
-    return null
-  }
+function firstImage(raw: ImagesLike): string | null {
+  return toImageUrls(raw)[0] ?? null
 }
 
 function timeAgo(date: Date): string {
@@ -73,6 +69,7 @@ export default async function ShelfPage() {
     }),
     prisma.item.findMany({
       where: { userId: myId, status: { in: ["AVAILABLE", "OWNED", "TRADED"] } },
+      include: { images: ITEM_IMAGES },
       orderBy: { createdAt: "desc" },
     }),
     prisma.message.findMany({

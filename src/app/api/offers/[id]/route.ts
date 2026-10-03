@@ -12,6 +12,7 @@ import { createSystemMessage } from "@/lib/system-message"
 import {
   isShopMemberPair, legacyParticipantRefusal, resolveTradeParticipant, shopMemberSelfTradeRefusal,
 } from "@/lib/trade-participant"
+import { ITEM_IMAGES, toImageUrls, type ImagesLike } from "@/lib/item-images"
 
 /**
  * PATCH /api/offers/[id] — the RECEIVER accepts or declines.
@@ -80,7 +81,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     const offer = await prisma.offer.findUnique({
       where: { id: offerId },
       include: {
-        post: { select: { id: true, title: true, images: true, valueLeaves: true } },
+        post: { select: { id: true, title: true, images: ITEM_IMAGES, valueLeaves: true } },
         sender: { select: { id: true, name: true } },
         receiver: { select: { id: true, name: true } },
       },
@@ -403,18 +404,10 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     const offeredItemForCard = tradeRecord
       ? await prisma.item.findUnique({
           where: { id: offeredItemId as string },
-          select: { title: true, images: true },
+          select: { title: true, images: ITEM_IMAGES },
         })
       : null
-    const firstImage = (raw: string | null | undefined) => {
-      if (!raw) return null
-      try {
-        const images = JSON.parse(raw)
-        return Array.isArray(images) && typeof images[0] === "string" ? images[0] : null
-      } catch {
-        return null
-      }
-    }
+    const firstImage = (raw: ImagesLike) => toImageUrls(raw)[0] ?? null
 
     // Notify sender — link uses ?partner= format so NotifPanel opens the chat dock
     await prisma.notification.create({

@@ -10,17 +10,17 @@ export async function POST(_req: NextRequest, { params }: { params: Promise<{ id
     const { id: postId } = await params
     const userId = session.user.id
 
-    const existing = await prisma.postLike.findUnique({
+    const existing = await prisma.like.findUnique({
       where: { postId_userId: { postId, userId } },
     })
 
     if (existing) {
-      await prisma.postLike.delete({ where: { postId_userId: { postId, userId } } })
+      await prisma.like.delete({ where: { postId_userId: { postId, userId } } })
     } else {
-      await prisma.postLike.create({ data: { postId, userId } })
+      await prisma.like.create({ data: { postId, userId } })
     }
 
-    const count = await prisma.postLike.count({ where: { postId } })
+    const count = await prisma.like.count({ where: { postId } })
     return NextResponse.json({ liked: !existing, count })
   } catch {
     return NextResponse.json({ error: "Internal server error" }, { status: 500 })

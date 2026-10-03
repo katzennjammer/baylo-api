@@ -2,6 +2,7 @@ import type { PrismaClient } from "@/generated/prisma/client"
 import { bracketOf, type Bracket } from "@/lib/brackets"
 import { offerTerms, type FeePayer, type OfferLegality } from "@/lib/trade-rules"
 import { isPremium, isVip } from "@/lib/premium"
+import { ITEM_IMAGES, type ImageRow } from "@/lib/item-images"
 
 /**
  * Everything the server checks about the two ITEMS of an offer, from the
@@ -50,8 +51,8 @@ export type OfferAssessment =
       fee: number
       /** Who owes `fee`. null when there is none. See @/lib/trade-rules. */
       payer: FeePayer | null
-      offered: { id: string; title: string; userId: string; images: string | null }
-      target: { id: string; title: string; userId: string; images: string | null }
+      offered: { id: string; title: string; userId: string; images: readonly ImageRow[] }
+      target: { id: string; title: string; userId: string; images: readonly ImageRow[] }
     }
   | {
       ok: false
@@ -88,7 +89,7 @@ export async function assessOffer(
   const rows = await db.item.findMany({
     where: { id: { in: [offeredItemId, targetItemId] } },
     select: {
-      id: true, title: true, userId: true, images: true, status: true, valueLeaves: true, moderationHiddenAt: true,
+      id: true, title: true, userId: true, images: ITEM_IMAGES, status: true, valueLeaves: true, moderationHiddenAt: true,
     },
   })
   const offered = rows.find((r) => r.id === offeredItemId)

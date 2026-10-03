@@ -11,6 +11,8 @@ import {
   toWireTarget,
   type ReportTargetWire,
 } from "@/lib/moderation"
+import { ITEM_IMAGES, imagesJson } from "@/lib/item-images"
+import { REPORT, asReport } from "@/lib/report-case"
 
 export const dynamic = "force-dynamic"
 
@@ -49,14 +51,15 @@ async function loadContent(targetType: ReportTargetWire, targetId: string) {
     const item = await prisma.item.findUnique({
       where: { id: targetId },
       select: {
-        id: true, title: true, description: true, images: true,
+        id: true, title: true, description: true, images: ITEM_IMAGES,
         category: true, condition: true, valueLeaves: true, status: true,
         moderationHiddenAt: true, createdAt: true,
         user: { select: { id: true, name: true, avatar: true, email: true } },
       },
     })
     if (!item) return null
-    return { kind: "listing" as const, listing: item, owner: item.user }
+    // `images` keeps its old wire form, the JSON string (ItemImage rows since schema v2).
+    return { kind: "listing" as const, listing: { ...item, images: imagesJson(item.images) }, owner: item.user }
   }
 
   if (targetType === "user") {
@@ -66,13 +69,14 @@ async function loadContent(targetType: ReportTargetWire, targetId: string) {
         id: true, name: true, email: true, avatar: true, bio: true,
         location: true, createdAt: true, rating: true, totalTrades: true,
         isVerified: true, deletedAt: true, suspendedAt: true, suspendedUntil: true,
-        _count: { select: { items: true, reportsMade: true } },
+        _count: { select: { items: true, casesFiled: { where: REPORT } } },
       },
     })
     if (!user) return null
     return {
       kind: "user" as const,
-      user: { ...user, suspension: suspensionState(user) },
+      // `_count.reportsMade` keeps its old wire key; reports are REPORT cases now.
+      user: { ...user, _count: { items: user._count.items, reportsMade: user._count.casesFiled }, suspension: suspensionState(user) },
       owner: { id: user.id, name: user.name, avatar: user.avatar, email: user.email },
     }
   }
@@ -83,11 +87,12 @@ async function loadContent(targetType: ReportTargetWire, targetId: string) {
       select: {
         id: true, caption: true, createdAt: true, expiresAt: true, deletedAt: true,
         user: { select: { id: true, name: true, avatar: true, email: true } },
-        item: { select: { id: true, title: true, images: true, status: true, moderationHiddenAt: true } },
+        item: { select: { id: true, title: true, images: ITEM_IMAGES, status: true, moderationHiddenAt: true } },
       },
     })
     if (!story) return null
-    return { kind: "story" as const, story, owner: story.user }
+    const storyOut = { ...story, item: story.item ? { ...story.item, images: imagesJson(story.item.images) } : null }
+    return { kind: "story" as const, story: storyOut, owner: story.user }
   }
 
   // MESSAGE. Loaded with a window of surrounding messages, because a single
@@ -135,22 +140,24 @@ export async function GET(
   const parsed = parseQuery(req, querySchema)
   if (!parsed.ok) return parsed.response
 
-  const report = await prisma.report.findUnique({
-    where: { id },
+  const reportRow = await prisma.moderationCase.findUnique({
+    where: { id, ...REPORT },
     select: {
       id: true, targetType: true, targetId: true, category: true,
       notes: true, status: true, createdAt: true,
-      resolvedAt: true, resolutionNote: true,
-      reporter: {
+      decidedAt: true, decisionNote: true,
+      filedBy: {
         select: {
           id: true, name: true, avatar: true, email: true, createdAt: true,
-          _count: { select: { reportsMade: true } },
+          _count: { select: { casesFiled: { where: REPORT } } },
         },
       },
-      resolvedBy: { select: { id: true, name: true } },
+      decidedBy: { select: { id: true, name: true } },
     },
   })
-  if (!report) return notFound("Report not found")
+  if (!reportRow) return notFound("Report not found")
+  // A REPORT case under the old field names (reporter, resolvedAt, ...). See @/lib/report-case.
+  const report = asReport(reportRow)
 
   const targetType = toWireTarget(report.targetType)
 
@@ -159,15 +166,16 @@ export async function GET(
 
     // Everything else ever filed against this same target. The count is the
     // decision: one report is a complaint, six is a pattern.
-    prisma.report.findMany({
+    prisma.moderationCase.findMany({
       where: {
+        ...REPORT,
         targetType: report.targetType,
         targetId: report.targetId,
         id: { not: report.id },
       },
       select: {
         id: true, category: true, status: true, notes: true, createdAt: true,
-        reporter: { select: { id: true, name: true } },
+        filedBy: { select: { id: true, name: true } },
       },
       orderBy: { createdAt: "desc" },
       take: 25,
@@ -190,9 +198,9 @@ export async function GET(
     // The reporter's own track record. A reporter whose reports are all
     // dismissed is itself a moderation signal, and one this queue would
     // otherwise never surface.
-    prisma.report.groupBy({
+    prisma.moderationCase.groupBy({
       by: ["status"],
-      where: { reporterId: report.reporter.id },
+      where: { ...REPORT, filedById: report.reporter.id },
       _count: { id: true },
     }),
   ])
@@ -213,11 +221,13 @@ export async function GET(
     },
     reporter: {
       ...report.reporter,
+      // The wire key predates ModerationCase; the count is still reports only.
+      _count: { reportsMade: report.reporter._count.casesFiled },
       // Filed vs upheld: the ratio a moderator needs before trusting the notes.
       history: Object.fromEntries(reporterHistory.map((h) => [h.status, h._count.id])),
     },
     content,
-    otherReports: otherReports.map((r) => ({
+    otherReports: otherReports.map(asReport).map((r) => ({
       ...r,
       category: toWireCategory(r.category),
     })),

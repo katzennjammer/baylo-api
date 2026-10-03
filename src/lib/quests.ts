@@ -81,7 +81,7 @@ export type QuestKind =
 export const QUEST_TIERS: readonly QuestTier[] = ["EASY", "MEDIUM", "HARD"]
 
 /** Leaves paid per completed quest, by tier. Snapshotted onto
- *  QuestAssignment.rewardLeaves at assignment time, so a later change here
+ *  UserProgress.rewardLeaves (was QuestAssignment) at assignment time, so a later change here
  *  never rewrites a past day. */
 export const QUEST_REWARDS: Record<QuestTier, number> = {
   EASY: 2,
@@ -245,8 +245,8 @@ async function questSatisfied(userId: string, quest: QuestKind, periodStart: Dat
  */
 async function completeQuest(userId: string, assignmentId: string, amount: number, at: Date): Promise<void> {
   await prisma.$transaction(async (tx) => {
-    const claimed = await tx.questAssignment.updateMany({
-      where: { id: assignmentId, completedAt: null },
+    const claimed = await tx.userProgress.updateMany({
+      where: { id: assignmentId, type: "QUEST", completedAt: null },
       data: { completedAt: at },
     })
     if (claimed.count !== 1) return
@@ -284,22 +284,24 @@ export async function reconcileQuests(
     pickQuests(userId, periodStart, tier).map((def) => ({ tier, def })),
   )
 
-  const existing = await prisma.questAssignment.findMany({ where: { userId, periodStart } })
-  const byQuest = new Map(existing.map((a) => [a.quest as QuestKind, a]))
+  // QUEST rows of UserProgress (schema v2). The quest columns are NOT NULL on
+  // every QUEST row (UserProgress_quest_shape_check), hence the assertions.
+  const existing = (await prisma.userProgress.findMany({ where: { userId, type: "QUEST", periodStart } })).map(asQuestRow)
+  const byQuest = new Map(existing.map((a) => [a.quest, a]))
 
   const missing = wanted.filter((w) => !byQuest.has(w.def.quest))
   if (missing.length > 0) {
     // createMany + skipDuplicates: the @@unique([userId, periodStart, quest])
     // constraint is the real guard against a concurrent request assigning the
     // day twice, the same pattern claimCompletion() in @/lib/tasks uses.
-    await prisma.questAssignment.createMany({
+    await prisma.userProgress.createMany({
       data: missing.map(({ tier, def }) => ({
-        userId, periodStart, tier, quest: def.quest, rewardLeaves: QUEST_REWARDS[tier],
+        type: "QUEST" as const, userId, periodStart, tier, quest: def.quest, rewardLeaves: QUEST_REWARDS[tier],
       })),
       skipDuplicates: true,
     })
-    const refreshed = await prisma.questAssignment.findMany({ where: { userId, periodStart } })
-    for (const a of refreshed) byQuest.set(a.quest as QuestKind, a)
+    const refreshed = (await prisma.userProgress.findMany({ where: { userId, type: "QUEST", periodStart } })).map(asQuestRow)
+    for (const a of refreshed) byQuest.set(a.quest, a)
   }
 
   const views: QuestView[] = []
@@ -321,6 +323,11 @@ export async function reconcileQuests(
   }
 
   return views
+}
+
+/** A QUEST row with its quest columns narrowed; the CHECK constraint makes them NOT NULL. */
+function asQuestRow<T extends { quest: unknown; rewardLeaves: number | null; completedAt: Date | null; id: string }>(r: T) {
+  return { ...r, quest: r.quest as QuestKind, rewardLeaves: r.rewardLeaves! }
 }
 
 /** The kinds a completed trade can satisfy, for the settlement hook. */

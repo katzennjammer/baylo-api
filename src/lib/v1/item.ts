@@ -1,6 +1,7 @@
 import { resolvePickup, type PublicPickup } from "@/lib/item-visibility"
 import { getLeafRank } from "@/lib/task-constants"
-import { isFeaturedNow } from "@/lib/featured"
+import { ITEM_IMAGES, imageUrls, type ImageRow, toImageUrls, type ImagesLike } from "@/lib/item-images"
+import { WANTED_CATEGORIES } from "@/lib/wanted-categories"
 import type { TrustTier } from "@/lib/reputation"
 import {
   SAFE_ZONE_HUB_SELECT,
@@ -41,7 +42,8 @@ export const V1_ITEM_SELECT = {
   id: true,
   title: true,
   description: true,
-  images: true,
+  // Ordered ItemImage rows (schema v2); emitted as the same `images: string[]`.
+  images: ITEM_IMAGES,
   category: true,
   condition: true,
   valueLeaves: true,
@@ -55,7 +57,6 @@ export const V1_ITEM_SELECT = {
   moderationHiddenAt: true,
   valueRejectionReason: true,
   wantedItems: true, // read only to produce `wanted`; never emitted under this name
-  imageHash: true,
   createdAt: true,
   updatedAt: true,
   userId: true,
@@ -67,11 +68,9 @@ export const V1_ITEM_SELECT = {
   quantityUnit: true,
   tradeWithinHours: true,
   // The matcher's input, and the owner's stated wants -- which the detail
-  // screen renders as "looking for" chips. '{}' on every pre-column row.
-  lookingForCategories: true,
-  // The Featured boost. Read to produce `featuredUntil`; see isFeaturedNow().
-  isFeatured: true,
-  featuredUntil: true,
+  // screen renders as "looking for" chips. ItemWantedCategory rows since
+  // schema v2; none on every pre-column row.
+  wantedCategories: WANTED_CATEGORIES,
   // Needed by resolvePickup(). The route resolves them; they never reach a body.
   pickupLat: true,
   pickupLng: true,
@@ -287,12 +286,11 @@ export interface V1Item {
     expired: boolean
   } | null
   /**
-   * When this listing's paid Featured boost ends, or null when it is not
-   * featured right now. Null also for a boost whose window has passed but the
-   * sweep has not reached, so a client can draw "Featured" or "Boost" off this
-   * one field without doing its own clock arithmetic against a stale flag.
+   * ALWAYS NULL since schema v2: Featured boosts were removed. Kept on the
+   * wire because shipped clients read it, and null is exactly what they
+   * already render as "not featured".
    */
-  featuredUntil: Date | null
+  featuredUntil: null
   /** The categories the owner will take in return. `[]` means none stated. */
   lookingFor: string[]
   lookingForLabels: string[]
@@ -318,15 +316,8 @@ export interface V1Item {
  * `images` is stored as a JSON string. A malformed value yields an empty array
  * rather than throwing: one bad row should not take down a whole feed page.
  */
-export function parseImages(raw: string | null | undefined): string[] {
-  if (!raw) return []
-  try {
-    const parsed: unknown = JSON.parse(raw)
-    if (!Array.isArray(parsed)) return []
-    return parsed.filter((u): u is string => typeof u === "string")
-  } catch {
-    return []
-  }
+export function parseImages(raw: ImagesLike): string[] {
+  return toImageUrls(raw)
 }
 
 /** The row shape v1Item() consumes — what V1_ITEM_SELECT plus the joins yield. */
@@ -334,7 +325,7 @@ export interface V1ItemRow {
   id: string
   title: string
   description: string
-  images: string
+  images: readonly ImageRow[]
   category: string
   condition: string
   valueLeaves: number | null
@@ -350,10 +341,7 @@ export interface V1ItemRow {
   quantity?: number | null
   quantityUnit?: string | null
   tradeWithinHours?: number | null
-  lookingForCategories?: string[]
-  /** Optional: rows from a select that predates 24 Sep 2026 still shape. */
-  isFeatured?: boolean
-  featuredUntil?: Date | null
+  wantedCategories?: readonly { category: string }[]
   createdAt: Date
   userId: string
   pickupLat: number | null
@@ -397,7 +385,7 @@ export function v1Item(
     id: row.id,
     title: row.title,
     description: row.description,
-    images: parseImages(row.images),
+    images: imageUrls(row.images),
     category: row.category,
     categoryLabel: categoryLabel(row.category),
     condition: row.condition,
@@ -425,9 +413,9 @@ export function v1Item(
               row.createdAt.getTime() + row.tradeWithinHours * 60 * 60 * 1000 < Date.now(),
           }
         : null,
-    featuredUntil: isFeaturedNow(row) ? row.featuredUntil! : null,
-    lookingFor: row.lookingForCategories ?? [],
-    lookingForLabels: (row.lookingForCategories ?? []).map(categoryLabel),
+    featuredUntil: null,
+    lookingFor: (row.wantedCategories ?? []).map((w) => w.category),
+    lookingForLabels: (row.wantedCategories ?? []).map((w) => categoryLabel(w.category)),
     pickup: resolvePickup(row, viewerId, tradeAccessIds),
     // null when the caller did not select them. See the note on the field: a
     // caller that forgot under-claims rather than asserting "none".

@@ -91,7 +91,7 @@ export default async function AuditPage({ searchParams }: Props) {
       },
       select: {
         id: true, action: true, targetType: true, targetId: true,
-        reportId: true, reason: true, detail: true, createdAt: true,
+        caseId: true, reason: true, detail: true, createdAt: true,
         actor: { select: { name: true, email: true, role: true } },
       },
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],

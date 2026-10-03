@@ -113,7 +113,7 @@ async function main() {
       description: "t",
       category: "CLOTHING",
       condition: "GOOD",
-      images: JSON.stringify(["https://example.test/a.jpg"]),
+      images: { create: [{ position: 0, url: "https://example.test/a.jpg" }] },
       valueLeaves: 300,
       status: "IN_TRADE",
     },
@@ -126,7 +126,7 @@ async function main() {
       description: "t",
       category: "CLOTHING",
       condition: "GOOD",
-      images: JSON.stringify(["https://example.test/b.jpg"]),
+      images: { create: [{ position: 0, url: "https://example.test/b.jpg" }] },
       valueLeaves: 480,
       status: "IN_TRADE",
     },
@@ -180,7 +180,7 @@ async function main() {
 
   const debtorCode = "111111"
   const creditorCode = "222222"
-  await prisma.swapConfirmationCode.createMany({
+  await prisma.swapCode.createMany({
     data: [
       {
         tradeId: ids.trade,
@@ -199,7 +199,7 @@ async function main() {
     ],
   })
 
-  const rows = await prisma.swapConfirmationCode.findMany({
+  const rows = await prisma.swapCode.findMany({
     where: { tradeId: ids.trade },
     select: { userId: true, codeSealed: true, attempts: true, expiresAt: true },
   })
@@ -219,20 +219,20 @@ async function main() {
   const unburned = mine.attempts < MAX_CODE_ATTEMPTS
   check("a live, unburned code is readable", live && unburned && !!mine.codeSealed)
 
-  await prisma.swapConfirmationCode.update({
+  await prisma.swapCode.update({
     where: { tradeId_userId: { tradeId: ids.trade, userId: ids.debtor } },
     data: { attempts: MAX_CODE_ATTEMPTS },
   })
-  const burned = await prisma.swapConfirmationCode.findUniqueOrThrow({
+  const burned = await prisma.swapCode.findUniqueOrThrow({
     where: { tradeId_userId: { tradeId: ids.trade, userId: ids.debtor } },
   })
   check("a burned code is not readable", !(burned.attempts < MAX_CODE_ATTEMPTS))
 
-  await prisma.swapConfirmationCode.update({
+  await prisma.swapCode.update({
     where: { tradeId_userId: { tradeId: ids.trade, userId: ids.debtor } },
     data: { attempts: 0, expiresAt: new Date(Date.now() - 1000) },
   })
-  const expired = await prisma.swapConfirmationCode.findUniqueOrThrow({
+  const expired = await prisma.swapCode.findUniqueOrThrow({
     where: { tradeId_userId: { tradeId: ids.trade, userId: ids.debtor } },
   })
   check("an expired code is not readable", !(expired.expiresAt.getTime() > Date.now()))
@@ -242,8 +242,7 @@ async function cleanup() {
   // Order matters: children before parents, and the ledger before the users it
   // points at. Every delete is scoped to this run's own ids.
   await prisma.leafTransaction.deleteMany({ where: { userId: { in: [ids.debtor, ids.creditor] } } })
-  await prisma.swapConfirmationCode.deleteMany({ where: { tradeId: ids.trade } })
-  await prisma.deferredContract.deleteMany({ where: { id: ids.contract } })
+  await prisma.swapCode.deleteMany({ where: { tradeId: ids.trade } })
   await prisma.tradeRequest.deleteMany({ where: { id: ids.trade } })
   await prisma.item.deleteMany({ where: { id: { in: [ids.itemA, ids.itemB] } } })
   await prisma.user.deleteMany({ where: { id: { in: [ids.debtor, ids.creditor] } } })

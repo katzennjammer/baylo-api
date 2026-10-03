@@ -2,6 +2,7 @@ import { NextRequest } from "next/server"
 import { z } from "zod"
 import { requireRole } from "@/lib/api-auth"
 import prisma from "@/lib/prisma"
+import { REPORT } from "@/lib/report-case"
 import { ok } from "@/lib/v1/envelope"
 import { parseQuery } from "@/lib/v1/query"
 
@@ -61,7 +62,7 @@ export async function GET(req: NextRequest) {
       _count: {
         select: {
           items: true,
-          reportsMade: true,
+          casesFiled: { where: REPORT },
           idVerifications: true,
           sentRequests: true,
           receivedRequests: true,
@@ -84,6 +85,8 @@ export async function GET(req: NextRequest) {
     pagination: { page, limit, total, totalPages: Math.ceil(total / limit) },
     users: users.map((user) => ({
       ...user,
+      // The wire key predates ModerationCase: reports filed, appeals excluded.
+      _count: { ...user._count, casesFiled: undefined, reportsMade: user._count.casesFiled },
       idVerification: user.idVerifications[0] ?? null,
       idVerifications: undefined,
       suspended: user.suspendedAt !== null && (

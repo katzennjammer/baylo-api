@@ -118,7 +118,7 @@ async function main() {
       description: "t",
       category: "CLOTHING",
       condition: "GOOD",
-      images: JSON.stringify(["https://example.test/a.jpg"]),
+      images: { create: [{ position: 0, url: "https://example.test/a.jpg" }] },
       valueLeaves: 440,
       status: "IN_TRADE",
     },
@@ -131,7 +131,7 @@ async function main() {
       description: "t",
       category: "CLOTHING",
       condition: "GOOD",
-      images: JSON.stringify(["https://example.test/b.jpg"]),
+      images: { create: [{ position: 0, url: "https://example.test/b.jpg" }] },
       valueLeaves: 480,
       status: "IN_TRADE",
     },
@@ -145,19 +145,6 @@ async function main() {
       requestedItemId: ids.itemB,
       offeredLeaves: 40,
       status: "CONFIRMING",
-    },
-  })
-  await prisma.deferredContract.create({
-    data: {
-      id: ids.contract,
-      tradeId: ids.trade,
-      debtorId: ids.debtor,
-      creditorId: ids.creditor,
-      amountLeaves: 200,
-      amountPaidLeaves: 0,
-      deadline: new Date(Date.now() + 14 * 86_400_000),
-      status: "ACTIVE",
-      acceptedAt: new Date(),
     },
   })
 
@@ -186,7 +173,7 @@ async function main() {
 
   const debtorCode = "314159"
   const creditorCode = "271828"
-  await prisma.swapConfirmationCode.createMany({
+  await prisma.swapCode.createMany({
     data: [
       {
         tradeId: ids.trade,
@@ -249,7 +236,7 @@ async function main() {
   check("a non-participant is refused", asStranger.status === 403, asStranger.status)
 
   // An expired code stops being readable.
-  await prisma.swapConfirmationCode.update({
+  await prisma.swapCode.update({
     where: { tradeId_userId: { tradeId: ids.trade, userId: ids.debtor } },
     data: { expiresAt: new Date(Date.now() - 1000) },
   })
@@ -260,82 +247,20 @@ async function main() {
   // ── 3. the settle route ─────────────────────────────────────────────────
   console.log("\n── POST /api/v1/contracts/[id]/settle ────────────────────────")
 
-  // A creditor must not be able to pay their own debtor's debt.
-  const wrongSide = await call(`/api/v1/contracts/${ids.contract}/settle`, creditorToken, {
+  // DPAs were retired on 16 Sep 2026: every contracts route is a 410 stub,
+  // and schema v2 dropped the table. What remains to check is the stub.
+  const stub = await call(`/api/v1/contracts/${ids.contract}/settle`, debtorToken, {
     method: "POST",
     body: JSON.stringify({ amountLeaves: 10 }),
   })
-  check("a creditor gets 404, not 403", wrongSide.status === 404, wrongSide.status)
-
-  // More than is owed.
-  const tooMuch = await call(`/api/v1/contracts/${ids.contract}/settle`, debtorToken, {
-    method: "POST",
-    body: JSON.stringify({ amountLeaves: 500 }),
-  })
-  check("over the debt is 400", tooMuch.status === 400, tooMuch.status)
-  check("and names the outstanding figure", tooMuch.body?.meta?.outstanding === 200, tooMuch.body?.meta)
-
-  // A partial payment.
-  const partial = await call(`/api/v1/contracts/${ids.contract}/settle`, debtorToken, {
-    method: "POST",
-    body: JSON.stringify({ amountLeaves: 120 }),
-  })
-  check("a partial payment is 200", partial.status === 200, partial.body)
-  check("it reports the amount", partial.body?.data?.payment?.amountLeaves === 120, partial.body?.data?.payment)
-  check("it is not fulfilled yet", partial.body?.data?.payment?.fulfilled === false)
-  check("it reports what is left", partial.body?.data?.payment?.remainingLeaves === 80)
-  check("it reports the new balance", partial.body?.data?.viewer?.leaves === 130, partial.body?.data?.viewer)
-  check("the contract comes back ACTIVE", partial.body?.data?.contract?.status === "ACTIVE")
-  check("with the paid figure on it", partial.body?.data?.contract?.amountPaidLeaves === 120)
-
-  // More than the balance covers. 130 held, 80 owed — so ask for the 80 after
-  // dropping the balance below it.
-  await prisma.user.update({ where: { id: ids.debtor }, data: { leaves: 50 } })
-  const broke = await call(`/api/v1/contracts/${ids.contract}/settle`, debtorToken, {
-    method: "POST",
-    body: JSON.stringify({ amountLeaves: 80 }),
-  })
-  check("over the balance is 400", broke.status === 400, broke.status)
-  check("with a branchable rule", broke.body?.meta?.rule === "INSUFFICIENT_LEAVES", broke.body?.meta)
-  check("and both figures", broke.body?.meta?.balance === 50 && broke.body?.meta?.requested === 80, broke.body?.meta)
-
-  const stillFifty = await prisma.user.findUniqueOrThrow({ where: { id: ids.debtor } })
-  // Meaningful only because the partial payment above already moved this
-  // balance once; 50 is what the refusal has to have LEFT alone, not a value
-  // it started at.
-  check("the refusal moved nothing", stillFifty.leaves === 50, stillFifty.leaves)
-
-  // No amount at all = pay the remainder. Fund it first.
-  await prisma.user.update({ where: { id: ids.debtor }, data: { leaves: 500 } })
-  const rest = await call(`/api/v1/contracts/${ids.contract}/settle`, debtorToken, {
-    method: "POST",
-    body: JSON.stringify({}),
-  })
-  check("no amount pays the remainder", rest.status === 200 && rest.body?.data?.payment?.amountLeaves === 80, rest.body?.data?.payment)
-  check("and FULFILLS it", rest.body?.data?.payment?.fulfilled === true)
-  check("contract reads FULFILLED", rest.body?.data?.contract?.status === "FULFILLED")
-  check("nothing left owing", rest.body?.data?.payment?.remainingLeaves === 0)
-
-  // Paying a settled agreement.
-  const again = await call(`/api/v1/contracts/${ids.contract}/settle`, debtorToken, {
-    method: "POST",
-    body: JSON.stringify({ amountLeaves: 10 }),
-  })
-  check("settling a settled one is 409", again.status === 409, again.status)
-  check("with a branchable rule", again.body?.meta?.rule === "CONTRACT_NOT_OWING", again.body?.meta)
-
-  // The creditor actually received it all.
-  const creditor = await prisma.user.findUniqueOrThrow({ where: { id: ids.creditor } })
-  check("the creditor received 200 in total", creditor.leaves === 240, creditor.leaves)
-  check("the creditor's lifetimeLeaves is untouched", creditor.lifetimeLeaves === 40, creditor.lifetimeLeaves)
+  check("the retired settle route answers 410 GONE", stub.status === 410, stub.status)
 }
 
 async function cleanup() {
   await prisma.leafTransaction.deleteMany({
     where: { userId: { in: [ids.debtor, ids.creditor, ids.stranger] } },
   })
-  await prisma.swapConfirmationCode.deleteMany({ where: { tradeId: ids.trade } })
-  await prisma.deferredContract.deleteMany({ where: { id: ids.contract } })
+  await prisma.swapCode.deleteMany({ where: { tradeId: ids.trade } })
   await prisma.tradeRequest.deleteMany({ where: { id: ids.trade } })
   await prisma.item.deleteMany({ where: { id: { in: [ids.itemA, ids.itemB] } } })
   await prisma.user.deleteMany({ where: { id: { in: [ids.debtor, ids.creditor, ids.stranger] } } })

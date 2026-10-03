@@ -161,9 +161,10 @@ export async function GET(req: NextRequest) {
   if (featuredOwnerIds.length > 0) {
     const rows = await prisma.$queryRaw<Array<{ userId: string; id: string; name: string; icon: string; imageUrl: string | null }>>`
       SELECT ua."userId", a.id, a.name, a.icon, a."imageUrl"
-      FROM "UserAchievement" ua
+      FROM "UserProgress" ua
       JOIN "Achievement" a ON a.id = ua."achievementId"
-      WHERE ua."userId" = ANY (${featuredOwnerIds})
+      WHERE ua."type" = 'ACHIEVEMENT'
+        AND ua."userId" = ANY (${featuredOwnerIds})
         AND (
           ua."homeDisplayOrder" IS NOT NULL
           OR ua."displayOrder" IS NOT NULL

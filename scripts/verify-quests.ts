@@ -59,7 +59,7 @@ async function cleanup() {
 function mkItem(ownerId: string, title: string, valueLeaves: number) {
   return prisma.item.create({
     data: {
-      title: `${P}${title}`, description: "x", images: "[]",
+      title: `${P}${title}`, description: "x", 
       category: "OTHER", condition: "GOOD", valueLeaves, userId: ownerId,
     },
   })
@@ -74,7 +74,7 @@ async function userWithQuest(quest: QuestKind, at: Date, tag: string): Promise<{
     })
     const qs = await reconcileQuests(candidate.id, at)
     if (qs.some((q) => q.quest === quest)) return candidate
-    await prisma.questAssignment.deleteMany({ where: { userId: candidate.id } })
+    await prisma.userProgress.deleteMany({ where: { userId: candidate.id, type: "QUEST" } })
     await prisma.user.delete({ where: { id: candidate.id } })
   }
   return null
@@ -256,7 +256,7 @@ async function main() {
   await mkItem(person.id, "person-listing", 100)
   settleQuestsAsync(person.id, ["LIST_ITEM"])
   const paid = await poll(
-    () => prisma.questAssignment.findFirst({ where: { userId: person.id, quest: "LIST_ITEM" } }),
+    () => prisma.userProgress.findFirst({ where: { userId: person.id, type: "QUEST", quest: "LIST_ITEM" } }),
     (a) => a?.completedAt != null,
   )
   check("a person's listing pays LIST_ITEM through the event path", paid?.completedAt != null)
@@ -269,7 +269,7 @@ async function main() {
   await mkItem(orgRow.id, "org-listing", 100)
   settleQuestsAsync(orgRow.id, ["LIST_ITEM"])
   await new Promise((r) => setTimeout(r, 2500))
-  const orgAssignments = await prisma.questAssignment.count({ where: { userId: orgRow.id } })
+  const orgAssignments = await prisma.userProgress.count({ where: { userId: orgRow.id, type: "QUEST" } })
   check("an org account gets no quest assignments from the event path", orgAssignments === 0, String(orgAssignments))
   const orgBal = await prisma.user.findUniqueOrThrow({ where: { id: orgRow.id }, select: { leaves: true } })
   check("...and no Leaves", orgBal.leaves === 0, String(orgBal.leaves))

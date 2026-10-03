@@ -67,7 +67,7 @@ async function cleanup() {
   const items = await prisma.item.findMany({ where: { userId: { in: ids } }, select: { id: true } })
   const itemIds = items.map((i) => i.id)
   await prisma.adminAction.deleteMany({ where: { OR: [{ actorId: { in: ids } }, { targetId: { in: [...ids, ...itemIds] } }] } })
-  await prisma.listingAppeal.deleteMany({ where: { itemId: { in: itemIds } } })
+  await prisma.moderationCase.deleteMany({ where: { itemId: { in: itemIds } } })
   await prisma.notification.deleteMany({ where: { OR: [{ userId: { in: ids } }, { actorId: { in: ids } }] } })
   await prisma.item.deleteMany({ where: { userId: { in: ids } } })
   await prisma.user.deleteMany({ where: { id: { in: ids } } })
@@ -84,7 +84,7 @@ async function makeUser(tag: string, role: "USER" | "ADMIN" = "USER") {
 async function makeReview(userId: string, title: string, status: "PENDING_REVIEW" | "AVAILABLE" = "PENDING_REVIEW") {
   return prisma.item.create({
     data: {
-      title, description: title, images: "[]", category: "BOOKS", condition: "GOOD",
+      title, description: title, category: "BOOKS", condition: "GOOD",
       valueLeaves: status === "PENDING_REVIEW" ? 2500 : 100, suggestedLeaves: status === "PENDING_REVIEW" ? 300 : 100,
       valueSetByUser: status === "PENDING_REVIEW", status, userId,
     },

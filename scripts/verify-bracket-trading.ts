@@ -98,7 +98,7 @@ async function mkUser(tag: string, leaves = 0) {
 async function mkItem(userId: string, tag: string, valueLeaves: number) {
   return prisma.item.create({
     data: {
-      title: `${P}${tag}`, description: "fixture", images: "[]", category: "OTHER", condition: "GOOD",
+      title: `${P}${tag}`, description: "fixture", category: "OTHER", condition: "GOOD",
       valueLeaves, suggestedLeaves: valueLeaves, status: "AVAILABLE", userId,
     },
     select: { id: true, title: true },
@@ -431,7 +431,7 @@ async function main() {
     // point is what the completion transaction does.
     const start1 = await post(`/api/trades/${tradeId}/confirm/start`, alice.token, {})
     void start1
-    const codes = await prisma.swapConfirmationCode.findMany({ where: { tradeId }, select: { userId: true } })
+    const codes = await prisma.swapCode.findMany({ where: { tradeId }, select: { userId: true } })
     check("two codes exist", codes.length === 2, codes)
 
     // The codes are sealed; the harness cannot read them, so completion is

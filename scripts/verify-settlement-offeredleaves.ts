@@ -51,7 +51,7 @@ async function cleanup() {
     select: { id: true },
   })
   const tradeIds = trades.map((t) => t.id)
-  await prisma.swapConfirmationCode.deleteMany({ where: { tradeId: { in: tradeIds } } })
+  await prisma.swapCode.deleteMany({ where: { tradeId: { in: tradeIds } } })
   await prisma.leafTransaction.deleteMany({ where: { userId: { in: ids } } })
   await prisma.taskCompletion.deleteMany({ where: { userId: { in: ids } } })
   await prisma.review.deleteMany({ where: { tradeId: { in: tradeIds } } })
@@ -93,7 +93,7 @@ async function freshUser(tag: string, leaves: number) {
 
 const mkItem = (userId: string, title: string) => prisma.item.create({
   data: {
-    title: P + title, description: "d", images: "[]",
+    title: P + title, description: "d", 
     category: "BOOKS", condition: "GOOD", userId, valueLeaves: 10,
   },
 })
@@ -104,12 +104,12 @@ async function seedCodes(tradeId: string, senderId: string, receiverId: string) 
   const expiresAt = new Date(Date.now() + 15 * 60 * 1000)
   const [sh, rh] = await Promise.all([bcrypt.hash(senderCode, 10), bcrypt.hash(receiverCode, 10)])
   await prisma.$transaction([
-    prisma.swapConfirmationCode.upsert({
+    prisma.swapCode.upsert({
       where:  { tradeId_userId: { tradeId, userId: senderId } },
       create: { tradeId, userId: senderId, codeHash: sh, used: false, attempts: 0, expiresAt },
       update: { codeHash: sh, used: false, attempts: 0, expiresAt },
     }),
-    prisma.swapConfirmationCode.upsert({
+    prisma.swapCode.upsert({
       where:  { tradeId_userId: { tradeId, userId: receiverId } },
       create: { tradeId, userId: receiverId, codeHash: rh, used: false, attempts: 0, expiresAt },
       update: { codeHash: rh, used: false, attempts: 0, expiresAt },
@@ -221,10 +221,10 @@ async function main() {
       String(r.completedAt))
     for (const [who, id] of [["sender", r.a.id], ["receiver", r.b.id]] as const) {
       const end = Date.now() + 8000
-      let rows = await prisma.questAssignment.findMany({ where: { userId: id } })
+      let rows = await prisma.userProgress.findMany({ where: { userId: id, type: "QUEST" } })
       while (rows.length < 5 && Date.now() < end) {
         await new Promise((res) => setTimeout(res, 250))
-        rows = await prisma.questAssignment.findMany({ where: { userId: id } })
+        rows = await prisma.userProgress.findMany({ where: { userId: id, type: "QUEST" } })
       }
       check(`${who}'s quests settled by the settlement hook (no GET /api/v1/quests)`,
         rows.length === 5, `${rows.length} rows`)
@@ -234,7 +234,7 @@ async function main() {
         let paid = hard
         while (paid.completedAt == null && Date.now() < end + 4000) {
           await new Promise((res) => setTimeout(res, 250))
-          paid = await prisma.questAssignment.findUniqueOrThrow({ where: { id: hard.id } })
+          paid = await prisma.userProgress.findUniqueOrThrow({ where: { id: hard.id } })
         }
         check(`${who}'s COMPLETE_TRADE is paid`, paid.completedAt != null)
       }

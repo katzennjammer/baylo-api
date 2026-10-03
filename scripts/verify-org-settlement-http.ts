@@ -154,7 +154,7 @@ async function main() {
   }
   const item = (userId: string, title: string, valueLeaves: number) =>
     prisma.item.create({
-      data: { title: `${tag} ${title}`, description: "x", images: "[]", category: "OTHER", condition: "GOOD", valueLeaves, userId },
+      data: { title: `${tag} ${title}`, description: "x", category: "OTHER", condition: "GOOD", valueLeaves, userId },
       select: { id: true },
     })
   const shop = async (founderId: string, name: string, status: "VERIFIED" | "PENDING") => {
@@ -206,15 +206,11 @@ async function main() {
     await invariant("before anything")
 
     const owner = await person("owner")
-    const staff = await person("staff")
+    // Schema v2: organisation staff were removed; the OWNER is the only person
+    // who acts as a shop. The "staff" actor of every check below is the owner.
+    const staff = owner
     const verified = await shop(owner.id, "Store", "VERIFIED")
     const pending = await shop(owner.id, "Pending Store", "PENDING")
-    await prisma.organizationMember.createMany({
-      data: [
-        { organizationId: verified.organizationId, userId: staff.id, role: "STAFF", status: "ACTIVE" },
-        { organizationId: pending.organizationId, userId: staff.id, role: "STAFF", status: "ACTIVE" },
-      ],
-    })
     // Whatever the org path granted, the shop starts this run from zero Leaves
     // of its own making: record it and compare against it.
     const shopStart = await bal(verified.orgUserId)
@@ -448,10 +444,9 @@ async function main() {
         && (await bal(p1.id)) - p1BalBefore === p1Rows.reduce((a, r) => a + r.amount, 0), JSON.stringify(p1Rows))
     await invariant("after 4")
 
-    head("4f  hired later: p3 joins the shop AFTER trade 3 completed")
-    await prisma.organizationMember.create({
-      data: { organizationId: verified.organizationId, userId: p3.id, role: "STAFF", status: "ACTIVE" },
-    })
+    // v2: "joins the shop" is taking it over -- ownership is the only membership.
+    head("4f  taken over later: p3 becomes the shop's owner AFTER trade 3 completed")
+    await prisma.organization.update({ where: { id: verified.organizationId }, data: { ownerId: p3.id } })
     const self = await call("/api/reviews", {
       token: p3.token, orgId: verified.organizationId, method: "POST", body: { tradeId: trade3, stars: 5 },
     })

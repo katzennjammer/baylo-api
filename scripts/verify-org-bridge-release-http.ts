@@ -136,7 +136,7 @@ async function main() {
 
     const item = (userId: string, title: string, valueLeaves: number) =>
       prisma.item.create({
-        data: { title: `${tag} ${title}`, description: "x", images: "[]", category: "OTHER", condition: "GOOD", valueLeaves, userId },
+        data: { title: `${tag} ${title}`, description: "x", category: "OTHER", condition: "GOOD", valueLeaves, userId },
         select: { id: true },
       })
     const mine1 = await item(sender.id, "mug", LOW)

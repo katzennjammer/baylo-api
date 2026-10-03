@@ -90,10 +90,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       orgUserId: true,
       verificationStatus: true,
       businessDocPublicId: true,
-      members: {
-        where: { role: "OWNER", status: "ACTIVE" },
-        select: { userId: true },
-      },
+      ownerId: true,
     },
   })
   if (!row) return notFound("Organisation not found")
@@ -196,10 +193,10 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     //
     // No `actorId` — the applicant must not learn which moderator handled it,
     // the same call the ID route and resolveReport() both make.
-    if (row.members.length > 0) {
+    {
       await tx.notification.createMany({
-        data: row.members.map((m) => ({
-          userId: m.userId,
+        data: [row.ownerId].map((ownerId) => ({
+          userId: ownerId,
           // REUSES the ID verification notification types rather than adding a
           // pair of its own. They are the right shape -- "your document was
           // approved/refused, here is what it unlocks or how to fix it" -- and

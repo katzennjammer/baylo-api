@@ -109,7 +109,7 @@ async function cleanup() {
     select: { id: true },
   })
   const tradeIds = trades.map((t) => t.id)
-  await prisma.swapConfirmationCode.deleteMany({ where: { tradeId: { in: tradeIds } } })
+  await prisma.swapCode.deleteMany({ where: { tradeId: { in: tradeIds } } })
   await prisma.message.deleteMany({ where: { OR: [{ senderId: { in: ids } }, { receiverId: { in: ids } }] } })
   await prisma.review.deleteMany({ where: { tradeId: { in: tradeIds } } })
   await prisma.tradeRequest.deleteMany({ where: { id: { in: tradeIds } } })
@@ -118,7 +118,7 @@ async function cleanup() {
   await prisma.notification.deleteMany({ where: { OR: [{ userId: { in: ids } }, { actorId: { in: ids } }] } })
   await prisma.offer.deleteMany({ where: { OR: [{ senderId: { in: ids } }, { receiverId: { in: ids } }] } })
   await prisma.follow.deleteMany({ where: { OR: [{ followerId: { in: ids } }, { followeeId: { in: ids } }] } })
-  await prisma.postLike.deleteMany({ where: { userId: { in: ids } } })
+  await prisma.like.deleteMany({ where: { userId: { in: ids } } })
   await prisma.item.deleteMany({ where: { userId: { in: ids } } })
   await prisma.user.deleteMany({ where: { id: { in: ids } } })
 }
@@ -137,7 +137,7 @@ async function seed() {
   // trade with — the exact case the coarsening rule exists for.
   const withPickup = await prisma.item.create({
     data: {
-      title: `${P}pickup-item`, description: "has a real address", images: '["https://example.test/a.jpg"]',
+      title: `${P}pickup-item`, description: "has a real address", images: { create: [{ position: 0, url: "https://example.test/a.jpg" }] },
       category: "BOOKS", condition: "GOOD", valueLeaves: 40, userId: owner.id,
       pickupLat: PICKUP.lat, pickupLng: PICKUP.lng, pickupAddress: PICKUP.address,
     },
@@ -147,7 +147,7 @@ async function seed() {
   for (let i = 0; i < 6; i++) {
     await prisma.item.create({
       data: {
-        title: `${P}feed-${i}`, description: "d", images: "[]",
+        title: `${P}feed-${i}`, description: "d", 
         category: "CLOTHING", condition: "GOOD", valueLeaves: 10 + i, userId: owner.id,
       },
     })

@@ -5,6 +5,7 @@ import { sendPasswordResetEmail } from "@/lib/mailer"
 import { publicBaseUrl } from "@/lib/public-url"
 import { clientIp, enforceRateLimit } from "@/lib/rate-limit-config"
 import { forgotPasswordSchema, parseBody } from "@/lib/validation"
+import { hashResetToken } from "@/lib/reset-token"
 
 export async function POST(req: NextRequest) {
   const parsed = await parseBody(req, forgotPasswordSchema)
@@ -23,13 +24,16 @@ export async function POST(req: NextRequest) {
     const user = await prisma.user.findUnique({ where: { email } })
 
     if (user) {
-      // Delete any existing token for this email
-      await prisma.passwordResetToken.deleteMany({ where: { email } })
+      // Delete any existing reset token for this account. AuthToken (schema v2)
+      // keys it on the user, not the email, and stores only its SHA-256.
+      await prisma.authToken.deleteMany({ where: { userId: user.id, type: "PASSWORD_RESET" } })
 
       const token = crypto.randomBytes(32).toString("hex")
       const expiresAt = new Date(Date.now() + 30 * 60 * 1000) // 30 min
 
-      await prisma.passwordResetToken.create({ data: { email, token, expiresAt } })
+      await prisma.authToken.create({
+        data: { type: "PASSWORD_RESET", userId: user.id, tokenHash: hashResetToken(token), expiresAt },
+      })
 
       const resetUrl = `${publicBaseUrl(req)}/auth/reset-password?token=${token}`
       await sendPasswordResetEmail(email, resetUrl, user.name)

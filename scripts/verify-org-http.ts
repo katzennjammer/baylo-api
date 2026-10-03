@@ -204,16 +204,19 @@ async function main() {
     )
     check("and the refusal is branchable", asStranger.body.code === "ORG_CONTEXT_REFUSED")
 
-    // ── an invitation is not a permission ─────────────────────────────────
-    console.log("\ninvitations")
+    // ── schema v2: the OWNER is the only person who acts as an org ─────────
+    // Staff and invitations were removed. What survives, and is checked here,
+    // is the property the invitation flow existed to protect: acting as an org
+    // is re-checked on EVERY request, so losing the right to it takes effect on
+    // the same token, with nothing re-issued.
+    console.log("\nownership (staff removed in schema v2)")
 
-    const invited = await call(`/api/v1/organizations/${org.organizationId}/members`, {
+    const invite = await call(`/api/v1/organizations/${org.organizationId}/members`, {
       token: ownerToken,
       method: "POST",
       body: { email: `${tag}-staff@test.invalid` },
     })
-    check("an owner can invite", invited.status === 200, `status ${invited.status}`)
-    const membershipId = (invited.body as { data?: { membershipId?: string } }).data?.membershipId
+    check("inviting staff is GONE (410)", invite.status === 410, `status ${invite.status}`)
 
     const staffTooEarly = await call("/api/items", {
       token: staffToken,
@@ -221,93 +224,55 @@ async function main() {
       method: "POST",
       body: { ...listing, title: `${tag} premature` },
     })
-    check(
-      "a PENDING invitee cannot post as the org",
-      staffTooEarly.status === 403,
-      `status ${staffTooEarly.status}`,
-    )
+    check("a person who is not the owner cannot post as the org", staffTooEarly.status === 403, `status ${staffTooEarly.status}`)
 
-    const staffInvite = await call(
-      `/api/v1/organizations/${org.organizationId}/members/${membershipId}`,
-      { token: staffToken, method: "PATCH", body: { action: "accept" } },
-    )
-    check("the invitee can accept", staffInvite.status === 200, `status ${staffInvite.status}`)
-
+    // Ownership moves to that person: they may now act as the org.
+    await prisma.organization.update({ where: { id: org.organizationId }, data: { ownerId: staff.id } })
     const staffPost = await call("/api/items", {
       token: staffToken,
       orgId: org.organizationId,
       method: "POST",
       body: { ...listing, title: `${tag} staff rice` },
     })
-    check("ACTIVE staff can post as the org", staffPost.status === 201, `status ${staffPost.status}`)
+    check("the (new) owner can post as the org", staffPost.status === 201, `status ${staffPost.status}`)
     if (staffPost.status === 201) {
       created.items.push(String(staffPost.body.id))
       check(
-        "the staff member's listing belongs to the org",
+        "the listing belongs to the org",
         authorOf(staffPost.body) === org.orgUserId,
         `author ${authorOf(staffPost.body)}, expected ${org.orgUserId}`,
       )
     }
 
-    // THE REVOCATION TEST. This is the whole argument for the header being
-    // re-read per request instead of minted into the token.
-    const staffMembership = await prisma.organizationMember.findFirst({
-      where: { organizationId: org.organizationId, userId: staff.id },
-      select: { id: true },
-    })
-    await call(
-      `/api/v1/organizations/${org.organizationId}/members/${staffMembership!.id}`,
-      { token: ownerToken, method: "DELETE" },
-    )
+    // THE REVOCATION TEST. Ownership goes back; the SAME token is refused.
+    await prisma.organization.update({ where: { id: org.organizationId }, data: { ownerId: owner.id } })
     const afterRemoval = await call("/api/items", {
-      // THE SAME TOKEN as the successful post above. Nothing was re-issued.
       token: staffToken,
       orgId: org.organizationId,
       method: "POST",
       body: { ...listing, title: `${tag} revoked` },
     })
+    check("A FORMER OWNER IS REFUSED ON THE SAME TOKEN", afterRemoval.status === 403, `status ${afterRemoval.status}`)
+
+    // ── the roster and the retired staff routes ───────────────────────────
+    console.log("\nroster")
+
+    const ownerRoster = await call(`/api/v1/organizations/${org.organizationId}/members`, { token: ownerToken })
+    const roster = (ownerRoster.body as { data?: { members?: { role: string; user: { id: string } }[]; staffCount?: number } }).data
     check(
-      "REVOKED STAFF ARE REFUSED ON THE SAME TOKEN",
-      afterRemoval.status === 403,
-      `status ${afterRemoval.status}`,
+      "the owner's roster is exactly the owner",
+      ownerRoster.status === 200 && roster?.members?.length === 1 && roster.members[0].role === "OWNER" && roster.members[0].user.id === owner.id && roster.staffCount === 1,
+      JSON.stringify(roster),
     )
-
-    // ── owner-only staff management ───────────────────────────────────────
-    console.log("\nowner-only actions")
-
-    const strangerInvite = await call(`/api/v1/organizations/${org.organizationId}/members`, {
-      token: outsiderToken,
-      method: "POST",
-      body: { email: `${tag}-staff@test.invalid` },
-    })
-    check(
-      "a non-member cannot invite",
-      strangerInvite.status === 403,
-      `status ${strangerInvite.status}`,
-    )
-
     const strangerRoster = await call(`/api/v1/organizations/${org.organizationId}/members`, {
       token: outsiderToken,
     })
-    check(
-      "a non-member cannot read the roster (404, not 403)",
-      strangerRoster.status === 404,
-      `status ${strangerRoster.status}`,
-    )
-
-    const ownerMembership = await prisma.organizationMember.findFirst({
-      where: { organizationId: org.organizationId, userId: owner.id },
-      select: { id: true },
-    })
-    const lastOwner = await call(
-      `/api/v1/organizations/${org.organizationId}/members/${ownerMembership!.id}`,
+    check("a non-owner cannot read the roster (404, not 403)", strangerRoster.status === 404, `status ${strangerRoster.status}`)
+    const roleChange = await call(
+      `/api/v1/organizations/${org.organizationId}/members/${org.organizationId}`,
       { token: ownerToken, method: "PATCH", body: { role: "STAFF" } },
     )
-    check(
-      "the last owner cannot demote themselves",
-      lastOwner.status === 409,
-      `status ${lastOwner.status}`,
-    )
+    check("changing a member's role is GONE (410)", roleChange.status === 410, `status ${roleChange.status}`)
 
     // ── the profile and the badge ─────────────────────────────────────────
     console.log("\nthe org profile")
@@ -381,15 +346,8 @@ async function main() {
     created.orgs.push(rejectedOrg.organizationId)
     created.users.push(rejectedOrg.orgUserId)
 
-    await prisma.organizationMember.create({
-      data: {
-        organizationId: reviewOrg.organizationId,
-        userId: idless.id,
-        role: "STAFF",
-        status: "ACTIVE",
-        joinedAt: new Date(),
-      },
-    })
+    // v2: acting for an org means owning it.
+    await prisma.organization.update({ where: { id: reviewOrg.organizationId }, data: { ownerId: idless.id } })
 
     const personalFlag = (c: Called) =>
       (c.body as { data?: { hasPersonalActivity?: boolean } }).data?.hasPersonalActivity
@@ -420,6 +378,8 @@ async function main() {
       pendingIdless.status === 403 && pendingIdless.body.code === "ORG_VERIFICATION_PENDING",
       `status ${pendingIdless.status} code ${String(pendingIdless.body.code)}`,
     )
+    // v2: the owner checks below need the owner to own it again.
+    await prisma.organization.update({ where: { id: reviewOrg.organizationId }, data: { ownerId: owner.id } })
     const pendingVerifiedPerson = await call("/api/items", {
       token: ownerToken,
       orgId: reviewOrg.organizationId,
@@ -489,15 +449,7 @@ async function main() {
           ?.rejectionReason === "BLURRY_DOCUMENT",
       String(rejectedVerifiedPerson.body.error),
     )
-    await prisma.organizationMember.create({
-      data: {
-        organizationId: rejectedOrg.organizationId,
-        userId: idless.id,
-        role: "STAFF",
-        status: "ACTIVE",
-        joinedAt: new Date(),
-      },
-    })
+    await prisma.organization.update({ where: { id: rejectedOrg.organizationId }, data: { ownerId: idless.id } })
     const rejectedIdless = await call("/api/items", {
       token: idlessToken,
       orgId: rejectedOrg.organizationId,
@@ -568,6 +520,8 @@ async function main() {
       `status ${again.status}, rows ${grantRowsAfter}`,
     )
 
+    // v2: and back to the ID-less person, who acts for it below.
+    await prisma.organization.update({ where: { id: reviewOrg.organizationId }, data: { ownerId: idless.id } })
     const verifiedOrgPost = await call("/api/items", {
       token: idlessToken,
       orgId: reviewOrg.organizationId,

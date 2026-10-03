@@ -78,7 +78,6 @@ const mkItem = (userId: string, tag: string) =>
     data: {
       title: P + tag,
       description: "x",
-      images: "[]",
       category: "OTHER",
       condition: "GOOD",
       userId,

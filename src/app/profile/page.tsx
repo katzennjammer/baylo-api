@@ -3,6 +3,7 @@ import Image from "next/image"
 import Link from "next/link"
 import { auth } from "@root/auth"
 import prisma from "@/lib/prisma"
+import { ITEM_IMAGES, imageUrls } from "@/lib/item-images"
 import { formatDate, formatCategory, formatCondition } from "@/lib/utils"
 import AvatarImage from "@/components/AvatarImage"
 import { LeafRankBadge, TierBadge, StarRow } from "@/components/RepBadge"
@@ -14,7 +15,7 @@ export default async function ProfilePage() {
   const user = await prisma.user.findUnique({
     where: { id: session.user.id },
     include: {
-      items: { orderBy: { createdAt: "desc" } },
+      items: { orderBy: { createdAt: "desc" }, include: { images: ITEM_IMAGES } },
       sentRequests: {
         include: { requestedItem: true, receiver: { select: { name: true } } },
         orderBy: { createdAt: "desc" },
@@ -240,7 +241,7 @@ export default async function ProfilePage() {
         ) : (
           <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
             {user.items.map((item) => {
-              const imgs: string[] = JSON.parse(item.images || "[]")
+              const imgs: string[] = imageUrls(item.images)
               return (
                 <Link key={item.id} href={`/listings/${item.id}`} className="bg-white rounded-2xl border border-gray-100 shadow-sm overflow-hidden hover:shadow-md transition-shadow">
                   <div className="relative h-36 bg-gray-100">

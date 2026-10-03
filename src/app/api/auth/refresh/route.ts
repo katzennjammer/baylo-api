@@ -38,9 +38,12 @@ export async function POST(req: NextRequest) {
   if (!raw) return NextResponse.json({ error: "refreshToken is required" }, { status: 400 })
   if (raw.length > 512) return NextResponse.json({ error: "Invalid refresh token" }, { status: 400 })
 
-  const stored = await prisma.refreshToken.findUnique({
+  const found = await prisma.authToken.findUnique({
     where: { tokenHash: hashRefreshToken(raw) },
   })
+  // AuthToken holds every token type (schema v2); only a REFRESH row with its
+  // family is a refresh token. Anything else is as unknown as no row at all.
+  const stored = found && found.type === "REFRESH" && found.familyId ? { ...found, familyId: found.familyId } : null
 
   // Unknown token. Nothing to revoke — a hash we have never seen cannot tell us
   // which family, if any, it belonged to.
@@ -65,7 +68,7 @@ export async function POST(req: NextRequest) {
   // Spend it. Conditional on usedAt still being null, so two requests racing
   // with the same token cannot both succeed: the loser gets count === 0 and is
   // treated as the replay it is indistinguishable from.
-  const spent = await prisma.refreshToken.updateMany({
+  const spent = await prisma.authToken.updateMany({
     where: { id: stored.id, usedAt: null, revokedAt: null },
     data: { usedAt: new Date() },
   })

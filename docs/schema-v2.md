@@ -341,6 +341,28 @@ Week-2 code should keep #18 and #20 on their own commits for the same reason.
 - **Raw SQL resolves through `search_path` to `public` (live).** Every raw statement written in week 2 must be schema-qualified, or the code must run against a database where public is not live.
 - Rebuild from a fresher backup: `npx tsx --env-file=.env scripts/schema-v2/build-scratch.ts <backup.sql> --schema schema_v2_wk1 --replace`, then run `prisma migrate resolve --applied` for each migration with `?schema=schema_v2_wk1`, then `verify-v2.ts`.
 
+## 4b. Week 2, Phase A (core): what changed beyond the table renames
+
+- **Each phase is a consistent set.** On the Phase A commit, `schema.prisma` models the core-only database (Offer, TradeRequest and TaskCompletion are still there), and the ledger and trade migrations wait in `prisma/schema-v2-pending/`. Phases B and C each move their migration back and change the schema in the same commit. `build-scratch.ts` applies only what is in `prisma/migrations/`.
+- **Raw SQL is pinned to the copy.** For a `schema_v2_*` URL, `src/lib/prisma.ts` connects with `search_path="<schema>",extensions`. An unqualified `$queryRaw`/`$executeRaw` therefore resolves to the copy, and `public` (live) is not on the path. This closes the 23 Sep raw-SQL bug class at the connection instead of per call site. `verify-perishable-schema-qualification.ts` now proves the inverted property.
+- **Wire shapes kept.**
+  - `images` stays a `string[]` (v1) or a JSON string (legacy routes and admin), built from ordered `ItemImage` rows via `ITEM_IMAGES`; `imageHash` = the position-0 hash.
+  - `lookingFor` / `lookingForCategories` are built from `ItemWantedCategory`.
+  - `featuredUntil` is always `null`.
+  - Comment `likeCount`/`liked` are always 0/false.
+  - `openContracts` is always `[]`.
+  - Org `role` is always `"OWNER"`, `staffCount` 1, `invitations` `[]`.
+  - Report, audit and user payloads keep their old keys (`reporter`, `resolvedAt`, `resolutionNote`, `reportId`, `_count.reportsMade`).
+- **Retired endpoints answer instead of disappearing**, the v1/contracts convention:
+  - `GET /api/v1/featured` → an empty list, so old builds draw nothing;
+  - `POST /api/v1/items/[id]/boost` → 410;
+  - staff invite, role and remove (`members` POST, `members/[memberId]` PATCH/DELETE) → 410; `members` GET returns the owner alone;
+  - `DELETE /api/messages` (hide a conversation) → 410;
+  - `posts/[id]/comments/[commentId]/like` → deleted, since it was web-only.
+- **Shop permissions** (act as, post, trade, chat, Pusher channel, inbox, self-trade refusal) read `Organization.ownerId`. The tests that exercised staff now move ownership to stand in for "joins / is removed".
+- **Achievement display** writes are typed `userProgress.updateMany` calls scoped by `type`; the raw SQL and its column feature-detect are gone.
+- **Retired scripts:** `expire-featured.ts`, and `backfill-null-display-order.ts` (a one-off live repair of three rows, done 23 Sep).
+
 ## 5. Week-3 cutover (outline, not yet rehearsed against live)
 
 1. Freeze writes (maintenance) and take a backup with `backup-baylo-pg.ps1`, which must verify.

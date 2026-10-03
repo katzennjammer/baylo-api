@@ -96,8 +96,8 @@ export async function deleteAccount(
     })
 
     // ── Sessions ────────────────────────────────────────────────────────────
-    const revoked = await tx.refreshToken.updateMany({
-      where: { userId, revokedAt: null },
+    const revoked = await tx.authToken.updateMany({
+      where: { userId, type: "REFRESH", revokedAt: null },
       data: { revokedAt: now },
     })
 
@@ -114,7 +114,7 @@ export async function deleteAccount(
     })
 
     // Unused confirmation codes are credentials; they go.
-    await tx.swapConfirmationCode.deleteMany({ where: { userId } })
+    await tx.swapCode.deleteMany({ where: { userId } })
 
     // ── Personal content ────────────────────────────────────────────────────
     // Message bodies are the user's own words. The rows stay so the other
@@ -123,18 +123,17 @@ export async function deleteAccount(
       where: { senderId: userId },
       data: { content: "[deleted]" },
     })
-    await tx.postComment.updateMany({ where: { userId }, data: { content: "[deleted]" } })
+    await tx.comment.updateMany({ where: { userId }, data: { content: "[deleted]" } })
     await tx.review.updateMany({ where: { reviewerId: userId }, data: { comment: null } })
 
     // Social graph and notification history carry no value once the account is
     // gone, and notifications embed the user's name in their text.
     await tx.follow.deleteMany({ where: { OR: [{ followerId: userId }, { followeeId: userId }] } })
     await tx.notification.deleteMany({ where: { OR: [{ userId }, { actorId: userId }] } })
-    await tx.postLike.deleteMany({ where: { userId } })
-    await tx.commentLike.deleteMany({ where: { userId } })
-    // Reset tokens are keyed by email, so they are removed by the OLD address
-    // before that address is overwritten below.
-    await tx.passwordResetToken.deleteMany({ where: { email: user.email } })
+    await tx.like.deleteMany({ where: { userId } })
+    // Reset and verification links go too (AuthToken, keyed by user since schema
+    // v2). Refresh tokens are revoked above rather than deleted.
+    await tx.authToken.deleteMany({ where: { userId, type: { in: ["PASSWORD_RESET", "EMAIL_VERIFICATION"] } } })
 
     // ── Government ID submissions ───────────────────────────────────────────
     //

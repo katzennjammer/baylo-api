@@ -97,19 +97,12 @@ export async function GET(
           // banner or a paragraph.
           bannerUrl: true,
           description: true,
-          _count: { select: { members: { where: { status: "ACTIVE" } } } },
           /**
-           * The VIEWER'S OWN membership, if any -- at most one row, by the
-           * (organizationId, userId) unique. It decides whether the client
-           * shows the staff roster (members only; GET .../members already
-           * 404s everyone else) and the owner's Edit shop button. ACTIVE only,
-           * for the reason activeOrgsFor() gives: an invitation is not a grant.
+           * Whether the VIEWER owns this shop (schema v2: the owner is the
+           * only person behind an organisation). Decides the owner's Edit shop
+           * button. Read as a comparison below; the id itself is not sent.
            */
-          members: {
-            where: { userId: viewerId, status: "ACTIVE" },
-            select: { role: true },
-            take: 1,
-          },
+          ownerId: true,
         },
       },
       _count: {
@@ -141,9 +134,10 @@ export async function GET(
              a."icon",
              a."imageUrl",
              ua."displayOrder"
-      FROM "UserAchievement" ua
+      FROM "UserProgress" ua
       JOIN "Achievement" a ON a.id = ua."achievementId"
-      WHERE ua."userId" = ${user.id}
+      WHERE ua."type" = 'ACHIEVEMENT'
+        AND ua."userId" = ${user.id}
         AND ua."displayOrder" IS NOT NULL
       ORDER BY ua."displayOrder" ASC, ua."unlockedAt" DESC
     `,
@@ -241,12 +235,13 @@ export async function GET(
           ? {
               ...orgBadge(user.organization),
               createdAt: user.organization.createdAt,
-              staffCount: user.organization._count.members,
+              // Always 1 since schema v2 (the owner); kept for shipped clients.
+              staffCount: 1,
               bannerUrl: user.organization.bannerUrl,
               description: user.organization.description,
               completedTrades: orgCompletedTrades ?? 0,
-              /** "OWNER" | "STAFF" when the viewer is an ACTIVE member, else null. */
-              viewerRole: user.organization.members[0]?.role ?? null,
+              /** "OWNER" when the viewer owns this shop, else null. */
+              viewerRole: user.organization.ownerId === viewerId ? ("OWNER" as const) : null,
             }
           : null,
         isVerified: user.isVerified,
@@ -262,7 +257,8 @@ export async function GET(
         followers: user._count.followers,
         following: user._count.following,
         /**
-         * ACTIVE staff, or null for a person.
+         * The people behind an organisation -- always 1 (its owner) since
+         * schema v2, when staff were removed -- or null for a person.
          *
          * Sent BESIDE followers/following rather than instead of them, even
          * though the org header renders it in their place. An organisation
@@ -271,7 +267,7 @@ export async function GET(
          * about the data to save the client an `if`. Which number to show is
          * the client's choice; what is true is this endpoint's job.
          */
-        staff: user.organization ? user.organization._count.members : null,
+        staff: user.organization ? 1 : null,
       },
       follow: {
         status: mine?.status ?? "NONE",

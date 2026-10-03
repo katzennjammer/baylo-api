@@ -10,6 +10,8 @@ import {
 } from "@/lib/moderation"
 import ModerationActions from "./ModerationActions"
 import ReportImageViewer from "./ReportImageViewer"
+import { ITEM_IMAGES, toImageUrls, type ImagesLike } from "@/lib/item-images"
+import { REPORT, asReport } from "@/lib/report-case"
 
 export const dynamic = "force-dynamic"
 export const revalidate = 0
@@ -31,14 +33,8 @@ const card: React.CSSProperties = {
 }
 const label: React.CSSProperties = { fontSize: 12, color: "#999", fontWeight: 600 }
 
-function parseImages(raw: string | null | undefined): string[] {
-  if (!raw) return []
-  try {
-    const parsed: unknown = JSON.parse(raw)
-    return Array.isArray(parsed) ? parsed.filter((value): value is string => typeof value === "string") : []
-  } catch {
-    return []
-  }
+function parseImages(raw: ImagesLike): string[] {
+  return toImageUrls(raw)
 }
 
 export default async function ReportDetailPage({
@@ -49,20 +45,20 @@ export default async function ReportDetailPage({
   const { id } = await params
   const session = await auth()
 
-  const [report, me] = await Promise.all([
-    prisma.report.findUnique({
-      where: { id },
+  const [reportRow, me] = await Promise.all([
+    prisma.moderationCase.findUnique({
+      where: { id, ...REPORT },
       select: {
         id: true, targetType: true, targetId: true, category: true,
         notes: true, status: true, createdAt: true,
-        resolvedAt: true, resolutionNote: true,
-        reporter: {
+        decidedAt: true, decisionNote: true,
+        filedBy: {
           select: {
             id: true, name: true, email: true, createdAt: true,
-            _count: { select: { reportsMade: true } },
+            _count: { select: { casesFiled: { where: REPORT } } },
           },
         },
-        resolvedBy: { select: { name: true } },
+        decidedBy: { select: { name: true } },
       },
     }),
     prisma.user.findUnique({
@@ -71,7 +67,9 @@ export default async function ReportDetailPage({
     }),
   ])
 
-  if (!report) notFound()
+  if (!reportRow) notFound()
+  // A REPORT case under the old field names (reporter, resolvedAt, ...). See @/lib/report-case.
+  const report = asReport(reportRow)
 
   const targetType = toWireTarget(report.targetType)
 
@@ -83,7 +81,7 @@ export default async function ReportDetailPage({
       ? prisma.item.findUnique({
           where: { id: report.targetId },
           select: {
-            id: true, title: true, description: true, images: true, category: true,
+            id: true, title: true, description: true, images: ITEM_IMAGES, category: true,
             condition: true, valueLeaves: true, status: true,
             moderationHiddenAt: true, createdAt: true,
             user: { select: { id: true, name: true, email: true, suspendedAt: true, suspendedUntil: true } },
@@ -99,7 +97,7 @@ export default async function ReportDetailPage({
             suspendedAt: true, suspendedUntil: true, deletedAt: true,
             _count: { select: { items: true } },
             items: {
-              select: { id: true, title: true, images: true, status: true, moderationHiddenAt: true },
+              select: { id: true, title: true, images: ITEM_IMAGES, status: true, moderationHiddenAt: true },
               orderBy: { createdAt: "desc" },
               take: 6,
             },
@@ -122,7 +120,7 @@ export default async function ReportDetailPage({
           select: {
             id: true, caption: true, createdAt: true, expiresAt: true, deletedAt: true,
             user: { select: { id: true, name: true, email: true, suspendedAt: true, suspendedUntil: true } },
-            item: { select: { id: true, title: true, images: true, status: true, moderationHiddenAt: true } },
+            item: { select: { id: true, title: true, images: ITEM_IMAGES, status: true, moderationHiddenAt: true } },
           },
         })
       : null,
@@ -148,12 +146,12 @@ export default async function ReportDetailPage({
         ).reverse()
       : []
 
-  const [otherReports, targetHistory, reporterHistory] = await Promise.all([
-    prisma.report.findMany({
-      where: { targetType: report.targetType, targetId: report.targetId, id: { not: report.id } },
+  const [otherReportRows, targetHistory, reporterHistory] = await Promise.all([
+    prisma.moderationCase.findMany({
+      where: { ...REPORT, targetType: report.targetType, targetId: report.targetId, id: { not: report.id } },
       select: {
         id: true, category: true, status: true, notes: true, createdAt: true,
-        reporter: { select: { name: true } },
+        filedBy: { select: { name: true } },
       },
       orderBy: { createdAt: "desc" },
       take: 25,
@@ -170,12 +168,14 @@ export default async function ReportDetailPage({
       orderBy: { createdAt: "desc" },
       take: 25,
     }),
-    prisma.report.groupBy({
+    prisma.moderationCase.groupBy({
       by: ["status"],
-      where: { reporterId: report.reporter.id },
+      where: { ...REPORT, filedById: report.reporter.id },
       _count: { id: true },
     }),
   ])
+
+  const otherReports = otherReportRows.map(asReport)
 
   // Who the action panel would act on. For a listing that is its owner; for a
   // message its sender; for a user report the user themselves.
@@ -417,7 +417,7 @@ export default async function ReportDetailPage({
             <div style={label}>{report.reporter.email}</div>
             <div style={label}>
               Joined {report.reporter.createdAt.toLocaleDateString()} ·{" "}
-              {report.reporter._count.reportsMade} reports filed
+              {report.reporter._count.casesFiled} reports filed
             </div>
             {/*
               A reporter whose reports are mostly dismissed is itself a signal,

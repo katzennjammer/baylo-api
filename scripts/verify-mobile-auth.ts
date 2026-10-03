@@ -290,7 +290,7 @@ async function main() {
 
   // Issuing a new token must invalidate the previous one, or "send me another"
   // widens the window instead of moving it.
-  const liveTokens = await prisma.emailVerificationToken.count({ where: { userId } })
+  const liveTokens = await prisma.authToken.count({ where: { userId, type: "EMAIL_VERIFICATION" as const } })
   check("only ONE verification token is live after three sends", liveTokens === 1, `count=${liveTokens}`)
 
   // ── 4. Redemption over the native transport ───────────────────────────────

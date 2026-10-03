@@ -19,7 +19,8 @@ export default async function MessagesPage({
 
   const userId = session.user.id
 
-  const [conversations, hiddenRows] = await Promise.all([
+  // (Hidden conversations were removed in schema v2.)
+  const [conversations] = await Promise.all([
     prisma.message.findMany({
       where: { OR: [{ senderId: userId }, { receiverId: userId }] },
       include: {
@@ -28,18 +29,11 @@ export default async function MessagesPage({
       },
       orderBy: { createdAt: "desc" },
     }),
-    prisma.conversationHide.findMany({
-      where: { viewerId: userId },
-      select: { partnerId: true },
-    }),
   ])
-
-  const hiddenPartners = new Set(hiddenRows.map((row) => row.partnerId))
 
   const seen = new Set<string>()
   const uniqueConversations = conversations.filter((msg) => {
     const partnerId = msg.senderId === userId ? msg.receiverId : msg.senderId
-    if (hiddenPartners.has(partnerId)) return false
     if (seen.has(partnerId)) return false
     seen.add(partnerId)
     return true

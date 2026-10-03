@@ -15,6 +15,7 @@ import { expireStaleOffers } from "@/lib/offers"
 import { ok, unauthenticated, notFound } from "@/lib/v1/envelope"
 import { parseQuery } from "@/lib/v1/query"
 import { V1_ITEM_SELECT, V1_ITEM_OWNER_SELECT, V1_ITEM_SAFEZONE_SELECT, v1ItemStatsSelect, v1Item, type V1ItemRow } from "@/lib/v1/item"
+import { ITEM_IMAGES, leadHash, toImageUrls, type ImagesLike } from "@/lib/item-images"
 
 export const dynamic = "force-dynamic"
 
@@ -149,7 +150,6 @@ export async function GET(
     where: { id, OR: [{ userId: { in: ownerIds } }, visibleItemWhere(viewerId)] },
     select: {
       ...V1_ITEM_SELECT,
-      imageHash: true,
       updatedAt: true,
       user: { select: V1_ITEM_OWNER_SELECT },
       ...v1ItemStatsSelect(viewerId),
@@ -208,7 +208,7 @@ export async function GET(
       ? Promise.resolve([])
       : prisma.item.findMany({
           where: { userId: viewerId, status: "AVAILABLE", moderationHiddenAt: null },
-          select: { id: true, title: true, images: true },
+          select: { id: true, title: true, images: ITEM_IMAGES },
           orderBy: [{ createdAt: "desc" }, { id: "desc" }],
           take: 50,
         }),
@@ -226,19 +226,11 @@ export async function GET(
   // the pickup point they posted, precisely, as any owner does.
   const shaped = v1Item(item as unknown as V1ItemRow, isOwner ? item.userId : viewerId, access, tiers)
 
-  const firstImage = (raw: string): string | null => {
-    try {
-      const parsedImages: unknown = JSON.parse(raw)
-      return Array.isArray(parsedImages) && typeof parsedImages[0] === "string"
-        ? parsedImages[0]
-        : null
-    } catch {
-      return null
-    }
-  }
+  const firstImage = (raw: ImagesLike): string | null => toImageUrls(raw)[0] ?? null
 
   return ok({
-    item: { ...shaped, imageHash: item.imageHash, updatedAt: item.updatedAt },
+    // imageHash: the cover photo's hash, rebuilt from ItemImage (schema v2).
+    item: { ...shaped, imageHash: leadHash(item.images), updatedAt: item.updatedAt },
     // What happened to this listing, for its owner. NULL for everyone else
     // and for a listing nothing has happened to. The client draws the review
     // screen from this block alone -- both values, both brackets, the cap it

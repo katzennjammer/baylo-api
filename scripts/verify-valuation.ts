@@ -408,7 +408,7 @@ async function main() {
   for (const [i, sIt] of seeded.entries()) {
     await prisma.item.create({
       data: {
-        title: `${P}comp-${i}`, description: "settled comparable", images: "[]",
+        title: `${P}comp-${i}`, description: "settled comparable", 
         category: "PLANTS", condition: sIt.condition, valueLeaves: sIt.valueLeaves,
         status: "OWNED", userId: user.id,
       },

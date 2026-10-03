@@ -551,7 +551,7 @@ async function normalMode(adminToken: string) {
   check("an oversized document → 400", oversized.status === 400, `got ${oversized.status}`)
 
   const afterRefusals = await prisma.organization.count({
-    where: { members: { some: { userId: founder4 } } },
+    where: { ownerId: founder4 },
   })
   check("THREE REFUSALS CREATED NO ORGANISATION", afterRefusals === 0, `${afterRefusals} row(s)`)
 
@@ -569,14 +569,14 @@ async function normalMode(adminToken: string) {
   if (typeof retryId === "string") madeOrgs.push(retryId)
   check(
     "…leaving exactly one organisation for that account",
-    (await prisma.organization.count({ where: { members: { some: { userId: founder4 } } } })) === 1,
+    (await prisma.organization.count({ where: { ownerId: founder4 } })) === 1,
   )
 
   const second = await signup(t4, { name: `${P}One Too Many` })
   check("a second organisation on the same account → 409", second.status === 409, `got ${second.status}`)
   check(
     "…and the refusal happened before anything was uploaded",
-    (await prisma.organization.count({ where: { members: { some: { userId: founder4 } } } })) === 1,
+    (await prisma.organization.count({ where: { ownerId: founder4 } })) === 1,
   )
 
   // ── 5 ── the window between the upload and the row
@@ -624,9 +624,9 @@ async function normalMode(adminToken: string) {
       // reaches the upload and fails after it — without them, "no orphan" is
       // equally true of a request that died at the front door.
       try {
-        await prisma.organizationMember.findFirst({
-          where: { userId: founder5, role: "OWNER", status: "ACTIVE" },
-          select: { organization: { select: { id: true, name: true } } },
+        await prisma.organization.findFirst({
+          where: { ownerId: founder5 },
+          select: { id: true, name: true },
         })
         preUploadQueryStillWorks = true
       } catch {
@@ -661,7 +661,7 @@ async function normalMode(adminToken: string) {
     check("the signup fails loudly rather than pretending", broken.status >= 500, `got ${broken.status}`)
     check(
       "no organisation was created",
-      (await prisma.organization.count({ where: { members: { some: { userId: founder5 } } } })) === 0,
+      (await prisma.organization.count({ where: { ownerId: founder5 } })) === 0,
     )
     check(
       "…and the transaction took the backing User row with it",
@@ -682,7 +682,7 @@ async function normalMode(adminToken: string) {
       (await signup(t5, { name: `${P}Recovered After Fault` })).status === 200,
     )
     const recoveredOrg = await prisma.organization.findFirst({
-      where: { members: { some: { userId: founder5 } } },
+      where: { ownerId: founder5 },
       select: { id: true },
     })
     if (recoveredOrg) madeOrgs.push(recoveredOrg.id)
@@ -722,14 +722,14 @@ async function degradedMode(adminToken: string) {
     (attempt.body?.error?.message ?? "").toLowerCase().includes("could not store"),
     attempt.body?.error?.message,
   )
-  check("NO ORGANISATION ROW WAS CREATED", (await prisma.organization.count({ where: { members: { some: { userId: founder } } } })) === 0)
+  check("NO ORGANISATION ROW WAS CREATED", (await prisma.organization.count({ where: { ownerId: founder } })) === 0)
   check(
     "…and no synthetic backing User row was left behind",
     (await prisma.user.count({ where: { isOrgAccount: true, name: `${P}Upload Will Fail` } })) === 0,
   )
   check(
     "…and the account is not marked as owning anything",
-    (await prisma.organizationMember.count({ where: { userId: founder } })) === 0,
+    (await prisma.organization.count({ where: { ownerId: founder } })) === 0,
   )
 
   head("7b  the destroy fails after a decision commits")

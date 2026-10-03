@@ -13,6 +13,7 @@ import {
 } from "@/lib/moderation"
 import { FilterChips } from "@/components/admin/FilterChips"
 import { StaggerGroup, StaggerItem } from "@/components/admin/Stagger"
+import { REPORT, asReport } from "@/lib/report-case"
 
 export const dynamic = "force-dynamic"
 export const revalidate = 0
@@ -65,20 +66,22 @@ export default async function AdminQueuePage({ searchParams }: Props) {
     ...(category ? { category: toDbCategory(category) } : {}),
   }
 
-  const [reports, counts] = await Promise.all([
-    prisma.report.findMany({
-      where,
+  const [reportRows, counts] = await Promise.all([
+    prisma.moderationCase.findMany({
+      where: { ...REPORT, ...where },
       select: {
         id: true, targetType: true, targetId: true, category: true,
-        notes: true, status: true, createdAt: true, resolvedAt: true,
-        reporter: { select: { id: true, name: true } },
-        resolvedBy: { select: { name: true } },
+        notes: true, status: true, createdAt: true, decidedAt: true,
+        filedBy: { select: { id: true, name: true } },
+        decidedBy: { select: { name: true } },
       },
       orderBy: [{ createdAt: "desc" }, { id: "desc" }],
       take: 100,
     }),
-    prisma.report.groupBy({ by: ["status"], _count: { id: true } }),
+    prisma.moderationCase.groupBy({ by: ["status"], where: REPORT, _count: { id: true } }),
   ])
+  // REPORT cases under the old field names. See @/lib/report-case.
+  const reports = reportRows.map(asReport)
 
   const countBy = Object.fromEntries(counts.map((c) => [c.status, c._count.id]))
 

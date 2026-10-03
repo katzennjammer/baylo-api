@@ -291,6 +291,7 @@ export async function writeAudit(
     action: AdminActionKind
     targetType: AdminTargetType
     targetId: string
+    /** The moderation case (report or appeal) this answers. Stored as AdminAction.caseId. */
     reportId?: string | null
     reason: string
     detail?: unknown
@@ -302,7 +303,7 @@ export async function writeAudit(
       action: input.action,
       targetType: input.targetType,
       targetId: input.targetId,
-      reportId: input.reportId ?? null,
+      caseId: input.reportId ?? null,
       reason: input.reason,
       detail: input.detail === undefined ? null : JSON.stringify(input.detail),
     },
@@ -343,15 +344,17 @@ export async function resolveReport(
 ) {
   const now = new Date()
 
-  await db.report.update({
-    where: { id: input.reportId },
+  // A REPORT row of ModerationCase (schema v2). The `type` in the WHERE means
+  // an appeal id can never be closed through this path.
+  await db.moderationCase.update({
+    where: { id: input.reportId, type: "REPORT" },
     data: {
       status: input.status,
       // Same statement as `status`. Never its own.
       openKey: null,
-      resolvedById: input.actorId,
-      resolvedAt: now,
-      resolutionNote: input.note,
+      decidedById: input.actorId,
+      decidedAt: now,
+      decisionNote: input.note,
     },
   })
 

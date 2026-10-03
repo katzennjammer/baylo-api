@@ -8,7 +8,9 @@ import prisma from "@/lib/prisma"
 import { awardTaskAsync } from "@/lib/tasks"
 import { settleQuestsAsync } from "@/lib/quests"
 import { createItemSchema, parseBody, categorySchema } from "@/lib/validation"
-import { imageHashRows, leadImageHash } from "@/lib/image-hashes"
+import { imageHashRows } from "@/lib/image-hashes"
+import { itemImagesCreate } from "@/lib/item-images"
+import { wantedCategoriesCreate } from "@/lib/wanted-categories"
 import { decideItemValue, reviewNotice } from "@/lib/valuation-server"
 import { visibleItemWhere } from "@/lib/blocking"
 import { enforceIdVerifiedLegacy } from "@/lib/id-verification"
@@ -114,9 +116,7 @@ export async function POST(req: NextRequest) {
       return NextResponse.json(
         {
           error:
-            acting.reason === "membership_pending"
-              ? "Accept the invitation before posting for this organisation"
-              : "You are not a member of that organisation",
+            "You are not a member of that organisation",
           code: "ORG_CONTEXT_REFUSED",
         },
         { status: 403 },
@@ -231,9 +231,8 @@ export async function POST(req: NextRequest) {
     // is a 400 with nothing written rather than an orphaned listing plus a
     // failed association. No `currentHubIds` here: nothing exists yet to
     // retain, so every hub named must be active.
-    // One derivation, two destinations. See @/lib/image-hashes.
+    // The client sends hashes by photo position. See @/lib/image-hashes.
     const hashRows = imageHashRows(body)
-    const leadHash = leadImageHash(hashRows)
 
     const hubs = await resolveHubIds(prisma, body.hubIds ?? [])
     if (!hubs.ok) return NextResponse.json({ error: hubs.message }, { status: 400 })
@@ -255,7 +254,8 @@ export async function POST(req: NextRequest) {
         // perishable never lands here — it was clamped instead.
         ...(needsReview ? { status: "PENDING_REVIEW" as const } : {}),
         wantedItems: body.wantedItems ?? null,
-        images: JSON.stringify(body.images ?? []),
+        // Photos and their hashes are one table since schema v2. See @/lib/item-images.
+        images: itemImagesCreate(body.images ?? [], hashRows),
         userId: authorId,
         // The perishable block. All four are written together or not at all;
         // the schema refuses any other combination.
@@ -268,9 +268,10 @@ export async function POST(req: NextRequest) {
             }
           : {}),
         // NOT perishable-only. This is the matcher's input and a standard
-        // listing is just as likely to name what it wants back.
+        // listing is just as likely to name what it wants back. Rows in
+        // ItemWantedCategory since schema v2; repeats collapse.
         ...(body.lookingForCategories?.length
-          ? { lookingForCategories: body.lookingForCategories }
+          ? { wantedCategories: wantedCategoriesCreate(body.lookingForCategories) }
           : {}),
         ...(hasPickup
           ? {
@@ -279,11 +280,6 @@ export async function POST(req: NextRequest) {
               pickupAddress: body.pickupAddress ?? null,
             }
           : {}),
-        // BOTH the legacy column and the per-photo rows, from one derivation so
-        // they cannot drift. `imageHash` stays because the web wizard reads it
-        // back in edit mode; `imageHashes` is what the duplicate check scans.
-        ...(leadHash ? { imageHash: leadHash } : {}),
-        ...(hashRows.length > 0 ? { imageHashes: { create: hashRows } } : {}),
         // Written inline with the item rather than in a second statement: a
         // listing that exists without the hubs its owner picked is a listing
         // that quietly lost them, and there would be no way to tell afterwards

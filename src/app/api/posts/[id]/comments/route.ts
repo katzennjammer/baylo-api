@@ -13,15 +13,13 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
     const cursor = searchParams.get("cursor")
     const take = 20
 
-    const comments = await prisma.postComment.findMany({
+    const comments = await prisma.comment.findMany({
       where: { postId, parentId: null },
       include: {
         user: { select: { id: true, name: true, avatar: true } },
-        likes: { select: { userId: true } },
         replies: {
           include: {
             user: { select: { id: true, name: true, avatar: true } },
-            likes: { select: { userId: true } },
           },
           orderBy: { createdAt: "asc" },
         },
@@ -33,22 +31,20 @@ export async function GET(req: NextRequest, { params }: { params: Promise<{ id: 
 
     const hasMore = comments.length > take
     const page = hasMore ? comments.slice(0, take) : comments
-    const myId = session.user.id
-
     const shaped = page.map((c) => ({
       id: c.id,
       content: c.content,
       createdAt: c.createdAt.toISOString(),
       user: c.user,
-      likeCount: c.likes.length,
-      liked: c.likes.some((l) => l.userId === myId),
+      likeCount: 0, // comment likes were removed in schema v2; kept on the wire for old clients
+      liked: false,
       replies: c.replies.map((r) => ({
         id: r.id,
         content: r.content,
         createdAt: r.createdAt.toISOString(),
         user: r.user,
-        likeCount: r.likes.length,
-        liked: r.likes.some((l) => l.userId === myId),
+        likeCount: 0, // comment likes were removed in schema v2; kept on the wire for old clients
+        liked: false,
       })),
     }))
 
@@ -74,7 +70,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
     })
     if (!post) return NextResponse.json({ error: "Listing not found" }, { status: 404 })
 
-    const comment = await prisma.postComment.create({
+    const comment = await prisma.comment.create({
       data: {
         postId,
         userId: session.user.id,
@@ -83,11 +79,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       },
       include: {
         user: { select: { id: true, name: true, avatar: true } },
-        likes: { select: { userId: true } },
         replies: {
           include: {
             user: { select: { id: true, name: true, avatar: true } },
-            likes: { select: { userId: true } },
           },
         },
       },

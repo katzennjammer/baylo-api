@@ -46,12 +46,6 @@ export async function GET(req: NextRequest) {
       )
     }
 
-    const hidden = await prisma.conversationHide.findUnique({
-      where: { viewerId_partnerId: { viewerId: inboxId, partnerId } },
-      select: { id: true },
-    })
-    if (hidden) return NextResponse.json([])
-
     const messages = await prisma.message.findMany({
       where: {
         OR: [
@@ -73,34 +67,17 @@ export async function GET(req: NextRequest) {
   }
 }
 
-export async function DELETE(req: NextRequest) {
-  try {
-    const session = await resolveSession()
-    if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-
-    const inbox = await resolveInbox(session.user.id, req.headers)
-    if (!inbox.ok) return legacyOrgRefusal(inbox.message)
-    const { inboxId } = inbox
-
-    const partnerId = new URL(req.url).searchParams.get("partnerId")
-    if (!partnerId) return NextResponse.json({ error: "partnerId required" }, { status: 400 })
-
-    // Acting as a shop this hides the thread for every member: one inbox.
-    const hidden = await prisma.conversationHide.upsert({
-      where: { viewerId_partnerId: { viewerId: inboxId, partnerId } },
-      create: { viewerId: inboxId, partnerId },
-      update: { hiddenAt: new Date() },
-      select: { hiddenAt: true },
-    })
-
-    await prisma.notification.deleteMany({
-      where: { userId: inboxId, actorId: partnerId, type: "NEW_MESSAGE" },
-    })
-
-    return NextResponse.json({ ok: true, hiddenAt: hidden.hiddenAt.toISOString() })
-  } catch {
-    return NextResponse.json({ error: "Internal server error" }, { status: 500 })
-  }
+/**
+ * DELETE /api/messages?partnerId= -- hiding a conversation. GONE since schema
+ * v2: the hidden-conversations feature was removed with its table
+ * (ConversationHide). 410 rather than 404 so a shipped client that still
+ * offers "hide" gets an answer it can show instead of a broken URL.
+ */
+export async function DELETE() {
+  return NextResponse.json(
+    { error: "Hiding conversations is no longer available.", code: "GONE" },
+    { status: 410 },
+  )
 }
 
 export async function POST(req: NextRequest) {
@@ -134,17 +111,6 @@ export async function POST(req: NextRequest) {
     if (blocked) return blocked
 
     const message = await prisma.$transaction(async (tx) => {
-      // A new message reopens the conversation for both people, including the
-      // recipient who hid it earlier. Message rows themselves are immutable
-      // history and are never deleted by the hide action.
-      await tx.conversationHide.deleteMany({
-        where: {
-          OR: [
-            { viewerId: senderId, partnerId: receiverId },
-            { viewerId: receiverId, partnerId: senderId },
-          ],
-        },
-      })
       return tx.message.create({
         data: {
           senderId,

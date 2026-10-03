@@ -123,9 +123,6 @@ async function cleanup() {
   })
   await prisma.adminAction.deleteMany({ where: { targetId: { in: subs.map((s) => s.id) } } })
   await prisma.idVerification.deleteMany({ where: { userId: { in: ids } } })
-  await prisma.deferredContract.deleteMany({
-    where: { OR: [{ debtorId: { in: ids } }, { creditorId: { in: ids } }] },
-  })
   await prisma.leafTransaction.deleteMany({ where: { userId: { in: ids } } })
   await prisma.notification.deleteMany({
     where: { OR: [{ userId: { in: ids } }, { actorId: { in: ids } }] },
@@ -140,9 +137,8 @@ async function cleanup() {
     where: { OR: [{ senderId: { in: ids } }, { receiverId: { in: ids } }] },
   })
   await prisma.taskCompletion.deleteMany({ where: { userId: { in: ids } } })
-  await prisma.refreshToken.deleteMany({ where: { userId: { in: ids } } })
-  await prisma.emailVerificationToken.deleteMany({ where: { userId: { in: ids } } })
-  await prisma.itemImageHash.deleteMany({ where: { item: { userId: { in: ids } } } })
+  await prisma.authToken.deleteMany({ where: { userId: { in: ids } } })
+  await prisma.itemImage.deleteMany({ where: { item: { userId: { in: ids } } } })
   await prisma.item.deleteMany({ where: { userId: { in: ids } } })
   await prisma.user.deleteMany({ where: { id: { in: ids } } })
 }
@@ -168,7 +164,7 @@ async function makeUser(
 async function makeItem(userId: string, title: string) {
   return prisma.item.create({
     data: {
-      title, description: `${title} description`, images: "[]",
+      title, description: `${title} description`, 
       category: "BOOKS", condition: "GOOD", valueLeaves: 100,
       status: "AVAILABLE", userId,
     },

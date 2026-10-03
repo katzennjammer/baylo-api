@@ -155,7 +155,6 @@ async function main() {
       data: {
         title,
         description: "x",
-        images: "[]",
         category: "OTHER",
         condition: "GOOD",
         valueLeaves,

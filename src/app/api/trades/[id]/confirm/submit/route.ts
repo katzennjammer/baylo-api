@@ -123,7 +123,7 @@ export async function POST(
 
     // The user enters their PARTNER's code (cross-exchange proves in-person meeting).
     // So we verify the submitted code against the PARTNER's stored hash.
-    const partnerCode = await prisma.swapConfirmationCode.findUnique({
+    const partnerCode = await prisma.swapCode.findUnique({
       where: { tradeId_userId: { tradeId, userId: partnerId } },
     })
 
@@ -149,7 +149,7 @@ export async function POST(
     if (!match) {
       // The increment is conditional on the value we just read, so two requests
       // racing the same code cannot both spend the same attempt slot.
-      const spent = await prisma.swapConfirmationCode.updateMany({
+      const spent = await prisma.swapCode.updateMany({
         where: { tradeId, userId: partnerId, attempts: partnerCode.attempts },
         data: { attempts: partnerCode.attempts + 1 },
       })
@@ -171,7 +171,7 @@ export async function POST(
     }
 
     // Mark the partner's code as used (= "I submitted my partner's code correctly")
-    await prisma.swapConfirmationCode.update({
+    await prisma.swapCode.update({
       where: { tradeId_userId: { tradeId, userId: partnerId } },
       data:  { used: true },
     })
@@ -229,12 +229,12 @@ export async function POST(
     }
 
     // Check if the other participant has already verified
-    const myCode = await prisma.swapConfirmationCode.findUnique({
+    const myCode = await prisma.swapCode.findUnique({
       where: { tradeId_userId: { tradeId, userId: myId } },
     })
     const bothVerified = partnerCode !== null && (myCode?.used ?? false)
     // After marking partner's code used, re-check:
-    const updatedCodes = await prisma.swapConfirmationCode.findMany({
+    const updatedCodes = await prisma.swapCode.findMany({
       where:  { tradeId },
       select: { used: true },
     })

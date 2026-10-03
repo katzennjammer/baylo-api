@@ -184,7 +184,7 @@ async function real() {
           deletedAt: null,
           sentRequests: { none: { status: "COMPLETED" } },
           receivedRequests: { none: { status: "COMPLETED" } },
-          OR: [{ sentOffers: { some: {} } }, { postLikes: { some: {} } }],
+          OR: [{ sentOffers: { some: {} } }, { likes: { some: {} } }],
         },
         select: { id: true },
       })
@@ -195,7 +195,7 @@ async function real() {
           sentRequests: { none: { status: "COMPLETED" } },
           receivedRequests: { none: { status: "COMPLETED" } },
           sentOffers: { none: {} },
-          postLikes: { none: {} },
+          likes: { none: {} },
           items: { none: { status: "AVAILABLE" } },
         },
         select: { id: true },

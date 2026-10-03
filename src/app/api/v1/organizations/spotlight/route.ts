@@ -2,12 +2,13 @@ import { resolveSession } from "@/lib/api-auth"
 import prisma from "@/lib/prisma"
 import { userNotBlocked } from "@/lib/blocking"
 import { notSuspendedWhere } from "@/lib/moderation"
-import { featuredRotation, rotationHour } from "@/lib/featured"
+import { hourlyRotation, rotationHour } from "@/lib/rotation"
 import { ok, unauthenticated } from "@/lib/v1/envelope"
 import { parseImages } from "@/lib/v1/item"
 import { categoryLabel } from "@/lib/v1/taxonomy"
 import { BUSINESS_CATEGORY_LABEL } from "@/app/api/v1/organizations/route"
 import type { BusinessCategory } from "@/lib/v1/browse-query"
+import { ITEM_IMAGES } from "@/lib/item-images"
 
 export const dynamic = "force-dynamic"
 
@@ -30,7 +31,7 @@ export const dynamic = "force-dynamic"
  *
  * ── WHICH ONES: /featured's ROTATION ────────────────────────────────────────
  *
- * featuredRotation() from @/lib/featured, seeded with SPOTLIGHT_SEED in place
+ * hourlyRotation() from @/lib/rotation, seeded with SPOTLIGHT_SEED in place
  * of a category: every eligible shop shuffled by sha256(hour, seed, id), the
  * first SPOTLIGHT_CAP shown. Fixed for the hour, a fresh draw the next, and
  * blind to size, age and trade count -- a spotlight is exposure, and with a
@@ -86,7 +87,7 @@ export async function GET() {
     select: { id: true },
     orderBy: { id: "asc" },
   })
-  const chosen = featuredRotation(candidates, SPOTLIGHT_SEED, now)
+  const chosen = hourlyRotation(candidates, SPOTLIGHT_SEED, now)
     .slice(0, SPOTLIGHT_CAP)
     .map((c) => c.id)
 
@@ -107,7 +108,7 @@ export async function GET() {
               _count: { select: { items: { where: liveListing } } },
               items: {
                 where: liveListing,
-                select: { id: true, title: true, images: true, category: true },
+                select: { id: true, title: true, images: ITEM_IMAGES, category: true },
                 orderBy: [{ createdAt: "desc" }, { id: "desc" }],
                 take: NEWEST_SCAN,
               },

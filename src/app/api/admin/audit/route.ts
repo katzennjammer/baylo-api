@@ -71,7 +71,7 @@ export async function GET(req: NextRequest) {
       action: true,
       targetType: true,
       targetId: true,
-      reportId: true,
+      caseId: true,
       reason: true,
       detail: true,
       createdAt: true,
@@ -90,7 +90,8 @@ export async function GET(req: NextRequest) {
         action: r.action,
         targetType: r.targetType,
         targetId: r.targetId,
-        reportId: r.reportId,
+        // The wire key predates ModerationCase (schema v2): a report or appeal id.
+        reportId: r.caseId,
         reason: r.reason,
         // Stored as a JSON string; parsed here so the client does not have to
         // know that. A malformed value yields null rather than throwing — one

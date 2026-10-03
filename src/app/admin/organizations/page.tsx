@@ -86,12 +86,7 @@ export default async function OrganizationQueuePage({ searchParams }: Props) {
         reviewedAt: true,
         businessDocPublicId: true,
         reviewedBy: { select: { name: true } },
-        _count: { select: { members: true } },
-        members: {
-          where: { role: "OWNER", status: "ACTIVE" },
-          select: { user: { select: { id: true, name: true, email: true } } },
-          take: 1,
-        },
+        owner: { select: { id: true, name: true, email: true } },
       },
       // Oldest first while waiting — somebody is waiting, and newest-first
       // starves the first person in the queue indefinitely.
@@ -182,7 +177,7 @@ export default async function OrganizationQueuePage({ searchParams }: Props) {
           }}
         >
           {rows.map((r, i) => {
-            const owner = r.members[0]?.user
+            const owner = r.owner
             return (
               <Link
                 key={r.id}
@@ -224,10 +219,6 @@ export default async function OrganizationQueuePage({ searchParams }: Props) {
                       {r.dtiRegistrationNumber ?? "—"}
                     </span>
                   </span>
-                </span>
-
-                <span style={{ fontSize: 12, color: "#888", minWidth: 90 }}>
-                  {r._count.members} member{r._count.members === 1 ? "" : "s"}
                 </span>
 
                 <span style={{ fontSize: 12, color: "#888", minWidth: 60, textAlign: "right" }}>

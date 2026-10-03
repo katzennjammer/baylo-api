@@ -98,7 +98,7 @@ export async function GET(
       })
     }
 
-    const codes = await prisma.swapConfirmationCode.findMany({
+    const codes = await prisma.swapCode.findMany({
       where:  { tradeId },
       // `codeSealed` is selected for BOTH rows because the query is keyed on the
       // trade, and it is OPENED for exactly one — see `mine` below. Selecting

@@ -28,7 +28,7 @@ async function main() {
   const a = await prisma.user.create({ data: { name: P + "a", email: P + "a@t.local", password: "x" } })
   const b = await prisma.user.create({ data: { name: P + "b", email: P + "b@t.local", password: "x" } })
   const mk = (uid: string, t: string) => prisma.item.create({
-    data: { title: P + t, description: "d", images: "[]", category: "BOOKS", condition: "GOOD", userId: uid },
+    data: { title: P + t, description: "d", category: "BOOKS", condition: "GOOD", userId: uid },
   })
   const i1 = await mk(a.id, "1"), i2 = await mk(b.id, "2")
   const trade = await prisma.tradeRequest.create({

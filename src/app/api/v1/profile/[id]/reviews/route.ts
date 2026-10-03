@@ -8,18 +8,14 @@ import { loadTrustTiers } from "@/lib/trust-tiers"
 import { notFound, unauthenticated, invalid, ok } from "@/lib/v1/envelope"
 import { decodeCursor, encodeCursor, olderThan, paginate } from "@/lib/v1/cursor"
 import { paginationShape, parseQuery } from "@/lib/v1/query"
+import { ITEM_IMAGES, toImageUrls, type ImagesLike } from "@/lib/item-images"
 
 export const dynamic = "force-dynamic"
 
 const querySchema = z.strictObject({ ...paginationShape })
 
-function firstImage(images: string): string | null {
-  try {
-    const parsed: unknown = JSON.parse(images)
-    return Array.isArray(parsed) && typeof parsed[0] === "string" ? parsed[0] : null
-  } catch {
-    return null
-  }
+function firstImage(raw: ImagesLike): string | null {
+  return toImageUrls(raw)[0] ?? null
 }
 
 /** GET /api/v1/profile/[id]/reviews — newest reviews received by a user. */
@@ -60,8 +56,8 @@ export async function GET(
         trade: {
           select: {
             senderId: true,
-            offeredItem: { select: { id: true, title: true, images: true, valueLeaves: true } },
-            requestedItem: { select: { id: true, title: true, images: true, valueLeaves: true } },
+            offeredItem: { select: { id: true, title: true, images: ITEM_IMAGES, valueLeaves: true } },
+            requestedItem: { select: { id: true, title: true, images: ITEM_IMAGES, valueLeaves: true } },
           },
         },
       },
