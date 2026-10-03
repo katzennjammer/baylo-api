@@ -193,6 +193,154 @@ export async function findCategoryMatches(
     .slice(0, MATCH_NOTIFY_CAP)
 }
 
+// ── Perishables: both directions ─────────────────────────────────────────────
+
+/**
+ * How many people one new PERISHABLE listing may notify.
+ *
+ * Higher than MATCH_NOTIFY_CAP because a perishable is gone in hours: a person
+ * cut by the cap has no later chance to find it. At 25 the cap bound on the
+ * live DB on 2 Oct 2026, where 50 revived demo Food listings with fresh
+ * `updatedAt` took every slot and no real account was told about a real post.
+ */
+export const PERISHABLE_MATCH_NOTIFY_CAP = 100
+
+/**
+ * Why a recipient matched a perishable. Sorted in this order.
+ *
+ *   mutual   both of the below
+ *   has      one of their listings is a category the poster said they want
+ *            back — they can offer it (the rule the perishable flow is for)
+ *   wants    one of their listings asks for the new listing's category (the
+ *            standard rule above)
+ */
+export type PerishableMatchReason = "mutual" | "has" | "wants"
+
+export interface PerishableMatch {
+  ownerId: string
+  reason: PerishableMatchReason
+  /** For "has"/"mutual": the recipient's listing whose category the poster wants. */
+  hasItemId: string | null
+  hasCategory: string | null
+  /** For "wants"/"mutual": the recipient's listing that asks for this category. */
+  wantsItemId: string | null
+}
+
+const REASON_RANK: Record<PerishableMatchReason, number> = { mutual: 0, has: 1, wants: 2 }
+
+/**
+ * Everything a recipient's listing must be, whichever rule it matched by.
+ * The same exclusions as findCategoryMatches() — see the table above it — plus
+ * SHOPS: a shop's bell filters CATEGORY_MATCH out (@/lib/inbox), so a row
+ * addressed to an org's backing account is one nobody can ever see, and under a
+ * cap it takes a slot from a person who could.
+ */
+export function perishableRecipientWhere(input: { itemId: string; authorUserId: string }) {
+  return {
+    id: { not: input.itemId },
+    userId: { not: input.authorUserId },
+    status: "AVAILABLE" as const,
+    moderationHiddenAt: null,
+    user: {
+      deletedAt: null,
+      isOrgAccount: false,
+      ...userNotBlocked(input.authorUserId),
+      ...notSuspendedWhere(),
+    },
+  }
+}
+
+/**
+ * Find the people to tell about a new PERISHABLE listing. Either direction
+ * qualifies — a perishable is offered for what the poster wants back, so the
+ * owners of those categories are the people who can act before it expires.
+ * Standard listings keep the one-directional rule; see the header for why.
+ *
+ * One row per owner, each owner's most recently touched listing standing for
+ * them in each direction.
+ */
+export async function findPerishableMatches(
+  db: Pick<PrismaClient, "item">,
+  input: {
+    itemId: string
+    authorUserId: string
+    category: string
+    lookingForCategories: readonly string[]
+  },
+): Promise<PerishableMatch[]> {
+  const base = perishableRecipientWhere(input)
+  const fetch = PERISHABLE_MATCH_NOTIFY_CAP * 4
+  const [hasRows, wantsRows] = await Promise.all([
+    input.lookingForCategories.length > 0
+      ? db.item.findMany({
+          where: { ...base, category: { in: input.lookingForCategories as never } },
+          select: { id: true, userId: true, category: true, updatedAt: true },
+          distinct: ["userId"],
+          orderBy: { updatedAt: "desc" },
+          take: fetch,
+        })
+      : Promise.resolve([]),
+    db.item.findMany({
+      where: { ...base, lookingForCategories: { has: input.category as never } },
+      select: { id: true, userId: true, updatedAt: true },
+      distinct: ["userId"],
+      orderBy: { updatedAt: "desc" },
+      take: fetch,
+    }),
+  ])
+
+  const byOwner = new Map<string, PerishableMatch & { touched: number }>()
+  for (const r of hasRows) {
+    byOwner.set(r.userId, {
+      ownerId: r.userId,
+      reason: "has",
+      hasItemId: r.id,
+      hasCategory: r.category as string,
+      wantsItemId: null,
+      touched: r.updatedAt.getTime(),
+    })
+  }
+  for (const r of wantsRows) {
+    const seen = byOwner.get(r.userId)
+    if (seen) {
+      seen.reason = "mutual"
+      seen.wantsItemId = r.id
+      seen.touched = Math.max(seen.touched, r.updatedAt.getTime())
+    } else {
+      byOwner.set(r.userId, {
+        ownerId: r.userId,
+        reason: "wants",
+        hasItemId: null,
+        hasCategory: null,
+        wantsItemId: r.id,
+        touched: r.updatedAt.getTime(),
+      })
+    }
+  }
+
+  return [...byOwner.values()]
+    .sort((a, b) => REASON_RANK[a.reason] - REASON_RANK[b.reason] || b.touched - a.touched)
+    .slice(0, PERISHABLE_MATCH_NOTIFY_CAP)
+    .map(({ touched: _touched, ...m }) => m)
+}
+
+/**
+ * The perishable sentence. Leads with the window, because the window is the
+ * news: "ends in 6 hours" is why this is worth an interruption at all.
+ */
+export function perishableMatchMessage(
+  newCategory: string,
+  hours: number | null,
+  m: Pick<PerishableMatch, "reason" | "hasCategory">,
+): string {
+  const mine = categoryLabel(newCategory)
+  const head = hours != null ? `New ${mine} listing, ends in ${hours} hours.` : `New ${mine} listing, time-limited.`
+  const theirs = m.hasCategory ? categoryLabel(m.hasCategory) : null
+  if (m.reason === "mutual") return `${head} They want ${theirs}, which you have, and you're looking for ${mine}.`
+  if (m.reason === "has") return `${head} They want ${theirs}, which you have.`
+  return `${head} You're looking for ${mine}.`
+}
+
 /**
  * The message the recipient reads.
  *
@@ -237,17 +385,28 @@ export function notifyCategoryMatchesAsync(input: {
   authorUserId: string
   category: string
   lookingForCategories: readonly string[]
+  /** Perishables match in both directions, to a larger cap; see findPerishableMatches(). */
+  isPerishable?: boolean
+  tradeWithinHours?: number | null
 }): void {
   // Nothing to do for a listing whose category nobody could have asked for by
   // name, and nothing to do before the row is visible to the matcher's query.
   void (async () => {
-    const matches = await findCategoryMatches(prisma, input)
+    const matches: { ownerId: string; message: string }[] = input.isPerishable
+      ? (await findPerishableMatches(prisma, input)).map((m) => ({
+          ownerId: m.ownerId,
+          message: perishableMatchMessage(input.category, input.tradeWithinHours ?? null, m),
+        }))
+      : (await findCategoryMatches(prisma, input)).map((m) => ({
+          ownerId: m.ownerId,
+          message: matchMessage(input.category, m.category, m.mutual),
+        }))
     if (matches.length === 0) return
 
     const rows = matches.map((m) => ({
       userId: m.ownerId,
       type: "CATEGORY_MATCH" as const,
-      message: matchMessage(input.category, m.category, m.mutual),
+      message: m.message,
       // The NEW listing, which is the only useful destination. "item" is a
       // new routing token — not "trade", not "conversation"; see the note on
       // Notification.entityType.
@@ -317,8 +476,10 @@ export function notifyCategoryMatchesAsync(input: {
         .trigger(`private-user-${m.ownerId}`, "notification-created", { type: "CATEGORY_MATCH" })
         .catch(() => {})
     }
-  })().catch(() => {
-    /* Matching is best-effort. A listing must not fail because nobody was told
-       about it — and the pull-based matchers above still surface the overlap. */
+  })().catch((e) => {
+    // Matching is best-effort: a listing must not fail because nobody was told
+    // about it. But it is LOGGED — until 2 Oct 2026 this catch was silent, and
+    // a matcher that throws looked exactly like one that found nobody.
+    console.error(`[category-match] notify failed for item ${input.itemId}`, e)
   })
 }

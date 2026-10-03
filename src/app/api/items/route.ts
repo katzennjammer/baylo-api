@@ -334,6 +334,10 @@ export async function POST(req: NextRequest) {
         authorUserId: authorId,
         category: body.category,
         lookingForCategories: body.lookingForCategories ?? [],
+        // Perishables match both ways, to a larger cap, minus shops. See
+        // findPerishableMatches().
+        isPerishable: perishable,
+        tradeWithinHours: perishable ? (body.tradeWithinHours ?? null) : null,
       })
     }
 
