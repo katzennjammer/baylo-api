@@ -37,7 +37,7 @@
 
 import prisma from "../src/lib/prisma"
 import { requireScratchSchema } from "./lib/live-guard"
-import type { Prisma } from "../src/generated/prisma/client"
+import type { Prisma } from "@/generated/prisma/client"
 import { BRACKET_COUNT, bracketOf, bracketRange } from "../src/lib/brackets"
 import {
   bridgingFee,

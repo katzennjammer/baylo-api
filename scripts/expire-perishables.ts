@@ -34,7 +34,7 @@
 
 import prisma, { databaseSchema } from "../src/lib/prisma"
 import { expirePerishableItems } from "../src/lib/perishable"
-import { Prisma } from "../src/generated/prisma/client"
+import { Prisma } from "@/generated/prisma/client"
 
 async function main() {
   const dryRun = process.argv.includes("--dry-run")

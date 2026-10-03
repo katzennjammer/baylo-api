@@ -5,6 +5,9 @@
   "scripts": {
     "dev": "next dev",
     "dev:lan": "next dev -H 0.0.0.0",
+    "dev:v2": "node scripts/v2.mjs dev",
+    "v2:tsx": "node scripts/v2.mjs tsx",
+    "v2:prisma": "node scripts/v2.mjs prisma",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",

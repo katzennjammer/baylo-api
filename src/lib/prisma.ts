@@ -1,5 +1,6 @@
 import { PrismaClient } from "@/generated/prisma/client"
 import { PrismaPg } from "@prisma/adapter-pg"
+import { assertV2Schema, databaseSchema } from "@/lib/db-schema"
 
 // Postgres (Supabase) via the pg driver adapter. Prisma 7's `prisma-client`
 // generator has no built-in engine, so an adapter is required, not optional.
@@ -53,6 +54,8 @@ import { PrismaPg } from "@prisma/adapter-pg"
 // No parameter means `public`, which is the live database.
 function createPrismaClient() {
   const schema = databaseSchema()
+  // SCHEMA V2 GUARD: refuses any schema but a schema_v2_* copy. See @/lib/db-schema.
+  assertV2Schema(schema)
   const raw = (schema === "public" && process.env.DATABASE_POOL_URL) || process.env.DATABASE_URL!
   // The live URL is passed through UNTOUCHED. Only a scratch URL is
   // re-serialised (to strip the parameter pg would choke on), so nothing about
@@ -70,14 +73,10 @@ function createPrismaClient() {
   return new PrismaClient({ adapter })
 }
 
-/** The schema this process talks to. "public" is live. Scripts print it so a run says where it ran. */
-export function databaseSchema(): string {
-  try {
-    return new URL(process.env.DATABASE_URL ?? "").searchParams.get("schema") ?? "public"
-  } catch {
-    return "public"
-  }
-}
+// databaseSchema() and the v2 guard live in a side-effect-free module so the
+// startup check can run before this one constructs a client. Re-exported here
+// because scripts and routes import databaseSchema from @/lib/prisma.
+export { databaseSchema, assertV2Schema }
 
 const globalForPrisma = globalThis as unknown as { prisma: PrismaClient }
 

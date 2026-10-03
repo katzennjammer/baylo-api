@@ -11,8 +11,8 @@
  */
 
 // Import from the custom generator output path, NOT "@prisma/client"
-// (schema.prisma: output = "../src/generated/prisma")
-import { PrismaClient } from "../src/generated/prisma/client"
+// (schema.prisma output; resolved through the tsconfig "@/generated/prisma" alias)
+import { PrismaClient } from "@/generated/prisma/client"
 import { PrismaPg } from "@prisma/adapter-pg"
 import sharp from "sharp"
 import { requireScratchSchema } from "./lib/live-guard"

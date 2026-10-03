@@ -3,6 +3,31 @@
 import "dotenv/config";
 import { defineConfig } from "prisma/config";
 
+// ── SCHEMA V2 GUARD (feature/schema-v2 only) ────────────────────────────────
+// On this branch the migration folder holds the schema-v2 migrations, which
+// DROP and MERGE live tables. No Prisma command that touches a database may run
+// against `public` (live) from here: migrate deploy/dev/reset/resolve, db
+// push/pull/execute, migrate diff from the datasource. They run only on a
+// schema_v2_* copy, via `npm run v2:prisma -- <command>` (which reads .env.v2).
+// `prisma generate`, `validate` and `format` need no database and are allowed.
+// The week-3 cutover lifts this deliberately; it is never bypassed by accident.
+const DB_COMMANDS = new Set(["migrate", "db", "studio", "introspect"]);
+const touchesDb = process.argv.slice(2).some((a) => DB_COMMANDS.has(a));
+if (touchesDb) {
+  let schema = "public";
+  try {
+    schema = new URL(process.env["DATABASE_URL"] ?? "").searchParams.get("schema") ?? "public";
+  } catch {}
+  if (!/^schema_v2_[a-z0-9_]+$/.test(schema)) {
+    console.error(
+      `\n  [schema v2] REFUSING: \`prisma ${process.argv.slice(2).join(" ")}\` would run against schema "${schema}"` +
+        (schema === "public" ? " (LIVE)" : "") +
+        ".\n  Use `npm run v2:prisma -- <command>`, which targets the schema_v2_* copy in .env.v2.\n",
+    );
+    process.exit(1);
+  }
+}
+
 export default defineConfig({
   schema: "prisma/schema.prisma",
   migrations: {

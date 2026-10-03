@@ -1,6 +1,8 @@
 generator client {
   provider = "prisma-client"
-  output   = "../src/generated/prisma"
+  // schema v2 generates into its OWN folder (see tsconfig "paths"), so this
+  // branch and the pre-v2 branches can never pick up each other's client.
+  output   = "../src/generated/prisma-v2"
 }
 
 datasource db {
