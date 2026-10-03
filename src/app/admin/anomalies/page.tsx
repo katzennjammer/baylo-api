@@ -81,10 +81,10 @@ export default async function ReviewQueuePage() {
         CASE WHEN tr."senderId" = tc."userId" THEN tr."receiverId" ELSE tr."senderId" END AS "partnerId",
         COUNT(*)            AS "zeroSwaps",
         MAX(tc."createdAt") AS "lastAt"
-      FROM "TaskCompletion" tc
-      JOIN "TradeRequest" tr ON tr."id" = tc."refId"
+      FROM "LeafTransaction" tc
+      JOIN "TradeRequest" tr ON tr."id" = tc."taskRefId"
       WHERE tc."task" IN ('SAFEZONE_MEETUP', 'VERIFIED_SWAP')
-        AND tc."leaves" = 0
+        AND tc."amount" = 0
       GROUP BY tc."userId", "partnerId"
       HAVING COUNT(*) >= ${MIN_REPEATS}
       ORDER BY "zeroSwaps" DESC, "lastAt" DESC

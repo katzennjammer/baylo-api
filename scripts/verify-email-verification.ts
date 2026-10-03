@@ -281,11 +281,11 @@ async function main() {
   check(`one TASK_REWARD row for VERIFY_ACCOUNT (${TASK_REWARDS.VERIFY_ACCOUNT})`,
     !!taskRow && taskRow.amount === TASK_REWARDS.VERIFY_ACCOUNT, JSON.stringify(taskRow))
 
-  const completion = await prisma.taskCompletion.findFirst({
-    where: { userId: userA.id, task: "VERIFY_ACCOUNT" }, select: { leaves: true, refId: true },
+  const completion = await prisma.leafTransaction.findFirst({
+    where: { userId: userA.id, task: "VERIFY_ACCOUNT" }, select: { amount: true, taskRefId: true },
   })
-  check("a VERIFY_ACCOUNT TaskCompletion row was written",
-    !!completion && completion.leaves === TASK_REWARDS.VERIFY_ACCOUNT, JSON.stringify(completion))
+  check("a VERIFY_ACCOUNT task row was written to the ledger",
+    !!completion && completion.amount === TASK_REWARDS.VERIFY_ACCOUNT, JSON.stringify(completion))
 
   // eventAt is the verification moment on the live path, so it should sit
   // within a breath of createdAt rather than being backdated to signup.

@@ -53,7 +53,6 @@ async function cleanup() {
   const tradeIds = trades.map((t) => t.id)
   await prisma.swapCode.deleteMany({ where: { tradeId: { in: tradeIds } } })
   await prisma.leafTransaction.deleteMany({ where: { userId: { in: ids } } })
-  await prisma.taskCompletion.deleteMany({ where: { userId: { in: ids } } })
   await prisma.review.deleteMany({ where: { tradeId: { in: tradeIds } } })
   await prisma.message.deleteMany({ where: { tradeId: { in: tradeIds } } })
   await prisma.tradeRequest.deleteMany({ where: { id: { in: tradeIds } } })

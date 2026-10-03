@@ -25,7 +25,11 @@ export async function GET() {
       select: { leaves: true },
     }),
     prisma.leafTransaction.findMany({
-      where: { userId },
+      // Schema v2: a DENIED task award is a 0-Leaf TASK_REWARD row (it was a
+      // TaskCompletion row the wallet never saw). It moves nothing, so it stays
+      // off the wallet, and the task columns stay out of the response.
+      where: { userId, NOT: { task: { not: null }, amount: 0 } },
+      omit: { task: true, taskRefId: true },
       // eventAt, not createdAt: this list shows the user when things HAPPENED,
       // and createdAt is when the row was written. For the backfilled rows those
       // differ by over two months, so ordering on write time shuffles a user's

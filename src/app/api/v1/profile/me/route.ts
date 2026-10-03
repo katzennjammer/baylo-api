@@ -154,9 +154,11 @@ export async function GET(req: NextRequest) {
   })
 
   // ── 6 ──
-  const completions = await prisma.taskCompletion.findMany({
-    where: { userId: viewerId },
-    select: { task: true, leaves: true },
+  // Schema v2: a task completion is a LeafTransaction row with `task` set
+  // (denied awards included, at amount 0 -- they always counted here).
+  const completions = await prisma.leafTransaction.findMany({
+    where: { userId: viewerId, task: { not: null } },
+    select: { task: true, amount: true },
   })
 
   const displayedAchievements = await prisma.$queryRaw<Array<{
@@ -232,9 +234,10 @@ export async function GET(req: NextRequest) {
 
   const byTask = new Map<string, { count: number; leavesEarned: number }>()
   for (const c of completions) {
+    if (!c.task) continue
     const cur = byTask.get(c.task) ?? { count: 0, leavesEarned: 0 }
     cur.count += 1
-    cur.leavesEarned += c.leaves
+    cur.leavesEarned += c.amount
     byTask.set(c.task, cur)
   }
 

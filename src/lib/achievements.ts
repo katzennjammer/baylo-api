@@ -28,7 +28,7 @@ import { isPremium, isVip } from "@/lib/premium"
  * ── GRANTING IS IDEMPOTENT, AND THE CONSTRAINT IS THE CLAIM ──────────────────
  *
  * The grant inserts with skipDuplicates against @@unique([userId, achievementId])
- * -- the same claim pattern as TaskCompletion in @/lib/tasks and for the same
+ * -- the same claim pattern as the task rows in @/lib/tasks and for the same
  * reason: two concurrent requests must not write the row twice, and on Postgres
  * a caught unique violation would abort the enclosing transaction. skipDuplicates
  * compiles to ON CONFLICT DO NOTHING, which does not error.

@@ -10,7 +10,7 @@
 // What it pins down, in order:
 //   1  a FIRST trade between two accounts pays SAFEZONE_MEETUP to both
 //   2  a SECOND trade between the SAME pair, inside the window, pays nothing
-//      — and writes the zero-leaf completion row that makes the denial final
+//      — and writes the zero-leaf task row (a LeafTransaction since schema v2) that makes the denial final
 //   3  a trade with a DIFFERENT partner still pays
 //   4  the same rule holds for VERIFIED_SWAP (it always did — this is the
 //      regression guard that says the fix did not change it)
@@ -53,7 +53,6 @@ async function cleanup() {
   })
   const ids = users.map((u) => u.id)
   if (!ids.length) return
-  await prisma.taskCompletion.deleteMany({ where: { userId: { in: ids } } })
   await prisma.leafTransaction.deleteMany({ where: { userId: { in: ids } } })
   // Order matters: both FKs onto SafeZoneHub are RESTRICT, so the trades and
   // the associations have to go before the hubs can.
@@ -195,14 +194,14 @@ async function main() {
     JSON.stringify(a2),
   )
 
-  const denialRow = await prisma.taskCompletion.findUnique({
+  const denialRow = await prisma.leafTransaction.findUnique({
     where: {
-      userId_task_refId: { userId: alice.id, task: "SAFEZONE_MEETUP", refId: t2.id },
+      userId_task_taskRefId: { userId: alice.id, task: "SAFEZONE_MEETUP", taskRefId: t2.id },
     },
   })
   check(
     "a zero-leaf completion row makes the denial permanent",
-    denialRow !== null && denialRow.leaves === 0,
+    denialRow !== null && denialRow.amount === 0,
     JSON.stringify(denialRow),
   )
 
@@ -232,16 +231,16 @@ async function main() {
   // fresh partner, reconciled, must produce no VERIFIED_SWAP row and no 20.
   const bobBefore = await prisma.user.findUnique({ where: { id: bob.id }, select: { lifetimeLeaves: true } })
   const bobStatus = await reconcileTasks(bob.id)
-  const swapRows = await prisma.taskCompletion.count({ where: { userId: bob.id, task: "VERIFIED_SWAP" } })
+  const swapRows = await prisma.leafTransaction.count({ where: { userId: bob.id, task: "VERIFIED_SWAP" } })
   check("reconcileTasks writes no VERIFIED_SWAP row", swapRows === 0, `${swapRows}`)
   check("…and does not list it", !!bobStatus && !bobStatus.tasks.some((t) => (t.task as string) === "VERIFIED_SWAP"))
   check("…FIRST_TRADE is what a completed trade earns now, once",
     !!bobStatus && bobStatus.tasks.some((t) => t.task === "FIRST_TRADE" && t.done && t.count === 1),
     JSON.stringify(bobStatus?.tasks))
   // Bob has two completed trades by now. One FIRST_TRADE row, worth 20, not two.
-  const firstTradeRows = await prisma.taskCompletion.findMany({ where: { userId: bob.id, task: "FIRST_TRADE" }, select: { leaves: true } })
+  const firstTradeRows = await prisma.leafTransaction.findMany({ where: { userId: bob.id, task: "FIRST_TRADE" }, select: { amount: true } })
   check("…worth FIRST_TRADE's 20 once, not one 20 per trade",
-    firstTradeRows.length === 1 && firstTradeRows[0].leaves === TASK_REWARDS.FIRST_TRADE,
+    firstTradeRows.length === 1 && firstTradeRows[0].amount === TASK_REWARDS.FIRST_TRADE,
     JSON.stringify(firstTradeRows))
   void bobBefore
 
@@ -254,9 +253,9 @@ async function main() {
   )
   check("awarded 0 with reason missing_partner", a4.awarded === 0 && a4.reason === "missing_partner", JSON.stringify(a4))
 
-  const noRow = await prisma.taskCompletion.findUnique({
+  const noRow = await prisma.leafTransaction.findUnique({
     where: {
-      userId_task_refId: { userId: carol.id, task: "SAFEZONE_MEETUP", refId: t4.id },
+      userId_task_taskRefId: { userId: carol.id, task: "SAFEZONE_MEETUP", taskRefId: t4.id },
     },
   })
   check(
@@ -271,27 +270,27 @@ async function main() {
   // partner. The backfill knows the partner, so it should now pay it — and it
   // is carol's first trade with bob, so the window permits it.
   await reconcileTasks(carol.id)
-  const carolT4 = await prisma.taskCompletion.findUnique({
+  const carolT4 = await prisma.leafTransaction.findUnique({
     where: {
-      userId_task_refId: { userId: carol.id, task: "SAFEZONE_MEETUP", refId: t4.id },
+      userId_task_taskRefId: { userId: carol.id, task: "SAFEZONE_MEETUP", taskRefId: t4.id },
     },
   })
   check(
     "backfill pays the award the defective call site missed",
-    carolT4 !== null && carolT4.leaves === TASK_REWARDS.SAFEZONE_MEETUP,
+    carolT4 !== null && carolT4.amount === TASK_REWARDS.SAFEZONE_MEETUP,
     JSON.stringify(carolT4),
   )
 
   // And it must NOT pay alice for t2, which the rule already refused.
   await reconcileTasks(alice.id)
-  const aliceT2 = await prisma.taskCompletion.findUnique({
+  const aliceT2 = await prisma.leafTransaction.findUnique({
     where: {
-      userId_task_refId: { userId: alice.id, task: "SAFEZONE_MEETUP", refId: t2.id },
+      userId_task_taskRefId: { userId: alice.id, task: "SAFEZONE_MEETUP", taskRefId: t2.id },
     },
   })
   check(
     "backfill does NOT resurrect a denial the live path made",
-    aliceT2 !== null && aliceT2.leaves === 0,
+    aliceT2 !== null && aliceT2.amount === 0,
     JSON.stringify(aliceT2),
   )
 

@@ -23,9 +23,10 @@ export const dynamic = "force-dynamic"
  *      fair correction or a reach grab", and one number cannot answer it.
  *      THIS IS A QUEUE, not a report: each row has an approve and a reject.
  *
- *   2  REPEAT-TRADE-PAIR FLAGS. TaskCompletion rows with task = SAFEZONE_MEETUP
- *      and leaves = 0. awardTask() writes one of those every time two users who
- *      have already traded inside NEW_PARTNER_WINDOW_DAYS trade again: the swap
+ *   2  REPEAT-TRADE-PAIR FLAGS. LeafTransaction task rows (schema v2; were
+ *      TaskCompletion rows) with task = SAFEZONE_MEETUP and amount = 0.
+ *      awardTask() writes one of those every time two users who have already
+ *      traded inside NEW_PARTNER_WINDOW_DAYS trade again: the swap
  *      completes normally and pays nothing, because otherwise two accounts
  *      could pass the same two items back and forth and mint Leaves forever.
  *      (The same pair-and-item guards now cover the trade reward as well, in
@@ -100,8 +101,9 @@ export async function GET(req: NextRequest) {
   // interpolated. Identifiers and aliases are quoted because Postgres folds
   // unquoted names to lower case.
   //
-  // TaskCompletion.refId is the tradeId for a SAFEZONE_MEETUP, which is what
-  // lets the join recover who the partner was: the completion row records that
+  // LeafTransaction.taskRefId (schema v2; was TaskCompletion.refId) is the
+  // tradeId for a SAFEZONE_MEETUP, which is what lets the join recover who the
+  // partner was: the 0-Leaf task row records that
   // USER got zero, and the trade records who they got zero with. (Rows written
   // before 16 Sep 2026 carry task = VERIFIED_SWAP, which was the repeatable
   // task then; both are counted so the history stays visible.)
@@ -111,10 +113,10 @@ export async function GET(req: NextRequest) {
       CASE WHEN tr."senderId" = tc."userId" THEN tr."receiverId" ELSE tr."senderId" END AS "partnerId",
       COUNT(*)            AS "zeroSwaps",
       MAX(tc."createdAt") AS "lastAt"
-    FROM "TaskCompletion" tc
-    JOIN "TradeRequest" tr ON tr."id" = tc."refId"
+    FROM "LeafTransaction" tc
+    JOIN "TradeRequest" tr ON tr."id" = tc."taskRefId"
     WHERE tc."task" IN ('SAFEZONE_MEETUP', 'VERIFIED_SWAP')
-      AND tc."leaves" = 0
+      AND tc."amount" = 0
     GROUP BY tc."userId", "partnerId"
     HAVING COUNT(*) >= ${minRepeats}
     ORDER BY "zeroSwaps" DESC, "lastAt" DESC

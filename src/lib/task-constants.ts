@@ -17,7 +17,7 @@
 // TRADE_REWARD — 2 x the bracket of the item you gave, see @/lib/trade-rules —
 // and the two could not coexist: a bracket-1 bridge costs 10 Leaves, so a flat
 // 20 on top of the reward would have paid 22 for the trade the fee was meant
-// to price. The rows it wrote stay in TaskCompletion (the enum value survives
+// to price. The rows it wrote stay in the ledger (the enum value survives
 // in the schema for them); nothing awards it, and the backfill no longer lists
 // it as eligible. What it became is FIRST_TRADE: the same 20, ONCE, for the
 // first trade this account ever completes — a milestone rather than a faucet.

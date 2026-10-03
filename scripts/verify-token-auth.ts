@@ -109,7 +109,6 @@ async function main() {
     where: { email: { startsWith: P } }, select: { id: true },
   })).map((u) => u.id)
   await prisma.leafTransaction.deleteMany({ where: { userId: { in: ids } } })
-  await prisma.taskCompletion.deleteMany({ where: { userId: { in: ids } } })
   await prisma.user.deleteMany({ where: { id: { in: ids } } })
   console.log(`\n[4] cleaned up ${ids.length} scratch users`)
 

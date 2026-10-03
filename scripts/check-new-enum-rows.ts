@@ -41,7 +41,7 @@ const MAIN_LACKS: readonly string[] = []
 const CHECKS: { table: string; column: string; values: string[] }[] = [
   { table: "LeafTransaction", column: "type", values: ["BRIDGE_FEE_HOLD", "BRIDGE_FEE_RELEASE", "BRIDGE_FEE_PAID", "TRADE_REWARD", "TRADE_REWARD_REVERSAL"] },
   { table: "Item", column: "status", values: ["PENDING_REVIEW", "VALUE_REJECTED"] },
-  { table: "TaskCompletion", column: "task", values: ["FIRST_TRADE"] },
+  { table: "LeafTransaction", column: "task", values: ["FIRST_TRADE"] },
   { table: "AdminAction", column: "action", values: ["LISTING_VALUE_APPROVED", "LISTING_VALUE_REJECTED", "TRADE_REWARD_REVERSED", "TRADE_CANCELLED", "LISTING_APPEAL_UPHELD", "LISTING_APPEAL_OVERTURNED"] },
   { table: "AdminAction", column: "targetType", values: ["TRADE", "LISTING_APPEAL"] },
   { table: "Notification", column: "type", values: ["LISTING_VALUE_APPROVED", "LISTING_VALUE_REJECTED", "LISTING_HIDDEN", "LISTING_APPEAL_UPHELD", "LISTING_APPEAL_OVERTURNED"] },

@@ -3,7 +3,7 @@ import { SIGNUP_GRANT_LEAVES } from "@/lib/task-constants"
 import { awardTask } from "@/lib/tasks"
 import type { PrismaClient } from "@/generated/prisma/client"
 
-type TaskDb = Pick<PrismaClient, "user" | "taskCompletion" | "leafTransaction" | "tradeRequest">
+type TaskDb = Pick<PrismaClient, "user" | "leafTransaction" | "tradeRequest">
 
 /**
  * The one place an account becomes verified.
@@ -36,7 +36,7 @@ type TaskDb = Pick<PrismaClient, "user" | "taskCompletion" | "leafTransaction" |
  *
  * Idempotent by construction. Every step is individually guarded, so calling
  * this on an already-verified account is a no-op that credits nothing — 2 by
- * the TaskCompletion unique constraint, 3 by the signupGrantClaimed flag.
+ * the task unique constraint on LeafTransaction, 3 by the signupGrantClaimed flag.
  */
 
 export interface VerificationResult {

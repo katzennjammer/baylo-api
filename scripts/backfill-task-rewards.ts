@@ -5,7 +5,8 @@
  *
  *   npx tsx --tsconfig tsconfig.json scripts/backfill-task-rewards.ts
  *
- * Idempotent — the TaskCompletion unique constraint makes a second run a no-op.
+ * Idempotent — the task unique constraint on LeafTransaction makes a second
+ * run a no-op.
  */
 import prisma from "../src/lib/prisma"
 import { reconcileTasks } from "../src/lib/tasks"
@@ -38,10 +39,11 @@ async function main() {
     const after = await prisma.user.findUnique({
       where: { id: u.id }, select: { leaves: true, lifetimeLeaves: true },
     })
-    const completions = await prisma.taskCompletion.findMany({
-      where: { userId: u.id }, orderBy: { createdAt: "asc" },
-      select: { task: true, refId: true, leaves: true },
-    })
+    // Schema v2: a completion is a ledger row with `task` set.
+    const completions = (await prisma.leafTransaction.findMany({
+      where: { userId: u.id, task: { not: null } }, orderBy: { createdAt: "asc" },
+      select: { task: true, taskRefId: true, amount: true },
+    })).map((c) => ({ task: c.task!, refId: c.taskRefId ?? "", leaves: c.amount }))
     const rows = await prisma.leafTransaction.findMany({
       where: { userId: u.id, type: "TASK_REWARD" },
       orderBy: { createdAt: "asc" },

@@ -103,7 +103,6 @@ model User {
   receivedRequests       TradeRequest[]    @relation("ReceivedRequests")
   sentOffers             Offer[]           @relation("SentOffers")
   receivedOffers         Offer[]           @relation("ReceivedOffers")
-  taskCompletions        TaskCompletion[]
   sentMessages           Message[]         @relation("SentMessages")
   receivedMessages       Message[]         @relation("ReceivedMessages")
   notifications          Notification[]    @relation("NotificationRecipient")
@@ -862,25 +861,6 @@ model Review {
   @@index([revieweeId])
 }
 
-// Task reward system: one row per completed task.
-// One-time tasks use refId "" (MySQL treats NULLs as distinct in unique
-// indexes, so an empty-string default is what enforces once-per-user);
-// repeatable tasks (VERIFIED_SWAP, SAFEZONE_MEETUP) use refId = tradeId.
-// The @@unique below is what makes every award idempotent — do not relax it.
-model TaskCompletion {
-  id        String   @id @default(cuid())
-  task      TaskKind
-  refId     String   @default("")
-  leaves    Int
-  createdAt DateTime @default(now())
-
-  userId String
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([userId, task, refId])
-  @@index([userId])
-}
-
 enum TaskKind {
   VERIFY_ACCOUNT
   COMPLETE_PROFILE
@@ -1394,9 +1374,28 @@ model LeafTransaction {
   // the ledger points at things, nothing points back at the ledger.
   contractId String?
 
+  // ── Task rewards (schema v2; was the TaskCompletion table) ─────────────────
+  //
+  // A row with `task` set IS the task completion: the claim and the payment are
+  // one row, so they can no longer disagree. One-time tasks use taskRefId ""
+  // and repeatable ones the tradeId; the @@unique below is what makes every
+  // award idempotent -- do not relax it. Postgres treats NULLs as distinct, so
+  // every non-task row (task NULL) is outside the constraint.
+  //
+  // A DENIED award is a row too: amount 0, written when a rule (repeat partner,
+  // weekly cap) refused it, so that the denial is permanent rather than
+  // retried. SUM(amount) is unchanged by it, so the invariant is untouched.
+  //
+  // CHECKs in 20261003000001_schema_v2_ledger:
+  //   (task IS NULL) = (taskRefId IS NULL)
+  //   task IS NULL OR type = 'TASK_REWARD'
+  task      TaskKind?
+  taskRefId String?
+
   createdAt DateTime @default(now())
   eventAt   DateTime
 
+  @@unique([userId, task, taskRefId])
   @@index([userId])
   @@index([userId, createdAt])
   @@index([userId, eventAt])

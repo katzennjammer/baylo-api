@@ -295,8 +295,8 @@ export async function POST(req: NextRequest) {
       },
     })
 
-    // FIRST_LISTING is one-time — the @@unique([userId, task, refId]) constraint
-    // on TaskCompletion makes every later listing a no-op. There is deliberately
+    // FIRST_LISTING is one-time — the @@unique([userId, task, taskRefId])
+    // constraint on LeafTransaction makes every later listing a no-op. There is deliberately
     // NO per-listing reward: posting must never be a faucet.
     // THE PERSON, NOT THE ORG. A task reward is a fact about somebody learning
     // to use Baylo, and crediting it to the org's backing row would both rob

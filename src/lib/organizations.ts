@@ -395,7 +395,7 @@ export async function activeOrgsFor(
  *
  * ── WHAT DELIBERATELY DOES NOT COUNT ────────────────────────────────────────
  *
- *   TaskCompletion FIRST_LISTING  paid to the HUMAN even when they posted for
+ *   Task reward FIRST_LISTING     paid to the HUMAN even when they posted for
  *                                 the org (see POST /api/items), so it says
  *                                 nothing about personal activity.
  *   LeafTransaction rows          the signup grant and VERIFY_ACCOUNT land on

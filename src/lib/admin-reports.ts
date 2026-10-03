@@ -426,12 +426,14 @@ export async function loadReportSummary(requestedDays: number): Promise<ReportSu
     prisma.moderationCase.count({ where: overturnedAppealsInWindow }),
     prisma.safeZoneHub.count({ where: activeHubs }),
     prisma.safeZoneHub.count({ where: inactiveHubs }),
-    prisma.taskCompletion.count({ where: joinedInWindow }),
+    // Schema v2: task completions are the ledger rows with `task` set (denied
+    // 0-Leaf awards included, as TaskCompletion counted them).
+    prisma.leafTransaction.count({ where: { ...joinedInWindow, task: { not: null } } }),
     prisma.adminAction.count({ where: joinedInWindow }),
 
     prisma.moderationCase.groupBy({ by: ["category"], where: reportsJoinedInWindow, _count: { id: true }, orderBy: { _count: { id: "desc" } } }),
     prisma.moderationCase.groupBy({ by: ["status"], where: REPORT, _count: { id: true } }),
-    prisma.taskCompletion.groupBy({ by: ["task"], where: joinedInWindow, _count: { id: true }, orderBy: { _count: { id: "desc" } } }),
+    prisma.leafTransaction.groupBy({ by: ["task"], where: { ...joinedInWindow, task: { not: null } }, _count: { id: true }, orderBy: { _count: { id: "desc" } } }),
     prisma.adminAction.groupBy({ by: ["action"], where: joinedInWindow, _count: { id: true }, orderBy: { _count: { id: "desc" } } }),
     prisma.item.groupBy({ by: ["category"], _count: { id: true }, orderBy: { _count: { id: "desc" } } }),
     prisma.item.groupBy({ by: ["condition"], _count: { id: true }, orderBy: { _count: { id: "desc" } } }),
@@ -608,7 +610,7 @@ export async function loadReportSummary(requestedDays: number): Promise<ReportSu
     byCategory.map((row) => ({ label: CATEGORY_LABEL[toWireCategory(row.category!)], value: row._count.id })),
   )
   const reportsByStatus: SeriesPoint[] = byStatus.map((row) => ({ key: row.status, label: humanise(row.status), value: row._count.id }))
-  const tasksCompleted: SeriesPoint[] = byTask.map((row) => ({ key: row.task, label: humanise(row.task), value: row._count.id }))
+  const tasksCompleted: SeriesPoint[] = byTask.flatMap((row) => (row.task ? [{ key: row.task, label: humanise(row.task), value: row._count.id }] : []))
   const actionsByKind: SeriesPoint[] = byAction.map((row) => ({ key: row.action, label: humanise(row.action), value: row._count.id }))
   const listingsByCategory: SeriesPoint[] = listingsByCategoryRaw.map((row) => ({ key: row.category, label: humanise(row.category), value: row._count.id }))
   const listingsByCondition: SeriesPoint[] = listingsByConditionRaw.map((row) => ({ key: row.condition, label: humanise(row.condition), value: row._count.id }))

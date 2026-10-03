@@ -14,7 +14,6 @@ async function cleanup() {
   const users = await prisma.user.findMany({ where: { email: { startsWith: P } }, select: { id: true } })
   const ids = users.map((u) => u.id)
   if (!ids.length) return
-  await prisma.taskCompletion.deleteMany({ where: { userId: { in: ids } } })
   await prisma.leafTransaction.deleteMany({ where: { userId: { in: ids } } })
   await prisma.tradeRequest.deleteMany({ where: { OR: [{ senderId: { in: ids } }, { receiverId: { in: ids } }] } })
   await prisma.item.deleteMany({ where: { userId: { in: ids } } })
@@ -63,7 +62,7 @@ async function main() {
   check("A not double-awarded", ua!.lifetimeLeaves === 10, `lifetime=${ua!.lifetimeLeaves}`)
   check("B awarded once", ub!.lifetimeLeaves === 10 && ub!.leaves === 10, `lifetime=${ub!.lifetimeLeaves}`)
 
-  const rows = await prisma.taskCompletion.count({ where: { task: "SAFEZONE_MEETUP", refId: trade.id } })
+  const rows = await prisma.leafTransaction.count({ where: { task: "SAFEZONE_MEETUP", taskRefId: trade.id } })
   check("exactly 2 completion rows (one per user)", rows === 2, `rows=${rows}`)
 
   const ledger = await prisma.leafTransaction.findMany({

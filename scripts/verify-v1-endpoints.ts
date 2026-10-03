@@ -114,7 +114,6 @@ async function cleanup() {
   await prisma.review.deleteMany({ where: { tradeId: { in: tradeIds } } })
   await prisma.tradeRequest.deleteMany({ where: { id: { in: tradeIds } } })
   await prisma.leafTransaction.deleteMany({ where: { userId: { in: ids } } })
-  await prisma.taskCompletion.deleteMany({ where: { userId: { in: ids } } })
   await prisma.notification.deleteMany({ where: { OR: [{ userId: { in: ids } }, { actorId: { in: ids } }] } })
   await prisma.offer.deleteMany({ where: { OR: [{ senderId: { in: ids } }, { receiverId: { in: ids } }] } })
   await prisma.follow.deleteMany({ where: { OR: [{ followerId: { in: ids } }, { followeeId: { in: ids } }] } })

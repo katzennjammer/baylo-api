@@ -40,15 +40,17 @@ interface Row {
 
 async function main() {
   // ── Context ────────────────────────────────────────────────────────────────
-  const totalCompletions = await prisma.taskCompletion.count()
-  const byTask = await prisma.taskCompletion.groupBy({
+  // Schema v2: completions are the ledger rows with `task` set.
+  const totalCompletions = await prisma.leafTransaction.count({ where: { task: { not: null } } })
+  const byTask = (await prisma.leafTransaction.groupBy({
     by: ["task"],
+    where: { task: { not: null } },
     _count: { id: true },
-    _sum: { leaves: true },
-  })
+    _sum: { amount: true },
+  })).map((t) => ({ task: t.task!, _count: t._count, _sum: { leaves: t._sum.amount } }))
 
   console.log(`\n${"═".repeat(72)}`)
-  console.log(`  TaskCompletion rows: ${totalCompletions}`)
+  console.log(`  Task completion rows: ${totalCompletions}`)
   console.log(`${"═".repeat(72)}`)
   for (const t of byTask.sort((a, b) => a.task.localeCompare(b.task))) {
     console.log(
@@ -64,10 +66,10 @@ async function main() {
   // rows are included in the scan but reported separately -- a row the cap
   // already refused was not a payout, and counting it as one would overstate
   // the damage.
-  const completions = await prisma.taskCompletion.findMany({
+  const completions = (await prisma.leafTransaction.findMany({
     where: { task: { in: ["SAFEZONE_MEETUP", "VERIFIED_SWAP"] } },
-    select: { task: true, refId: true, userId: true, leaves: true },
-  })
+    select: { task: true, taskRefId: true, userId: true, amount: true },
+  })).map((c) => ({ task: c.task!, refId: c.taskRefId ?? "", userId: c.userId, leaves: c.amount }))
 
   const tradeIds = [...new Set(completions.map((c) => c.refId).filter(Boolean))]
   const trades = await prisma.tradeRequest.findMany({

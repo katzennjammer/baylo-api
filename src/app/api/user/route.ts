@@ -52,7 +52,7 @@ export async function PATCH(req: NextRequest) {
   const updated = await prisma.user.update({ where: { id: user.id }, data })
 
   // COMPLETE_PROFILE is awarded the moment avatar, bio and location are all
-  // filled in — one-time, enforced by the TaskCompletion unique constraint.
+  // filled in — one-time, enforced by the task unique constraint on LeafTransaction.
   const profileComplete =
     !!updated.avatar?.trim() && !!updated.bio?.trim() && !!updated.location?.trim()
   if (profileComplete) {

@@ -23,7 +23,6 @@ async function cleanup() {
   const users = await prisma.user.findMany({ where: { email: { startsWith: P } }, select: { id: true } })
   const ids = users.map((u) => u.id)
   if (!ids.length) return
-  await prisma.taskCompletion.deleteMany({ where: { userId: { in: ids } } })
   await prisma.leafTransaction.deleteMany({ where: { userId: { in: ids } } })
   await prisma.tradeRequest.deleteMany({ where: { OR: [{ senderId: { in: ids } }, { receiverId: { in: ids } }] } })
   await prisma.item.deleteMany({ where: { userId: { in: ids } } })
@@ -59,7 +58,7 @@ async function main() {
   const t1 = await mkCompletedTrade(a.id, b.id, ia1.id, ib1.id)
   const r1 = await awardTask(prisma, a.id, "SAFEZONE_MEETUP", t1.id, { partnerId: b.id, tradeId: t1.id })
   let ua = await prisma.user.findUnique({ where: { id: a.id } })
-  let ledger = await prisma.leafTransaction.findMany({ where: { userId: a.id, type: "TASK_REWARD" } })
+  const ledger = await prisma.leafTransaction.findMany({ where: { userId: a.id, type: "TASK_REWARD" } })
   check("awards SAFEZONE_MEETUP", r1.awarded === TASK_REWARDS.SAFEZONE_MEETUP, JSON.stringify(r1))
   check("leaves incremented", ua!.leaves === 10, `leaves=${ua!.leaves}`)
   check("lifetimeLeaves incremented", ua!.lifetimeLeaves === 10, `lifetime=${ua!.lifetimeLeaves}`)
@@ -80,10 +79,10 @@ async function main() {
   ua = await prisma.user.findUnique({ where: { id: a.id } })
   check("repeat partner awards zero", r2.awarded === 0 && r2.reason === "repeat_partner", JSON.stringify(r2))
   check("balance unchanged", ua!.leaves === 10 && ua!.lifetimeLeaves === 10)
-  const zeroRow = await prisma.taskCompletion.findUnique({
-    where: { userId_task_refId: { userId: a.id, task: "SAFEZONE_MEETUP", refId: t2.id } },
+  const zeroRow = await prisma.leafTransaction.findUnique({
+    where: { userId_task_taskRefId: { userId: a.id, task: "SAFEZONE_MEETUP", taskRefId: t2.id } },
   })
-  check("zero recorded so it cannot reopen later", zeroRow?.leaves === 0)
+  check("zero recorded so it cannot reopen later", zeroRow?.amount === 0)
 
   // a DIFFERENT partner still pays
   const t3 = await mkCompletedTrade(a.id, c.id, ia3.id, ic1.id)
@@ -101,7 +100,7 @@ async function main() {
       first.awarded === TASK_REWARDS[task] && second.awarded === 0 && second.reason === "already_awarded",
       `${JSON.stringify(first)} ${JSON.stringify(second)}`)
   }
-  const dupe = await prisma.taskCompletion.count({ where: { userId: c.id, task: "FIRST_LISTING" } })
+  const dupe = await prisma.leafTransaction.count({ where: { userId: c.id, task: "FIRST_LISTING" } })
   check("exactly one FIRST_LISTING row exists", dupe === 1, `rows=${dupe}`)
 
   // ── 4. Weekly cap: awards zero, does NOT error ────────────────────────────
@@ -125,10 +124,10 @@ async function main() {
     capped.awarded === 0 && capped.reason === "weekly_cap", JSON.stringify(capped))
   check("capped award leaves balances untouched",
     ud!.leaves === WEEKLY_TASK_LEAF_CAP && ud!.lifetimeLeaves === WEEKLY_TASK_LEAF_CAP)
-  const capRow = await prisma.taskCompletion.findUnique({
-    where: { userId_task_refId: { userId: d.id, task: "FIRST_LISTING", refId: "" } },
+  const capRow = await prisma.leafTransaction.findUnique({
+    where: { userId_task_taskRefId: { userId: d.id, task: "FIRST_LISTING", taskRefId: "" } },
   })
-  check("capped award records a 0-leaf row so the denial is permanent", capRow?.leaves === 0,
+  check("capped award records a 0-leaf row so the denial is permanent", capRow?.amount === 0,
     JSON.stringify(capRow))
 
   // Waiting out the window must NOT release an award the cap already refused.

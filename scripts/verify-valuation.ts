@@ -58,7 +58,6 @@ async function cleanup() {
   const ids = users.map((u) => u.id)
   if (!ids.length) return
   await prisma.leafTransaction.deleteMany({ where: { userId: { in: ids } } })
-  await prisma.taskCompletion.deleteMany({ where: { userId: { in: ids } } })
   await prisma.notification.deleteMany({ where: { OR: [{ userId: { in: ids } }, { actorId: { in: ids } }] } })
   await prisma.item.deleteMany({ where: { userId: { in: ids } } })
   await prisma.user.deleteMany({ where: { id: { in: ids } } })

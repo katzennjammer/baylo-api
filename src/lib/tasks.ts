@@ -21,7 +21,7 @@ import {
  */
 
 /** Minimal shape shared by PrismaClient and an interactive transaction client. */
-type TaskDb = Pick<PrismaClient, "user" | "taskCompletion" | "leafTransaction" | "tradeRequest">
+type TaskDb = Pick<PrismaClient, "user" | "leafTransaction" | "tradeRequest">
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
@@ -136,16 +136,17 @@ export async function isNewTradePartner(
 }
 
 /**
- * Award one task. Idempotent via the @@unique([userId, task, refId]) constraint
- * on TaskCompletion — that constraint is the thing that makes one-time tasks
- * one-time, so it must not be relaxed.
+ * Award one task. Idempotent via the @@unique([userId, task, taskRefId])
+ * constraint on LeafTransaction (schema v2; it was TaskCompletion's) — that
+ * constraint is the thing that makes one-time tasks one-time, so it must not be
+ * relaxed.
  *
  * Never throws: a duplicate, a hit cap or a repeat partner all return
  * `awarded: 0`. Safe to call from inside a settlement transaction, where an
  * exception would roll back the trade itself.
  *
  * Both zero-value outcomes (repeat_partner, weekly_cap) write a 0-leaf
- * completion row. Each is judged against the week the event happened in, and a
+ * TASK_REWARD ledger row with the task set. Each is judged against the week the event happened in, and a
  * past week never re-opens, so the denial is final by construction — recording
  * it is what stops a later reconcile from paying out an award that the rules
  * already refused.
@@ -179,11 +180,13 @@ export async function awardTask(
     const earner = await db.user.findUnique({ where: { id: userId }, select: { isOrgAccount: true } })
     if (earner?.isOrgAccount) return nothing("organization")
 
-    const existing = await db.taskCompletion.findUnique({
-      where:  { userId_task_refId: { userId, task, refId } },
+    const existing = await db.leafTransaction.findUnique({
+      where:  { userId_task_taskRefId: { userId, task, taskRefId: refId } },
       select: { id: true },
     })
     if (existing) return nothing("already_awarded")
+
+    const claim = { tradeId: opts.tradeId ?? null, eventAt }
 
     // Faucet guard 1 — a partner-gated task pays only for a genuinely new
     // counterparty. See PARTNER_GATED above for which tasks those are and why
@@ -207,7 +210,7 @@ export async function awardTask(
       const fresh = await isNewTradePartner(db, userId, opts.partnerId, opts.tradeId ?? refId, opts.tradeAt ?? eventAt)
       if (!fresh) {
         // Record the zero so this trade is never revisited.
-        if (!(await claimCompletion(db, userId, task, refId, 0))) return nothing("already_awarded")
+        if (!(await claimCompletion(db, userId, task, refId, 0, claim))) return nothing("already_awarded")
         return nothing("repeat_partner")
       }
     }
@@ -223,30 +226,24 @@ export async function awardTask(
       // Record the zero so the denial is permanent, exactly as for a repeat
       // partner. Without this row the award is merely deferred and the cap
       // throttles the faucet instead of closing it.
-      if (!(await claimCompletion(db, userId, task, refId, 0))) return nothing("already_awarded")
+      if (!(await claimCompletion(db, userId, task, refId, 0, claim))) return nothing("already_awarded")
       return nothing("weekly_cap")
     }
 
-    // The completion row, the ledger entry and both balances move together.
-    // The ledger row records both timestamps: createdAt is left to default to
-    // now (when this row was written) and eventAt carries when the action that
-    // earned it happened. On the live path they coincide; on a backfill they
-    // do not, and conflating them would lose half the audit trail.
+    // The ledger entry and both balances move together. The ledger row records
+    // both timestamps: createdAt is left to default to now (when this row was
+    // written) and eventAt carries when the action that earned it happened. On
+    // the live path they coincide; on a backfill they do not, and conflating
+    // them would lose half the audit trail.
     //
-    // The completion row is the CLAIM. If a concurrent request already wrote
-    // it, this one must not touch the ledger or the balance -- that would pay
-    // the same award twice and break SUM(User.leaves) == SUM(amount).
-    if (!(await claimCompletion(db, userId, task, refId, amount))) return nothing("already_awarded")
-    await db.leafTransaction.create({
-      data: {
-        userId,
-        type:        "TASK_REWARD",
-        amount,
-        description: opts.description ?? `Task reward: ${task}`,
-        tradeId:     opts.tradeId ?? null,
-        eventAt,
-      },
-    })
+    // The ledger row IS the claim (schema v2: there is no separate completion
+    // row any more). If a concurrent request already wrote it, this one must
+    // not touch the balance -- that would pay the same award twice and break
+    // SUM(User.leaves) == SUM(amount).
+    if (!(await claimCompletion(db, userId, task, refId, amount, {
+      ...claim,
+      description: opts.description ?? `Task reward: ${task}`,
+    }))) return nothing("already_awarded")
     await db.user.update({
       where: { id: userId },
       data:  { leaves: { increment: amount }, lifetimeLeaves: { increment: amount } },
@@ -262,8 +259,10 @@ export async function awardTask(
 }
 
 /**
- * Write the TaskCompletion row, or discover that a concurrent request already
- * did. Returns true when THIS call wrote it.
+ * Write the task's TASK_REWARD ledger row, or discover that a concurrent
+ * request already did. Returns true when THIS call wrote it. A denial is the
+ * same row with amount 0, so it occupies the (userId, task, taskRefId) slot
+ * exactly as the old 0-leaf TaskCompletion row did.
  *
  * createMany + skipDuplicates, not create + catch P2002, and the difference is
  * an engine difference. `create` on a duplicate raises a unique violation.
@@ -280,10 +279,20 @@ async function claimCompletion(
   userId: string,
   task: TaskKey,
   refId: string,
-  leaves: number,
+  amount: number,
+  row: { tradeId: string | null; eventAt: Date; description?: string },
 ): Promise<boolean> {
-  const { count } = await db.taskCompletion.createMany({
-    data: [{ userId, task, refId, leaves }],
+  const { count } = await db.leafTransaction.createMany({
+    data: [{
+      userId,
+      type:        "TASK_REWARD",
+      amount,
+      description: row.description ?? `Task not awarded: ${task} (denied by a faucet rule; 0 Leaves)`,
+      tradeId:     row.tradeId,
+      eventAt:     row.eventAt,
+      task,
+      taskRefId:   refId,
+    }],
     skipDuplicates: true,
   })
   return count === 1
@@ -351,9 +360,9 @@ export async function reconcileTasks(userId: string): Promise<TasksStatus | null
       where:  { OR: [{ senderId: userId }, { receiverId: userId }], status: "COMPLETED" },
       select: { id: true, safeZoneHubId: true, senderId: true, receiverId: true, updatedAt: true },
     }),
-    prisma.taskCompletion.findMany({
-      where:  { userId },
-      select: { task: true, refId: true },
+    prisma.leafTransaction.findMany({
+      where:  { userId, task: { not: null } },
+      select: { task: true, taskRefId: true },
     }),
   ])
   if (!user) return null
@@ -384,7 +393,7 @@ export async function reconcileTasks(userId: string): Promise<TasksStatus | null
     if (t.safeZoneHubId) eligible.push({ task: "SAFEZONE_MEETUP", refId: t.id, partnerId, eventAt: t.updatedAt })
   }
 
-  const have = new Set(existing.map((c) => `${c.task}:${c.refId}`))
+  const have = new Set(existing.map((c) => `${c.task}:${c.taskRefId}`))
   const missing = eligible
     .filter((e) => !have.has(`${e.task}:${e.refId}`))
     // Chronological order matters: each award's weekly window includes the
@@ -416,18 +425,19 @@ export async function buildTasksStatus(
       where:  { id: userId },
       select: { leaves: true, lifetimeLeaves: true, isVerified: true },
     }),
-    prisma.taskCompletion.findMany({
-      where:  { userId },
-      select: { task: true, leaves: true },
+    prisma.leafTransaction.findMany({
+      where:  { userId, task: { not: null } },
+      select: { task: true, amount: true },
     }),
   ])
   if (!user) return null
 
   const byTask = new Map<string, { count: number; leavesEarned: number }>()
   for (const c of completions) {
+    if (!c.task) continue
     const cur = byTask.get(c.task) ?? { count: 0, leavesEarned: 0 }
     cur.count += 1
-    cur.leavesEarned += c.leaves
+    cur.leavesEarned += c.amount
     byTask.set(c.task, cur)
   }
 

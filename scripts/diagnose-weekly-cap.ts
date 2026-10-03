@@ -28,7 +28,6 @@ async function cleanup() {
   const users = await prisma.user.findMany({ where: { email: { startsWith: P } }, select: { id: true } })
   const ids = users.map((u) => u.id)
   if (!ids.length) return
-  await prisma.taskCompletion.deleteMany({ where: { userId: { in: ids } } })
   await prisma.leafTransaction.deleteMany({ where: { userId: { in: ids } } })
   await prisma.tradeRequest.deleteMany({ where: { OR: [{ senderId: { in: ids } }, { receiverId: { in: ids } }] } })
   await prisma.item.deleteMany({ where: { userId: { in: ids } } })
@@ -64,9 +63,9 @@ async function buildHistory(owner: { id: string }, tag: string, agesInDays: numb
 
 async function report(userId: string, label: string) {
   const u = await prisma.user.findUnique({ where: { id: userId } })
-  const paid = await prisma.taskCompletion.count({ where: { userId, leaves: { gt: 0 } } })
-  const zero = await prisma.taskCompletion.count({ where: { userId, leaves: 0 } })
-  const total = await prisma.taskCompletion.count({ where: { userId } })
+  const paid = await prisma.leafTransaction.count({ where: { userId, task: { not: null }, amount: { gt: 0 } } })
+  const zero = await prisma.leafTransaction.count({ where: { userId, task: { not: null }, amount: 0 } })
+  const total = await prisma.leafTransaction.count({ where: { userId, task: { not: null } } })
   const rows = await prisma.leafTransaction.findMany({
     where: { userId, type: "TASK_REWARD" }, orderBy: { eventAt: "asc" },
     select: { amount: true, eventAt: true },

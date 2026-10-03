@@ -21,7 +21,7 @@ import {
  * ── DENIALS ARE SILENT IN THE LEDGER, LOUD IN THE RESPONSE ──────────────────
  *
  * A party the anti-farming gates refuse gets no row at all -- not a zero row.
- * TaskCompletion writes zero rows because a later backfill would otherwise
+ * awardTask() writes zero rows because a later backfill would otherwise
  * re-pay; there is no backfill for this reward (it is paid inside the
  * settlement transaction or not at all), so a zero row would only be noise in
  * a table whose every other row is a Leaf movement. The reason is returned to

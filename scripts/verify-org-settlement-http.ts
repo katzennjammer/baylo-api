@@ -197,8 +197,8 @@ async function main() {
   async function shopEarnedNothing(orgUserId: string, tradeId: string, label: string) {
     const issued = await ledgerRows({ userId: orgUserId, type: { in: ["TRADE_REWARD", "TASK_REWARD", "QUEST_REWARD"] } })
     check(`${label}: the shop has no TRADE_REWARD / TASK_REWARD / QUEST_REWARD rows`, issued.length === 0, JSON.stringify(issued))
-    const tasks = await prisma.taskCompletion.count({ where: { userId: orgUserId } })
-    check(`${label}: and no TaskCompletion rows`, tasks === 0, `${tasks}`)
+    const tasks = await prisma.leafTransaction.count({ where: { userId: orgUserId, task: { not: null } } })
+    check(`${label}: and no task rows (not even 0-Leaf denials)`, tasks === 0, `${tasks}`)
     void tradeId
   }
 
@@ -461,8 +461,7 @@ async function main() {
   } finally {
     await prisma.review.deleteMany({ where: { OR: [{ reviewerId: { in: users } }, { revieweeId: { in: users } }] } })
     await prisma.leafTransaction.deleteMany({ where: { userId: { in: users } } })
-    await prisma.taskCompletion.deleteMany({ where: { userId: { in: users } } })
-    await prisma.notification.deleteMany({ where: { OR: [{ userId: { in: users } }, { actorId: { in: users } }] } })
+      await prisma.notification.deleteMany({ where: { OR: [{ userId: { in: users } }, { actorId: { in: users } }] } })
     await prisma.message.deleteMany({ where: { OR: [{ senderId: { in: users } }, { receiverId: { in: users } }] } })
     await prisma.tradeRequest.deleteMany({ where: { OR: [{ senderId: { in: users } }, { receiverId: { in: users } }] } })
     await prisma.offer.deleteMany({ where: { OR: [{ senderId: { in: users } }, { receiverId: { in: users } }] } })
