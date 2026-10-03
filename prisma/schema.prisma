@@ -96,41 +96,29 @@ model User {
   // exactly that reason.
   vipUntil DateTime?
 
-  items                   Item[]
-  sentRequests            TradeRequest[]           @relation("SentRequests")
-  receivedRequests        TradeRequest[]           @relation("ReceivedRequests")
-  sentMessages            Message[]                @relation("SentMessages")
-  receivedMessages        Message[]                @relation("ReceivedMessages")
-  conversationHides       ConversationHide[]        @relation("ConversationHidesByViewer")
-  hiddenFromConversations  ConversationHide[]        @relation("ConversationHidesByPartner")
-  notifications           Notification[]           @relation("NotificationRecipient")
-  triggeredNotifications  Notification[]           @relation("NotificationActor")
-  reviewsGiven            Review[]                 @relation("ReviewsGiven")
-  reviewsReceived         Review[]                 @relation("ReviewsReceived")
-  following               Follow[]                 @relation("Follower")
-  followers               Follow[]                 @relation("Followee")
-  postLikes               PostLike[]               @relation("UserPostLikes")
-  postComments            PostComment[]            @relation("UserPostComments")
-  commentLikes            CommentLike[]            @relation("UserCommentLikes")
-  sentOffers              Offer[]                  @relation("SentOffers")
-  receivedOffers          Offer[]                  @relation("ReceivedOffers")
-  leaves                  Int                      @default(0)
-  lifetimeLeaves          Int                      @default(0)
-  leafTransactions        LeafTransaction[]
-  swapConfirmationCodes   SwapConfirmationCode[]
-  taskCompletions         TaskCompletion[]
-  questAssignments        QuestAssignment[]
-  refreshTokens           RefreshToken[]
-  emailVerificationTokens EmailVerificationToken[]
-
-  // Deferred Points Agreements. No denormalised default counter and no
-  // defaulted flag on this row on purpose: both are derived from these two
-  // relations at read time. A stored counter is one more thing that can drift
-  // out of step with the rows it summarises -- totalTrades above already has,
-  // sitting one and two above the real COMPLETED trade count for two users --
-  // and a derived penalty is one that a lazy deadline sweep cannot apply twice.
-  contractsAsDebtor   DeferredContract[] @relation("ContractDebtor")
-  contractsAsCreditor DeferredContract[] @relation("ContractCreditor")
+  items                  Item[]
+  /// Every deal this account proposed, or was proposed to -- the offer phase
+  /// and the trade phase are one Trade row (schema v2). See Trade.
+  sentTrades             Trade[]           @relation("TradeSender")
+  receivedTrades         Trade[]           @relation("TradeReceiver")
+  sentMessages           Message[]         @relation("SentMessages")
+  receivedMessages       Message[]         @relation("ReceivedMessages")
+  notifications          Notification[]    @relation("NotificationRecipient")
+  triggeredNotifications Notification[]    @relation("NotificationActor")
+  reviewsGiven           Review[]          @relation("ReviewsGiven")
+  reviewsReceived        Review[]          @relation("ReviewsReceived")
+  following              Follow[]          @relation("Follower")
+  followers              Follow[]          @relation("Followee")
+  likes                  Like[]            @relation("UserPostLikes")
+  comments               Comment[]         @relation("UserPostComments")
+  leaves                 Int               @default(0)
+  lifetimeLeaves         Int               @default(0)
+  leafTransactions       LeafTransaction[]
+  swapCodes              SwapCode[]
+  /// Refresh, password-reset and email-verification tokens. See AuthToken.
+  authTokens             AuthToken[]
+  /// Daily quests and earned badges. See UserProgress.
+  progress               UserProgress[]
 
   // ── Moderation ─────────────────────────────────────────────────────────────
   //
@@ -169,21 +157,17 @@ model User {
   suspendedAt    DateTime?
   suspendedUntil DateTime?
 
-  reportsMade     Report[]        @relation("ReportReporter")
-  reportsResolved Report[]        @relation("ReportResolver")
-  blocksMade      Block[]         @relation("Blocker")
-  blocksReceived  Block[]         @relation("Blocked")
-  adminActions    AdminAction[]   @relation("AdminActor")
-  appealsMade     ListingAppeal[] @relation("ListingAppealOwner")
-  appealsDecided  ListingAppeal[] @relation("ListingAppealDecider")
+  /// Reports this person filed and listing appeals they opened (filedBy), and
+  /// the cases they decided as staff (decidedBy). See ModerationCase.
+  casesFiled     ModerationCase[] @relation("ModerationCaseFiler")
+  casesDecided   ModerationCase[] @relation("ModerationCaseDecider")
+  blocksMade     Block[]          @relation("Blocker")
+  blocksReceived Block[]          @relation("Blocked")
+  adminActions   AdminAction[]    @relation("AdminActor")
 
-  // Earned achievements. See the Achievement/UserAchievement models at the
-  // bottom of this file for the whole story -- this relation existed only as a
-  // raw table in live until it was finally modelled here.
-  achievements    UserAchievement[]
   /// Stories this person posted, and the stories they have seen. See Story.
-  stories     Story[]     @relation("StoryAuthor")
-  storyViews  StoryView[] @relation("StoryViewer")
+  stories    Story[]     @relation("StoryAuthor")
+  storyViews StoryView[] @relation("StoryViewer")
 
   // -- Organisation / MSME accounts -------------------------------------------
   //
@@ -224,18 +208,15 @@ model User {
   /// The organisation this row IS, when isOrgAccount. Null on every human row.
   organization Organization? @relation("OrganizationAccount")
 
-  /// The organisations this HUMAN belongs to. Empty on a synthetic org row --
-  /// an org is not a member of itself.
-  organizationMemberships OrganizationMember[] @relation("OrganizationMemberUser")
+  /// The organisations this HUMAN owns. Empty on a synthetic org row -- an org
+  /// does not own itself. Staff memberships were removed in schema v2; the
+  /// owner is the only person who may act as an organisation.
+  ownedOrganizations Organization[] @relation("OrganizationOwner")
 
   /// Business documents this user decided, as an admin. Mirrors
   /// idVerificationsReviewed, and SetNull for the same reason: the decision
   /// outlives the staff account that made it.
   organizationsReviewed Organization[] @relation("OrganizationReviewer")
-
-  // Every reputation aggregate filters on this. Cheap, and the reason the flag
-  // is a column rather than a join -- see the note above.
-  @@index([isOrgAccount])
 
   // -- Government ID verification ---------------------------------------------
   //
@@ -267,6 +248,9 @@ model User {
   // grandfathered account should be made to submit after all.
   idVerifiedGrandfatheredAt DateTime?
 
+  // Every reputation aggregate filters on this. Cheap, and the reason the flag
+  // is a column rather than a join -- see the note above.
+  @@index([isOrgAccount])
   // Soft-delete and suspension sweeps. Raw CREATE INDEX in the old chain;
   // declared here so they survive the squash.
   @@index([deletedAt])
@@ -285,7 +269,6 @@ model Follow {
   followee   User   @relation("Followee", fields: [followeeId], references: [id], onDelete: Cascade)
 
   @@unique([followerId, followeeId])
-
   // FK-backing indexes. MySQL/InnoDB created these implicitly for every
   // foreign key; Postgres does not, and neither does Prisma on Postgres.
   // Declared so the migration to Postgres keeps every index the live
@@ -293,78 +276,65 @@ model Follow {
   @@index([followeeId])
 }
 
-// Refresh tokens for the native (React Native) client. The web admin side keeps
-// its NextAuth cookie session and never touches this table.
-//
-// Three properties do the security work, and none of them is optional:
-//   HASHED     — only the SHA-256 of the token is stored, so a database read
-//                does not hand out usable credentials.
-//   SINGLE USE — `usedAt` is stamped the first time a token is redeemed.
-//                Redeeming it again is, by definition, either a replay or a
-//                thief racing the legitimate client.
-//   FAMILY     — every token minted from the same original login shares a
-//                `familyId`. A replay revokes the WHOLE family, which logs out
-//                both the thief and the victim rather than letting the thief
-//                quietly keep rotating. That is the intended, safe outcome.
-model RefreshToken {
-  id        String    @id @default(cuid())
-  userId    String
-  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  tokenHash String    @unique
-  familyId  String
-  usedAt    DateTime?
-  expiresAt DateTime
-  createdAt DateTime  @default(now())
-  revokedAt DateTime?
+/// Which kind of credential an AuthToken row is.
+enum AuthTokenType {
+  /// Native-client session refresh. Single use, rotated, grouped by familyId.
+  REFRESH
+  /// "Forgot password" link. Single use, short-lived.
+  PASSWORD_RESET
+  /// "Verify your email" link. Single use, 24 hours, one live per user.
+  EMAIL_VERIFICATION
+}
 
-  @@index([userId])
+/// Every bearer secret this API hands out, ONE TABLE, HASHES ONLY (schema v2).
+///
+/// Was three tables: RefreshToken, PasswordResetToken, EmailVerificationToken.
+/// They shared a shape -- a secret, an owner, an expiry -- and differed in two
+/// ways this model now states as columns rather than as table boundaries:
+///
+///   HASHED, ALL OF THEM. `tokenHash` is the SHA-256 hex of the secret and the
+///   secret itself is never stored. PasswordResetToken used to keep the token in
+///   the clear and key it on an email; the v2 data migration hashed the two
+///   rows that existed and resolved the email to `userId`, so an email change
+///   can no longer leave a reset link that resets the new address.
+///
+///   REFRESH-ONLY COLUMNS. `familyId`, `usedAt` and `revokedAt` mean something
+///   only for a refresh token (rotation, replay detection, family revocation;
+///   see @/lib/auth-tokens). They are NULL on the other two types, and a CHECK
+///   constraint in 20261003000000_schema_v2_core says so:
+///     type = 'REFRESH'  <=>  familyId IS NOT NULL
+///     type <> 'REFRESH'  =>  usedAt IS NULL AND revokedAt IS NULL
+///
+/// The other two are single-use by DELETION (the row is removed on redemption),
+/// exactly as before. `tokenHash` is unique across all three types: a 256-bit
+/// random secret colliding across types is not a case worth a composite key.
+model AuthToken {
+  id        String        @id @default(cuid())
+  type      AuthTokenType
+  userId    String
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String        @unique
+  /// REFRESH only. Every token minted from the same original login shares it;
+  /// a replay revokes the whole family.
+  familyId  String?
+  /// REFRESH only. Stamped the first time the token is redeemed.
+  usedAt    DateTime?
+  /// REFRESH only.
+  revokedAt DateTime?
+  expiresAt DateTime
+  createdAt DateTime      @default(now())
+
+  /// "this user's tokens of this kind" -- purge-on-issue for verification and
+  /// reset, logout-everywhere for refresh.
+  @@index([userId, type])
   // familyId is not decoration: revoking a family on replay looks up by it.
   @@index([familyId])
-}
-
-model PasswordResetToken {
-  id        String   @id @default(cuid())
-  email     String
-  token     String   @unique
-  expiresAt DateTime
-  createdAt DateTime @default(now())
-}
-
-// Email verification for credentials signup.
-//
-// Same shape as PasswordResetToken with one deliberate difference: only the
-// SHA-256 of the token is stored. A reset token in the clear is already a
-// weakness in that table; there is no reason to reproduce it here, and hashing
-// costs a single digest on a path that runs once per account.
-//
-// Four properties do the work:
-//   HASHED     — a database read yields no usable verification link.
-//   EXPIRING   — 24 hours, checked on every redemption.
-//   SINGLE USE — the row is deleted the moment it is redeemed, so a link that
-//                leaks from a mailbox later is inert.
-//   ONE LIVE   — issuing purges any prior token for that user, so a resend
-//                invalidates the previous email rather than leaving a fleet of
-//                working links behind.
-//
-// Keyed on userId rather than email: the account is what gets verified, and an
-// email change must not leave a token that verifies the new address using proof
-// of the old one.
-model EmailVerificationToken {
-  id        String   @id @default(cuid())
-  userId    String
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  tokenHash String   @unique
-  expiresAt DateTime
-  createdAt DateTime @default(now())
-
-  @@index([userId])
 }
 
 model Item {
   id          String    @id @default(cuid())
   title       String
   description String    @db.Text
-  images      String    @db.Text
   category    Category
   condition   Condition
   // The FINAL value: what the owner is asking, after any override they made.
@@ -374,6 +344,26 @@ model Item {
   // the listing sits in PENDING_REVIEW until an admin approves it (see
   // decideItemValue() in @/lib/valuation-server and the ItemStatus note).
   valueLeaves Int?
+
+  /// The value bracket of `valueLeaves`, 1..10. NULL exactly when valueLeaves is.
+  ///
+  /// A STORED GENERATED COLUMN, so it cannot drift and nothing writes it:
+  ///   GENERATED ALWAYS AS (CASE WHEN "valueLeaves" IS NULL THEN NULL
+  ///     WHEN "valueLeaves" <= 100 THEN 1 ... WHEN <= 12000 THEN 9 ELSE 10 END) STORED
+  /// Prisma cannot declare a generated column; it lives in
+  /// 20261003000000_schema_v2_core and a `migrate diff` never mentions it. Any
+  /// write that names `bracket` is refused by Postgres, which is the point.
+  ///
+  /// THE CEILINGS ARE COPY THREE of BRACKET_CEILINGS in @/lib/brackets (and
+  /// baylo-mobile/src/lib/brackets.ts). Change the table there, and this column
+  /// needs a migration that re-creates it with the new CASE -- the generation
+  /// expression is fixed at DDL time. scripts/schema-v2/verify-v2.ts compares
+  /// it with bracketOf() on every row.
+  ///
+  /// (The MariaDB 10.4 stored-generated-column hang noted on ModerationCase
+  /// .openKey does not apply: this is Postgres, and the column is in no unique
+  /// index.)
+  bracket Int? @default(dbgenerated())
 
   // TRUE when the owner typed their own value rather than taking the
   // suggestion. Stored, not derived from valueLeaves != suggestedLeaves: an
@@ -445,48 +435,42 @@ model Item {
   // row before the feature lands (the schema-first rule, see SETUP.md).
   valueRejectionReason ValueRejectionReason?
 
-  appeals ListingAppeal[]
+  /// Value-rejection and takedown appeals against this listing. See ModerationCase.
+  appeals ModerationCase[]
 
-  /// THE LEAD PHOTO'S dHash, AND ONLY THE LEAD PHOTO'S.
-  ///
-  /// Kept because the web listing wizard round-trips it through its edit mode
-  /// and GET /api/v1/items/[id] returns it. It is NO LONGER what the duplicate
-  /// check reads: that is ItemImageHash, which holds one row per photo. A
-  /// listing's five photos were five ways to re-post someone else's item and
-  /// only the first was ever compared.
-  ///
-  /// Write paths keep this in step with position 0 of ItemImageHash. If the two
-  /// ever disagree, the TABLE is right.
-  imageHash String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
   userId String
   user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  offeredIn   TradeRequest[] @relation("OfferedItem")
-  requestedIn TradeRequest[] @relation("RequestedItem")
-  likes       PostLike[]     @relation("ItemPostLikes")
-  comments    PostComment[]  @relation("ItemPostComments")
-  offers      Offer[]        @relation("ItemOffers")
+  /// Deals that offered this item, and deals that asked for it. See Trade.
+  tradesOffered   Trade[]   @relation("TradeOfferedItem")
+  tradesRequested Trade[]   @relation("TradeRequestedItem")
+  likes           Like[]    @relation("ItemPostLikes")
+  comments        Comment[] @relation("ItemPostComments")
 
   /// Public meetup points this listing is offered at. ZERO IS NORMAL and means
   /// delivery-only or arrange-it-in-chat -- it is not an incomplete listing.
   /// Capped at MAX_ITEM_HUBS by the write paths; see @/lib/safe-zones.
   safeZones ItemSafeZone[]
 
-  /// One dHash per photo. See ItemImageHash.
-  imageHashes ItemImageHash[]
+  /// The photos, in order, each with its dHash. Was the `images` JSON column
+  /// plus ItemImageHash (schema v2). See ItemImage.
+  images ItemImage[]
+
+  /// The categories the owner will take in return. See ItemWantedCategory.
+  wantedCategories ItemWantedCategory[]
   /// 24-hour stories that share this listing. See Story.
-  stories Story[]
+  stories          Story[]
 
   // -- Perishables, and what the owner wants back -----------------------------
   //
-  // ALL FIVE ARE OPTIONAL, AND FOUR OF THEM ARE NULL ON EVERY EXISTING ROW.
+  // ALL OPTIONAL, AND NULL ON EVERY ROW THAT PREDATES THEM.
   // A listing made before this block reads exactly as it did: isPerishable
-  // false, no quantity, no window, and an empty wanted-categories list. Nothing
+  // false, no quantity, no window, and no ItemWantedCategory rows. Nothing
   // in the matcher, the feed or the expiry sweep treats that as a listing with
-  // something missing -- see the note on lookingForCategories.
+  // something missing -- see the note on ItemWantedCategory.
 
   /// Food, flowers, produce -- something with a shelf life. The flag that turns
   /// the three columns below from noise into meaning, and the one the expiry
@@ -520,71 +504,24 @@ model Item {
   /// changes nothing the first run did not.
   tradeWithinHours Int?
 
-  /// The categories the owner will take in return. THE MATCHER'S INPUT, and
-  /// deliberately NOT perishable-only -- a standard item is just as likely to
-  /// name what it wants.
-  ///
-  /// A Postgres enum array, not a text column of tags: the values are the same
-  /// closed taxonomy `category` already uses, and a string list is a string
-  /// list until the day somebody writes "electronics" into it.
-  ///
-  /// EMPTY IS THE STEADY STATE, NOT A MISSING VALUE. A scalar list cannot be
-  /// null in Prisma, so every row that predates this column reads as `[]`, and
-  /// so does every listing whose owner skipped the question. The matcher skips
-  /// an empty list on either side rather than treating it as "wants
-  /// everything"; see matchesFor() in @/lib/category-match.
-  lookingForCategories Category[]
-
-  // -- Featured boosts ---------------------------------------------------------
-  //
-  // An owner pays BOOST_COST_LEAVES to put a listing in the Home screen's
-  // Featured section for BOOST_HOURS. All three are false/null on every row
-  // that has never been boosted. See @/lib/featured.
-
-  /// The sweep's flag. NOT the source of truth for "is it featured right now":
-  /// every read also requires `featuredUntil > now()`, so a sweep that has not
-  /// run cannot keep a lapsed boost on screen. expireFeaturedItems() flips it
-  /// back to false once the window has passed.
-  isFeatured Boolean @default(false)
-
-  /// When the paid window ends. Kept after the sweep clears the flag, so the
-  /// last boost is still answerable from the row.
-  featuredUntil DateTime?
-
-  /// When the current boost was bought. NOT the rotation key: the section
-  /// shuffles hourly (featuredRotation() in @/lib/featured), so boosting later
-  /// buys no better placement. Used only to pick deterministically which
-  /// boosts are considered if a category ever exceeds FEATURED_SCAN_CAP.
-  featuredAt DateTime?
-
-  /// The Featured section's candidate scan: one category's active boosts.
-  @@index([isFeatured, category, featuredAt])
+  // Featured boosts were REMOVED in schema v2 (isFeatured, featuredUntil,
+  // featuredAt). The FEATURE_BOOST ledger rows they wrote are kept: they are
+  // Leaves that left the system, and the ledger never forgets a movement.
+  // The wanted-categories list moved to ItemWantedCategory, which replaces the
+  // GIN index this table used to carry for the matcher.
 
   /// The perishable sweep: unexpired perishables, oldest first. Partial on the
   /// flag would be tighter, which Prisma cannot declare -- the composite is
   /// what it can express, and it is enough.
   @@index([isPerishable, status, createdAt])
-
-  /// THE MATCHER'S INDEX IS NOT DECLARED HERE, AND CANNOT BE.
-  ///
-  ///   CREATE INDEX "Item_lookingForCategories_idx"
-  ///     ON "Item" USING GIN ("lookingForCategories");
-  ///
-  /// `hasSome` compiles to the array-overlap operator `&&`, which a B-tree
-  /// cannot answer -- without a GIN index the matcher sequentially scans every
-  /// AVAILABLE row on the hot listing-creation path. Prisma has no syntax for
-  /// GIN, so it lives in 20260923000000_organizations_and_perishables and is
-  /// written out here because a `migrate diff` will never mention it: the index
-  /// is invisible to the schema, so the diff neither creates it nor drops it.
-  /// If you rebuild this table by hand, put it back.
-
+  /// Bracket filters on the AVAILABLE feed (search assistant, marketplace).
+  @@index([status, bracket])
   // Both created by raw CREATE INDEX in the pre-baseline chain and never
   // declared here. Declaring them keeps the squashed baseline faithful.
   // "hidden takedowns, and the AVAILABLE feed that must exclude them".
   @@index([status, moderationHiddenAt])
   // The comparables lookup: same source, same category.
   @@index([valuationSource, category])
-
   // FK-backing indexes. MySQL/InnoDB created these implicitly for every
   // foreign key; Postgres does not, and neither does Prisma on Postgres.
   // Declared so the migration to Postgres keeps every index the live
@@ -592,45 +529,130 @@ model Item {
   @@index([userId])
 }
 
-/// ONE PERCEPTUAL HASH PER PHOTO, WHICH IS THE POOL THE DUPLICATE CHECK SCANS.
+/// One photo of one listing, in order (schema v2).
 ///
-/// Item.imageHash is a single column, so a listing with five photos put exactly
-/// one image into the duplicate pool. Re-posting somebody else's photo #3 was
-/// never caught, and anyone who noticed had an unlimited bypass that needed no
-/// tooling -- just a second photo.
+/// WAS TWO THINGS: the `Item.images` column (a JSON array of URLs in a TEXT
+/// column -- the schema's one real 1NF violation) and ItemImageHash (one dHash
+/// per photo, keyed by the photo's index INTO that JSON array). The pair had
+/// to be kept in step by hand; here the URL and its hash are the same row, so
+/// they cannot disagree about which photo is which.
 ///
-/// `position` is the index into the listing's own `images` JSON array, so a
-/// match knows WHICH photo it hit. Stage 2 sends Claude that photo rather than
-/// the listing's first one; comparing a matched photo #3 against a stranger's
-/// photo #1 would have Claude correctly answer "different" and overturn a true
-/// positive.
-model ItemImageHash {
+/// `position` is 0-based and dense: 0 is the lead photo every card draws.
+/// `hash` is NULL for photos that were never hashed (listings older than the
+/// duplicate check, or a hash that failed); the duplicate scan reads only the
+/// non-null ones, which is exactly the pool ItemImageHash held.
+model ItemImage {
   itemId   String
   position Int
-  hash     String @db.VarChar(64)
-  item     Item   @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  url      String  @db.Text
+  hash     String? @db.VarChar(64)
+  item     Item    @relation(fields: [itemId], references: [id], onDelete: Cascade)
 
   /// The PK's leading column is the only lookup by item anyone needs, and the
-  /// pair enforces one hash per photo slot. The duplicate scan reads the whole
+  /// pair enforces one photo per slot. The duplicate scan reads the whole
   /// table and compares in JS -- Hamming distance is not something an index can
-  /// answer -- so there is deliberately no index on `hash`: it would be paid for
-  /// on every write and used by nothing.
+  /// answer -- so there is deliberately no index on `hash`.
   @@id([itemId, position])
 }
 
-model TradeRequest {
-  id        String      @id @default(cuid())
-  status    TradeStatus @default(PENDING)
-  message   String?     @db.Text
-  createdAt DateTime    @default(now())
-  updatedAt DateTime    @updatedAt
+/// One category a listing's owner will take in return. THE MATCHER'S INPUT,
+/// and deliberately NOT perishable-only (schema v2; was the enum array
+/// Item.lookingForCategories).
+///
+/// NO ROWS IS THE STEADY STATE, NOT A MISSING VALUE. Every listing whose owner
+/// skipped the question has none, and the matcher skips a listing with none
+/// rather than treating it as "wants everything"; see matchesFor() in
+/// @/lib/category-match.
+///
+/// The composite PK makes a repeated category impossible, which the array
+/// never enforced. The `category` index is what the matcher's
+/// "who wants FOOD?" lookup reads; it replaces the GIN index on the array.
+model ItemWantedCategory {
+  itemId   String
+  category Category
+  item     Item     @relation(fields: [itemId], references: [id], onDelete: Cascade)
+
+  @@id([itemId, category])
+  @@index([category])
+}
+
+/// ONE DEAL, FROM PROPOSAL TO HANDOFF, IN ONE ROW (schema v2).
+///
+/// Was two tables. An Offer was the proposal ("my item for your listing"); on
+/// accept, the accept route created a SEPARATE TradeRequest and copied half the
+/// offer's columns onto it, with nothing linking the two rows -- the old
+/// correlation (sender + listing + ACCEPTED + a substring match on a JSON list)
+/// was ambiguous for 21 of 36 trades and settled only by "closest timestamp".
+/// A deal is now one row that moves through two phases:
+///
+///   OFFER PHASE  `offerStatus` -- PENDING, then DECLINED / WITHDRAWN / EXPIRED,
+///                or ACCEPTED. NULL on a deal that never had an offer phase (a
+///                legacy direct trade request from the web, or a seeded trade).
+///   TRADE PHASE  `status` -- ACCEPTED, CONFIRMING, COMPLETED, CANCELLED, or
+///                PENDING/REJECTED for a legacy direct request. NULL until the
+///                deal is accepted into a trade; `tradeCreatedAt` is set in the
+///                same statement. An offer that was accepted and still has
+///                `status` NULL is a legacy Leaves-only offer (June 2026) that
+///                never became a trade -- 11 such rows were migrated.
+///
+/// CHECK constraints in 20261003000002_schema_v2_trade hold the shape:
+///   offerStatus IS NOT NULL OR status IS NOT NULL
+///   (status IS NULL) = (tradeCreatedAt IS NULL)
+///   status IS NULL OR offeredItemId IS NOT NULL
+///
+/// IDS. A migrated deal that had a TradeRequest keeps the TradeRequest's id, so
+/// every Message, Review, SwapCode, AdminAction, Notification and ledger row
+/// that pointed at the trade still does. The Offer's id survives in
+/// `legacyOfferId` (unique), because chat message payloads written before
+/// v2 embed it -- resolve an id from a client by `id` first, then by
+/// `legacyOfferId`. A deal that was only ever an offer keeps the Offer's id as
+/// its `id` AND in `legacyOfferId`.
+model Trade {
+  id            String  @id @default(cuid())
+  legacyOfferId String? @unique
+
+  senderId   String
+  sender     User   @relation("TradeSender", fields: [senderId], references: [id])
+  receiverId String
+  receiver   User   @relation("TradeReceiver", fields: [receiverId], references: [id])
+
+  /// The listing the sender asked for (Offer.postId / TradeRequest.requestedItemId).
+  /// Restrict, which is NEW: Offer.post used to Cascade, so hard-deleting a
+  /// listing silently deleted its offers -- and with them the only row that
+  /// explained a BRIDGE_FEE_HOLD on the ledger. Listings are soft-deleted
+  /// (status REMOVED); a hard delete of one with deal history now fails loudly.
+  requestedItemId String
+  requestedItem   Item   @relation("TradeRequestedItem", fields: [requestedItemId], references: [id], onDelete: Restrict)
+
+  /// The item the sender put up, as a real foreign key. Was a client-written
+  /// JSON list (`Offer.offeredItems`) matched with a substring LIKE. NULL only
+  /// on legacy Leaves-only offers that named no item (15 migrated rows) -- the
+  /// CHECK above makes it required once a deal is a trade.
+  offeredItemId String?
+  offeredItem   Item?   @relation("TradeOfferedItem", fields: [offeredItemId], references: [id], onDelete: Restrict)
+
+  /// The offer phase. NULL = no offer phase (see the model note).
+  offerStatus OfferStatus?
+  /// The trade phase. NULL = not (yet) a trade (see the model note).
+  status      TradeStatus?
+
+  message String? @db.Text
+
+  /// When the deal was first proposed: the Offer's createdAt, or the
+  /// TradeRequest's for a deal with no offer phase. The offer-expiry window is
+  /// measured from here.
+  createdAt      DateTime  @default(now())
+  /// When the deal became a trade -- what TradeRequest.createdAt used to mean.
+  /// Equal to createdAt on a deal with no offer phase.
+  tradeCreatedAt DateTime?
+  updatedAt      DateTime  @updatedAt
   /// The moment settlement committed -- written once, inside the completion
   /// transaction in confirm/submit, and never touched again. `updatedAt` is
   /// NOT this: any later write to the row (a hide flag, a meetup field) moves
   /// it, which is how an old trade could count toward TODAY's trade quest.
   /// NULL on every trade completed before 25 Sep 2026, when the column was
   /// added; nothing backfills it, and nothing that reads it needs the past.
-  completedAt DateTime?
+  completedAt    DateTime?
 
   hiddenBySender   Boolean @default(false)
   hiddenByReceiver Boolean @default(false)
@@ -723,16 +745,6 @@ model TradeRequest {
   /// and it leaves something on the table instead of a hole.
   meetupAgreedAt DateTime?
 
-  senderId   String
-  sender     User   @relation("SentRequests", fields: [senderId], references: [id])
-  receiverId String
-  receiver   User   @relation("ReceivedRequests", fields: [receiverId], references: [id])
-
-  offeredItemId   String
-  offeredItem     Item   @relation("OfferedItem", fields: [offeredItemId], references: [id])
-  requestedItemId String
-  requestedItem   Item   @relation("RequestedItem", fields: [requestedItemId], references: [id])
-
   // Leaves moving from sender to receiver as part of this trade. NULL means
   // none — the same thing the `?? 0` at each old recovery site meant.
   //
@@ -758,7 +770,6 @@ model TradeRequest {
   /**
    * WHICH SIDE PAID IT. True when the sender (the proposer) did, false when
    * the receiver did, NULL when there is no fee.
-   *
    * NOT DERIVED, and that is the point. The payer is the side handing over the
    * lower-bracket item, which is a fact about the two items AT THE MOMENT THE
    * OFFER WAS AGREED -- and a value can be edited afterwards, an item can be
@@ -766,7 +777,6 @@ model TradeRequest {
    * would mean the Leaves could be paid to the wrong person because somebody
    * edited a listing in between. Settlement and cancellation read this column
    * and nothing else.
-   *
    * A boolean against `senderId` rather than a `bridgeFeePayerId` FK, the same
    * argument `meetupProposedBySender` makes: an id column can point at
    * somebody who is not in this trade, and then every reader has to guard
@@ -774,29 +784,41 @@ model TradeRequest {
    */
   bridgeFeePaidBySender Boolean?
 
-  messages              Message[]
-  reviews               Review[]
-  swapConfirmationCodes SwapConfirmationCode[]
-  deferredContracts     DeferredContract[]
+  // ── Offer-phase snapshots (were Offer columns) ─────────────────────────────
+  //
+  // `offeredBracket` / `targetBracket` are SNAPSHOTS of the two brackets at
+  // proposal, for the audit trail and for the accept-time re-check to name what
+  // moved. They are not read as the rule -- the rule is re-derived from
+  // `Item.valueLeaves` on every check. `consentAt` / `policyVersion` record the
+  // PAYER ticking "I agree to the bridging fee and the trading policy";
+  // required on a bridge, absent on a same-bracket deal. See @/lib/bridge-fee.
+  offeredBracket Int?
+  targetBracket  Int?
+  consentAt      DateTime?
+  policyVersion  String?   @db.VarChar(32)
 
-  // FK-backing indexes. MySQL/InnoDB created these implicitly for every
-  // foreign key; Postgres does not, and neither does Prisma on Postgres.
-  // Declared so the migration to Postgres keeps every index the live
-  // MySQL database had (see the 2026-09-15 baseline).
+  messages  Message[]
+  reviews   Review[]
+  swapCodes SwapCode[]
+
   @@index([senderId])
   @@index([receiverId])
   @@index([offeredItemId])
   @@index([requestedItemId])
   @@index([safeZoneHubId])
   @@index([meetupHubId])
+  /// The lazy offer-expiry sweep and the "pending offers" lists.
+  @@index([offerStatus, createdAt])
+  /// Live trades: the escrow check and the trades screen.
+  @@index([status])
 }
 
 model Message {
-  id        String   @id @default(cuid())
-  content   String   @db.Text
-  systemEventKey String? @unique
-  read      Boolean  @default(false)
-  createdAt DateTime @default(now())
+  id             String   @id @default(cuid())
+  content        String   @db.Text
+  systemEventKey String?  @unique
+  read           Boolean  @default(false)
+  createdAt      DateTime @default(now())
 
   senderId   String
   sender     User   @relation("SentMessages", fields: [senderId], references: [id])
@@ -804,7 +826,7 @@ model Message {
   receiver   User   @relation("ReceivedMessages", fields: [receiverId], references: [id])
 
   tradeId String?
-  trade   TradeRequest? @relation(fields: [tradeId], references: [id])
+  trade   Trade?  @relation(fields: [tradeId], references: [id])
 
   // FK-backing indexes. MySQL/InnoDB created these implicitly for every
   // foreign key; Postgres does not, and neither does Prisma on Postgres.
@@ -813,26 +835,6 @@ model Message {
   @@index([senderId])
   @@index([receiverId])
   @@index([tradeId])
-}
-
-/**
- * Hides one conversation for one viewer without touching its messages.
- *
- * The direction is intentional: A can hide A/B while B still sees the same
- * history. A new message clears the sender's hide row and makes the thread
- * visible again to that sender; the recipient's hide row is cleared when they
- * send their next message.
- */
-model ConversationHide {
-  id        String   @id @default(cuid())
-  viewerId  String
-  viewer    User     @relation("ConversationHidesByViewer", fields: [viewerId], references: [id], onDelete: Cascade)
-  partnerId String
-  partner   User     @relation("ConversationHidesByPartner", fields: [partnerId], references: [id], onDelete: Cascade)
-  hiddenAt  DateTime @default(now())
-
-  @@unique([viewerId, partnerId])
-  @@index([partnerId])
 }
 
 model Notification {
@@ -881,7 +883,10 @@ model Notification {
   // already imperfect and they retire with the web user-side routes. Never read
   // a pre-v1 TRADE_* entityId as a trade id.
   //
-  // `link` is still written and still read by the web admin. Unchanged.
+  // `link` (a web URL) is KEPT in schema v2 although it is a known 3NF
+  // redundancy: it is derivable from type + entityType/entityId, and about 20
+  // routes still write it and the web admin and dashboard read it. Kept on
+  // purpose (user decision, 3 Oct 2026); removing it is a separate change.
   entityType String?
   entityId   String?
 
@@ -910,35 +915,15 @@ model Review {
   reviewee   User   @relation("ReviewsReceived", fields: [revieweeId], references: [id])
 
   tradeId String
-  trade   TradeRequest @relation(fields: [tradeId], references: [id])
+  trade   Trade  @relation(fields: [tradeId], references: [id])
 
   @@unique([tradeId, reviewerId])
-
   // FK-backing indexes. MySQL/InnoDB created these implicitly for every
   // foreign key; Postgres does not, and neither does Prisma on Postgres.
   // Declared so the migration to Postgres keeps every index the live
   // MySQL database had (see the 2026-09-15 baseline).
   @@index([reviewerId])
   @@index([revieweeId])
-}
-
-// Task reward system: one row per completed task.
-// One-time tasks use refId "" (MySQL treats NULLs as distinct in unique
-// indexes, so an empty-string default is what enforces once-per-user);
-// repeatable tasks (VERIFIED_SWAP, SAFEZONE_MEETUP) use refId = tradeId.
-// The @@unique below is what makes every award idempotent — do not relax it.
-model TaskCompletion {
-  id        String   @id @default(cuid())
-  task      TaskKind
-  refId     String   @default("")
-  leaves    Int
-  createdAt DateTime @default(now())
-
-  userId String
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([userId, task, refId])
-  @@index([userId])
 }
 
 enum TaskKind {
@@ -953,49 +938,6 @@ enum TaskKind {
   // One-time: the first trade this account ever completed. What replaced the
   // per-trade VERIFIED_SWAP as a task -- a milestone, not a faucet.
   FIRST_TRADE
-}
-
-// ── Daily quests (23 Sep 2026, moved weekly -> daily 24 Sep 2026) ────────────
-//
-// Five quests a day: 2 Easy (2 Leaves each), 2 Medium (3 each), 1 Hard (5) --
-// 15 Leaves/day if every one is completed. Assigned fresh each UTC calendar
-// day (`periodStart`) and reconciled against real DB state the same way
-// TaskCompletion is -- see reconcileQuests() in @/lib/quests. Every quest is
-// an existing, already-tracked platform action (send an offer, list an item,
-// complete a trade); none of it is a new engagement metric like time-in-app,
-// which is deliberate -- the manuscript frames Baylo's Point System as a
-// reward system rather than gamification, and a metric with no real-world
-// action behind it would contradict that.
-//
-// ONE ROW PER (user, day, quest), not per tier: unlike the original weekly
-// shape (one quest per tier), Easy and Medium each place TWO quests a day, so
-// the tier alone no longer identifies a row -- `quest` does, and the pools
-// are built so a QuestKind is never assigned twice in the same day.
-// `rewardLeaves` is snapshotted at assignment time so a later change to
-// QUEST_REWARDS never rewrites what a past day actually paid.
-//
-// STACKS ON TOP OF WEEKLY_TASK_LEAF_CAP, DELIBERATELY. Quests write
-// QUEST_REWARD ledger rows, not TASK_REWARD, so the existing 100/week task
-// cap never sums them -- 15/day of quests is a second, separate allowance on
-// top of it, not a share of it. A conscious product decision, not an
-// oversight: see the header of @/lib/quests.
-model QuestAssignment {
-  id           String    @id @default(cuid())
-  periodStart  DateTime
-  tier         QuestTier
-  quest        QuestKind
-  rewardLeaves Int
-  /// Non-null means paid -- the same "row's existence/non-null column is the
-  /// fact" shape as UserAchievement.unlockedAt. Credits Leaves exactly once;
-  /// see the claim guard in completeQuest() in @/lib/quests.
-  completedAt  DateTime?
-  createdAt    DateTime  @default(now())
-
-  userId String
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([userId, periodStart, quest])
-  @@index([userId, periodStart])
 }
 
 enum QuestTier {
@@ -1019,30 +961,30 @@ enum QuestKind {
   COMPLETE_SAFEZONE_TRADE
 }
 
-model SwapConfirmationCode {
-  id       String       @id @default(cuid())
+/// One party's handoff code for one trade (was SwapConfirmationCode; renamed in
+/// schema v2, columns unchanged). It belongs to a TRADE, which is why it is not
+/// folded into AuthToken: it dies with the trade and is never a login credential.
+model SwapCode {
+  id       String  @id @default(cuid())
   tradeId  String
-  trade    TradeRequest @relation(fields: [tradeId], references: [id], onDelete: Cascade)
+  trade    Trade   @relation(fields: [tradeId], references: [id], onDelete: Cascade)
   userId   String
-  user     User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user     User    @relation(fields: [userId], references: [id], onDelete: Cascade)
   codeHash String
-  used     Boolean      @default(false)
+  used     Boolean @default(false)
 
   /**
    * The same code, sealed so its OWNER can be shown it. AES-256-GCM, keyed from
    * SWAP_CODE_KEY in the environment and never from anything in this database.
-   *
    * ADDITIVE, NOT A REPLACEMENT. `codeHash` above is still what confirm/submit
    * verifies against and nothing about the guess budget changes; this column is
    * read on exactly one path -- the owner asking confirm/status for their own
    * code -- so a fault here cannot make a wrong code verify.
-   *
    * NULL is a first-class value. A deployment with no key seals nothing, the
    * status route answers `code: null`, and the client points the reader at the
    * email exactly as it does today. Rotating the key leaves old rows unopenable
    * and that is a fifteen-minute problem, not a data-loss one -- see the long
    * note in @/lib/swap-code-seal.
-   *
    * The ciphertext is bound to (tradeId, userId) as GCM additional authenticated
    * data, so a value moved between rows by anyone with write access fails to
    * open rather than yielding one person's digits to another.
@@ -1061,7 +1003,6 @@ model SwapConfirmationCode {
   createdAt DateTime @default(now())
 
   @@unique([tradeId, userId])
-
   // FK-backing indexes. MySQL/InnoDB created these implicitly for every
   // foreign key; Postgres does not, and neither does Prisma on Postgres.
   // Declared so the migration to Postgres keeps every index the live
@@ -1131,7 +1072,6 @@ enum ItemStatus {
   /**
    * A perishable listing whose `tradeWithinHours` ran out. Written ONLY by the
    * expiry sweep, and only on a row with `isPerishable`.
-   *
    * A STATUS AND NOT A `expiredAt` COLUMN, for exactly the reason
    * PENDING_REVIEW is one: every discovery query in this codebase already
    * filters on `status: AVAILABLE`, so an expired listing leaves the feed, the
@@ -1139,7 +1079,6 @@ enum ItemStatus {
    * without a single WHERE clause changing. A timestamp beside AVAILABLE would
    * need adding to all of them, and the one that was missed would keep selling
    * yesterday's fish.
-   *
    * DISTINCT FROM `REMOVED`, which the owner sets and can undo with relist.
    * Expiry is a fact about the clock and relisting does not change it -- the
    * owner posts the next batch as the next listing, which is what a batch is.
@@ -1202,12 +1141,10 @@ enum NotificationType {
   OFFER_EXPIRED
   /**
    * The other party proposed, or agreed, a place and time to meet.
-   *
    * TWO NEW VALUES RATHER THAN REUSING TRADE_ACCEPTED, because this column is
    * the EVENT and a proposal is not an acceptance — the model's own note draws
    * that line. They also need different words and different urgency: a proposal
    * is a question waiting on the recipient, an agreement is a settled fact.
-   *
    * Both carry entityType "meetup", which is a NEW routing token and not
    * "trade": a trade notification opens the confirmation codes, and sending
    * somebody there to answer "can you do Saturday?" would put a 15-minute code
@@ -1229,7 +1166,9 @@ enum NotificationType {
    * takedown is and how to answer it.
    */
   LISTING_HIDDEN
-  /** The outcome of the recipient's appeal. Two types, same reason as above. */
+  /**
+   * The outcome of the recipient's appeal. Two types, same reason as above.
+   */
   LISTING_APPEAL_UPHELD
   LISTING_APPEAL_OVERTURNED
 
@@ -1238,7 +1177,6 @@ enum NotificationType {
    * looking for. THE ONLY NOTIFICATION IN THIS ENUM THAT NOBODY DID TO THE
    * RECIPIENT -- every other one names an actor who acted on them, and this one
    * is a shop window.
-   *
    * That difference is why it is one type and not two: there is no approve/
    * reject pair to tell apart, and a client that wants to mute discovery
    * without muting trades needs exactly this value to filter on. It carries
@@ -1252,7 +1190,6 @@ enum NotificationType {
    * An organisation owner invited the recipient to its staff. Before 25 Sep
    * 2026 an invitation made a PENDING row and told nobody: the invitee's only
    * way to find it was to open Settings for some other reason.
-   *
    * The actor is the OWNER who sent it, not the organisation's backing row --
    * a person asked, and the recipient should see who. entityType "org_invite",
    * entityId the OrganizationMember id, so the tap can open the invitation.
@@ -1277,7 +1214,8 @@ enum FollowStatus {
   ACCEPTED
 }
 
-model PostLike {
+/// A like on a listing (was PostLike; renamed in schema v2, columns unchanged).
+model Like {
   id        String   @id @default(cuid())
   postId    String
   post      Item     @relation("ItemPostLikes", fields: [postId], references: [id], onDelete: Cascade)
@@ -1286,7 +1224,6 @@ model PostLike {
   createdAt DateTime @default(now())
 
   @@unique([postId, userId])
-
   // FK-backing indexes. MySQL/InnoDB created these implicitly for every
   // foreign key; Postgres does not, and neither does Prisma on Postgres.
   // Declared so the migration to Postgres keeps every index the live
@@ -1294,18 +1231,19 @@ model PostLike {
   @@index([userId])
 }
 
-model PostComment {
-  id        String        @id @default(cuid())
+/// A comment on a listing (was PostComment; renamed in schema v2). Comment likes
+/// were dropped with CommentLike, which never held a row.
+model Comment {
+  id        String    @id @default(cuid())
   postId    String
-  post      Item          @relation("ItemPostComments", fields: [postId], references: [id], onDelete: Cascade)
+  post      Item      @relation("ItemPostComments", fields: [postId], references: [id], onDelete: Cascade)
   userId    String
-  user      User          @relation("UserPostComments", fields: [userId], references: [id], onDelete: Cascade)
-  content   String        @db.Text
+  user      User      @relation("UserPostComments", fields: [userId], references: [id], onDelete: Cascade)
+  content   String    @db.Text
   parentId  String?
-  parent    PostComment?  @relation("CommentReplies", fields: [parentId], references: [id])
-  replies   PostComment[] @relation("CommentReplies")
-  likes     CommentLike[]
-  createdAt DateTime      @default(now())
+  parent    Comment?  @relation("CommentReplies", fields: [parentId], references: [id])
+  replies   Comment[] @relation("CommentReplies")
+  createdAt DateTime  @default(now())
 
   // FK-backing indexes. MySQL/InnoDB created these implicitly for every
   // foreign key; Postgres does not, and neither does Prisma on Postgres.
@@ -1316,101 +1254,6 @@ model PostComment {
   @@index([parentId])
 }
 
-model CommentLike {
-  id        String      @id @default(cuid())
-  commentId String
-  comment   PostComment @relation(fields: [commentId], references: [id], onDelete: Cascade)
-  userId    String
-  user      User        @relation("UserCommentLikes", fields: [userId], references: [id], onDelete: Cascade)
-  createdAt DateTime    @default(now())
-
-  @@unique([commentId, userId])
-
-  // FK-backing indexes. MySQL/InnoDB created these implicitly for every
-  // foreign key; Postgres does not, and neither does Prisma on Postgres.
-  // Declared so the migration to Postgres keeps every index the live
-  // MySQL database had (see the 2026-09-15 baseline).
-  @@index([userId])
-}
-
-model Offer {
-  id            String      @id @default(cuid())
-  postId        String
-  post          Item        @relation("ItemOffers", fields: [postId], references: [id], onDelete: Cascade)
-  senderId      String
-  sender        User        @relation("SentOffers", fields: [senderId], references: [id])
-  receiverId    String
-  receiver      User        @relation("ReceivedOffers", fields: [receiverId], references: [id])
-  offeredItems  String      @db.Text
-  /**
-   * LEGACY. Leaves the sender added on top of their item, from before trading
-   * became bracket-based (16 Sep 2026). New offers never carry one -- the
-   * schema refuses the field -- and the column exists only so the offers and
-   * trades that were already in flight settle the way they were agreed.
-   * `availableLeaves()` still subtracts it for PENDING rows for that reason.
-   */
-  offeredLeaves Int?
-  message       String?     @db.Text
-  status        OfferStatus @default(PENDING)
-  createdAt     DateTime    @default(now())
-  updatedAt     DateTime    @updatedAt
-
-  /**
-   * ── THE BRIDGE ────────────────────────────────────────────────────────────
-   *
-   * An offer is one item for one item, and the offered item is either in the
-   * SAME bracket as the listing or exactly ONE below it. The second case is a
-   * bridge, and it costs the proposer `bridgingFee(offeredBracket)` Leaves --
-   * see @/lib/trade-rules for the formula, which is never written out here.
-   *
-   * `bridgeFeeLeaves` NULL means same-bracket, no fee. Non-null means the fee
-   * was HELD when the offer was created: a BRIDGE_FEE_HOLD ledger row on the
-   * proposer and the same amount off their balance, in the same transaction
-   * as this row. It is released (BRIDGE_FEE_RELEASE) when the offer or the
-   * trade it becomes dies, and paid to the receiver (BRIDGE_FEE_PAID) when the
-   * trade completes. The trade carries its own copy, see TradeRequest.
-   *
-   * `offeredBracket` / `targetBracket` are SNAPSHOTS of the two brackets at
-   * proposal, for the audit trail and for the accept-time re-check to name
-   * what moved. They are not read as the rule -- the rule is re-derived from
-   * `Item.valueLeaves` on every check.
-   *
-   * `consentAt` / `policyVersion` record the PAYER ticking "I agree to the
-   * bridging fee and the trading policy". Required on a bridge, absent on a
-   * same-bracket offer, and the version is TRADING_POLICY_VERSION at the time.
-   *
-   * WHICH SIDE consented, and therefore WHEN these are written, depends on the
-   * direction: the proposer pays when they offer the lower item, so their
-   * consent is recorded with the offer; the receiver pays when they are
-   * offered the higher item, so theirs is recorded at accept, onto this same
-   * row. `bridgeFeeLeaves` is the QUOTE from the moment the offer was made and
-   * is set either way -- it is not evidence that anything has been held. What
-   * is held is exactly: a proposer-pays offer that is still PENDING, and any
-   * live trade. See @/lib/bridge-fee.
-   */
-  bridgeFeeLeaves Int?
-  offeredBracket  Int?
-  targetBracket   Int?
-  consentAt       DateTime?
-  policyVersion   String?   @db.VarChar(32)
-
-  /**
-   * LEGACY. Deferred Points Agreements were removed on 16 Sep 2026 -- the
-   * bridging fee covers the whole gap now. The relation and the table stay so
-   * the one FULFILLED contract and its ledger pair keep round-tripping through
-   * backups; no code path writes a row any more.
-   */
-  contracts DeferredContract[]
-
-  // FK-backing indexes. MySQL/InnoDB created these implicitly for every
-  // foreign key; Postgres does not, and neither does Prisma on Postgres.
-  // Declared so the migration to Postgres keeps every index the live
-  // MySQL database had (see the 2026-09-15 baseline).
-  @@index([postId])
-  @@index([senderId])
-  @@index([receiverId])
-}
-
 enum OfferStatus {
   PENDING
   ACCEPTED
@@ -1419,7 +1262,6 @@ enum OfferStatus {
    * The SENDER retracted it. Not the same act as DECLINED, which is the
    * receiver refusing, and the two must stay distinct: they are performed by
    * different people and they say different things about the sender.
-   *
    * Terminal, like the other two. `availableLeaves()` counts only PENDING
    * offers, so withdrawing releases the sender's pledged Leaves the moment the
    * status moves — no separate release step, and nothing to get out of step.
@@ -1430,7 +1272,6 @@ enum OfferStatus {
    * things a person DID, and this is the absence of one. Collapsing it into
    * DECLINED would tell a sender, permanently, that they were refused by
    * somebody who never opened the message.
-   *
    * The window is `OFFER_EXPIRY_DAYS` in @/lib/offers and is measured from
    * `createdAt` rather than stored per row — see the note there. Reached by a
    * lazy sweep on the read paths that measure a balance, because nothing on
@@ -1525,126 +1366,44 @@ model LeafTransaction {
   amount      Int // positive = credit, negative = debit (in Pasa Leaves)
   description String
 
-  // Optional references to the trade/offer that caused this debit/credit
-  offerId    String?
+  /// The deal (Trade.id) that caused this row. A plain column rather than a
+  /// relation: the ledger points at things, nothing points back at the ledger.
+  /// Since schema v2 this is ALSO where a fee HOLD/RELEASE points -- those rows
+  /// used to carry an `offerId`, and the v2 trade migration rewrote each one
+  /// to the id of the Trade that offer became (Trade.legacyOfferId keeps the
+  /// old id). scripts/schema-v2/verify-v2.ts asserts every value resolves.
   tradeId    String?
-  // The DeferredContract this row paid down, for CONTRACT_PAY / CONTRACT_COLLECT.
-  // A plain column rather than a relation, matching offerId and tradeId above:
-  // the ledger points at things, nothing points back at the ledger.
+  /// LEGACY. The DeferredContract this row paid down, for CONTRACT_PAY /
+  /// CONTRACT_COLLECT. DPAs were retired on 16 Sep 2026 and the table was
+  /// dropped in schema v2; the one FULFILLED contract's pair keeps its id here
+  /// so the two rows still explain each other. Nothing writes it.
   contractId String?
+
+  // ── Task rewards (schema v2; was the TaskCompletion table) ─────────────────
+  //
+  // A row with `task` set IS the task completion: the claim and the payment are
+  // one row, so they can no longer disagree. One-time tasks use taskRefId ""
+  // and repeatable ones the tradeId; the @@unique below is what makes every
+  // award idempotent -- do not relax it. Postgres treats NULLs as distinct, so
+  // every non-task row (task NULL) is outside the constraint.
+  //
+  // A DENIED award is a row too: amount 0, written when a rule (repeat partner,
+  // weekly cap) refused it, so that the denial is permanent rather than
+  // retried. SUM(amount) is unchanged by it, so the invariant is untouched.
+  //
+  // CHECKs in 20261003000001_schema_v2_ledger:
+  //   (task IS NULL) = (taskRefId IS NULL)
+  //   task IS NULL OR type = 'TASK_REWARD'
+  task      TaskKind?
+  taskRefId String?
 
   createdAt DateTime @default(now())
   eventAt   DateTime
 
+  @@unique([userId, task, taskRefId])
   @@index([userId])
   @@index([userId, createdAt])
   @@index([userId, eventAt])
-}
-
-// ── Deferred Points Agreement ────────────────────────────────────────────────
-//
-// Two items are unequal in value. The party receiving the more valuable one
-// agrees to owe the difference in Leaves and to settle it by a deadline.
-//
-// WHAT THIS MODEL DELIBERATELY CANNOT EXPRESS: getting the item back. There is
-// no reversal state, no repossession field, no return flag. The item physically
-// changed hands at a meetup and the system has no mechanism that could recover
-// it — a status called RETURNED would be a lie the database told about the
-// world. Every consequence of a default here is reputational (tier demotion,
-// a public count) or access-based (blocked from initiating trades).
-//
-// DEBT SURVIVES DEFAULT. `status = DEFAULTED` does not zero amountPaidLeaves or
-// close the contract: the remainder stays owed and auto-payment keeps applying
-// to it. If defaulting wiped the balance, defaulting would be the cheap way to
-// pay, and the deadline would be a suggestion.
-model DeferredContract {
-  id String @id @default(cuid())
-
-  /**
-   * WHAT THIS PROMISE IS ATTACHED TO. Exactly one of these is set at creation;
-   * after an offer is accepted BOTH are set.
-   *
-   * A DPA used to require an already-ACCEPTED TradeRequest, which meant the
-   * promise could not exist at the moment it was actually made — someone
-   * proposing "I'll settle 100 by 6 Oct" alongside an offer had nowhere to
-   * record it until the other party said yes. That inverted the feature: the
-   * promise is the thing being decided ON, so it has to be a row before the
-   * decision, not after it.
-   *
-   * So a contract may now hang off an Offer. When the offer is accepted the
-   * accept path fills in `tradeId` against the TradeRequest it creates and
-   * KEEPS `offerId` — the offer is where this promise came from, and that
-   * provenance is worth more than the nullability it costs.
-   *
-   * NOT ENFORCED BY THE DATABASE. "Exactly one at creation, at least one
-   * always" is a CHECK constraint, which Prisma cannot express and MariaDB
-   * 10.4 would not inherit through `prisma migrate` anyway. It is enforced in
-   * `assertContractSubject()` and at both creation sites; a row with neither is
-   * a bug, and `contractSubject()` throws rather than guessing.
-   */
-  tradeId String?
-  trade   TradeRequest? @relation(fields: [tradeId], references: [id], onDelete: Cascade)
-  offerId String?
-  offer   Offer?        @relation(fields: [offerId], references: [id], onDelete: Cascade)
-
-  // The debtor is always the PROPOSER. A contract is a promise to pay, and the
-  // only person who can make it is the person who will owe it; the creditor's
-  // half of the bargain is consent, which is what PENDING_ACCEPT is for.
-  debtorId   String
-  debtor     User   @relation("ContractDebtor", fields: [debtorId], references: [id], onDelete: Cascade)
-  creditorId String
-  creditor   User   @relation("ContractCreditor", fields: [creditorId], references: [id], onDelete: Cascade)
-
-  /**
-   * Principal. Never mutated after acceptance — payment moves amountPaidLeaves.
-   */
-  amountLeaves     Int
-  /**
-   * Paid so far. Two columns rather than a decrementing balance so that the
-   * original size of the promise stays legible on a half-paid contract.
-   */
-  amountPaidLeaves Int @default(0)
-
-  deadline DateTime
-  status   ContractStatus @default(PENDING_ACCEPT)
-
-  // Exactly one extension, and only if the creditor grants it. The request and
-  // the grant are separate columns because they are separate acts by separate
-  // people: a debtor asking is not a deadline moving.
-  extensionUsed              Boolean   @default(false)
-  extensionRequestedAt       DateTime?
-  extensionRequestedDeadline DateTime?
-
-  createdAt   DateTime  @default(now())
-  acceptedAt  DateTime?
-  fulfilledAt DateTime?
-  // Stamped by the deadline sweep, and NEVER cleared — not even when a
-  // defaulted contract is later paid off in full and moves to FULFILLED. This
-  // column, not `status`, is what "past defaults" counts and what the tier
-  // demotion is derived from. Paying late settles the debt, not the record.
-  defaultedAt DateTime?
-
-  // The debtor's exposure checks and the concurrency check both filter on
-  // (debtorId, status); the creditor's list filters on (creditorId, status);
-  // the lazy sweep filters on (status, deadline).
-  @@index([debtorId, status])
-  @@index([creditorId, status])
-  @@index([status, deadline])
-  @@index([tradeId])
-  // The offer-accept path looks a contract up by offer, and so does withdraw.
-  @@index([offerId])
-}
-
-enum ContractStatus {
-  PENDING_ACCEPT
-  ACTIVE
-  FULFILLED
-  DEFAULTED
-  // Not in the original four. A creditor who refuses a proposal produces a row
-  // that is neither fulfilled nor defaulted, and deleting it would erase the
-  // one fact the preview screen exists to surface — that someone looked at this
-  // debtor's numbers and said no. See the note in the change report.
-  DECLINED
 }
 
 // ── Moderation: roles, reports, blocks, audit ────────────────────────────────
@@ -1692,89 +1451,119 @@ enum ReportCategory {
 }
 
 /**
- * OPEN and REVIEWING are both LIVE -- see Report.openKey. ACTIONED and
- * DISMISSED are both RESOLVED, and the difference between them is whether
- * anything happened to the target, which is exactly what the reporter is told.
+ * What kind of case a ModerationCase row is.
  */
-enum ReportStatus {
+enum ModerationCaseType {
+  /// A user's report against a listing, user, message or story.
+  REPORT
+  /// An owner's appeal against a value rejection or a takedown on their listing.
+  LISTING_APPEAL
+}
+
+/**
+ * Where a case stands. ONE ENUM FOR BOTH TYPES (schema v2; was ReportStatus and
+ * ListingAppealStatus), with the values each type may hold fixed by a CHECK
+ * constraint in 20261003000000_schema_v2_core:
+ * REPORT          OPEN, REVIEWING, ACTIONED, DISMISSED
+ * LISTING_APPEAL  OPEN, UPHELD, OVERTURNED, WITHDRAWN
+ * OPEN (and, for a report, REVIEWING) is LIVE. ACTIONED and DISMISSED are both
+ * resolved, and the difference between them is whether anything happened to
+ * the target, which is exactly what the reporter is told. WITHDRAWN is an
+ * appeal closed because the owner deleted the listing -- no staff decision.
+ */
+enum ModerationCaseStatus {
   OPEN
   REVIEWING
   ACTIONED
   DISMISSED
+  UPHELD
+  OVERTURNED
+  WITHDRAWN
 }
 
 /**
- * One user's claim that one piece of content breaks the rules.
- * The target is a (type, id) pair rather than three nullable foreign keys.
- * Nullable FKs would give the database a shape it can check -- a real
- * constraint that the listing exists -- and that is a genuine loss, taken
- * deliberately: a report must survive its target. A scam listing that gets
- * deleted, by its owner or by us, is precisely the report a moderator still
- * needs to read, and an FK with ON DELETE CASCADE would erase the evidence at
- * the moment it started mattering. The route validates that the target exists
- * at report time; nothing keeps it alive afterwards, and nothing needs to.
+ * One case in the moderation queue (schema v2; was Report + ListingAppeal).
+ * Both were "somebody asked staff to decide something, and staff decided":
+ * a filer, a status, a decider, a decision time and a note to the filer. Those
+ * are shared columns here. What differs is WHAT the case is about, and that
+ * is per type -- the columns of the other type are NULL, enforced by CHECK
+ * constraints in 20261003000000_schema_v2_core:
+ * REPORT          targetType, targetId, category NOT NULL; itemId, appealKind,
+ * message, actionId NULL. notes optional.
+ * LISTING_APPEAL  itemId, appealKind, message, actionId NOT NULL; targetType,
+ * targetId, category, notes, openKey NULL.
+ * ── A REPORT'S TARGET IS A (type, id) PAIR, NOT A FOREIGN KEY ──────────────
+ * A report must survive its target. A scam listing that gets deleted, by its
+ * owner or by us, is precisely the report a moderator still needs to read, and
+ * an FK with ON DELETE CASCADE would erase the evidence at the moment it started
+ * mattering. The route validates that the target exists at report time.
+ * An APPEAL's listing, by contrast, IS a foreign key (Cascade): the appeal is
+ * about the owner's own listing and means nothing without it.
+ * ── ONE APPEAL PER DECISION ──────────────────────────────────────────────────
+ * `actionId` is the id of the AdminAction being appealed (a
+ * LISTING_VALUE_REJECTED or LISTING_HIDDEN row), UNIQUE: a rejection can be
+ * appealed once. A plain string and not a relation: the audit points at
+ * things, nothing points back at the audit. NULL on every REPORT row, which a
+ * unique index permits any number of.
+ * ── ONE LIVE REPORT PER REPORTER PER TARGET: `openKey` ───────────────────────
+ * Holds the literal "live" while a REPORT is OPEN or REVIEWING and NULL once it
+ * is resolved, so the @@unique below permits exactly one live report per
+ * (reporter, target) and any number of resolved ones. NULL on every appeal row.
+ * WRITTEN BY THE APPLICATION, in the same statement that sets `status` -- see
+ * resolveReport() in @/lib/moderation. It was going to be a STORED generated
+ * column; MariaDB 10.4.32 hangs the whole server on an UPDATE to a table with
+ * a stored generated column inside a unique index. On Postgres a partial
+ * unique index would now do it; that is week-2 code work, not a data change.
  */
-model Report {
-  id String @id @default(cuid())
+model ModerationCase {
+  id   String             @id @default(cuid())
+  type ModerationCaseType
 
-  reporterId String
-  reporter   User   @relation("ReportReporter", fields: [reporterId], references: [id], onDelete: Cascade)
+  /// The reporter (REPORT) or the listing owner (LISTING_APPEAL).
+  filedById String
+  filedBy   User   @relation("ModerationCaseFiler", fields: [filedById], references: [id], onDelete: Cascade)
 
-  targetType ReportTargetType
-  targetId   String
-  category   ReportCategory
-  /**
-   * Free text from the reporter. Capped at MAX_REPORT_NOTES in @/lib/moderation.
-   */
-  notes      String?          @db.Text
+  status ModerationCaseStatus @default(OPEN)
 
-  status ReportStatus @default(OPEN)
+  // ── REPORT only ──
+  targetType ReportTargetType?
+  targetId   String?
+  category   ReportCategory?
+  /// Free text from the reporter. Capped at MAX_REPORT_NOTES in @/lib/moderation.
+  notes      String?           @db.Text
+  openKey    String?           @db.VarChar(4)
 
-  /**
-   * "One OPEN report per reporter per target" as a database constraint.
-   * MySQL treats NULLs as DISTINCT in a unique index -- the same property
-   * TaskCompletion.refId leans on, inverted. This column holds the literal
-   * "live" while the report is OPEN or REVIEWING and NULL once it is ACTIONED
-   * or DISMISSED, so the @@unique below permits exactly one live report per
-   * (reporter, target) and any number of resolved ones. Without it a reporter
-   * who was told "no" could never report that target again, which is wrong: a
-   * seller who cleans up a listing and re-posts the same violation next month
-   * has committed a new violation.
-   * WRITTEN BY THE APPLICATION, in the same statement that sets `status`, and
-   * never on its own -- see resolveReport() in @/lib/moderation, which is the
-   * only code that moves either column. It was going to be a STORED generated
-   * column, which cannot drift at all; MariaDB 10.4.32 hangs the entire server
-   * on an UPDATE to a table with a stored generated column inside a unique
-   * index (a leaked buf0flu latch that takes DICT_SYS down with it), so that
-   * idea is recorded here as tried and rejected rather than left for the next
-   * person to rediscover it the same way.
-   */
-  openKey String? @db.VarChar(4)
+  // ── LISTING_APPEAL only ──
+  itemId     String?
+  item       Item?              @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  appealKind ListingAppealKind?
+  /// The owner's own words, capped at 300 characters. Never edited.
+  message    String?            @db.VarChar(300)
+  /// The AdminAction this appeal answers. Unique: one appeal per decision.
+  actionId   String?            @unique
 
-  /**
-   * Who closed it. SetNull rather than Cascade: the report outlives the staff account.
-   */
-  resolvedById   String?
-  resolvedBy     User?     @relation("ReportResolver", fields: [resolvedById], references: [id], onDelete: SetNull)
-  resolvedAt     DateTime?
-  /**
-   * What the reporter is told. Goes verbatim into the REPORT_RESOLVED notification.
-   */
-  resolutionNote String?   @db.Text
+  // ── The decision, both types ──
+  /// Who closed it. SetNull: the case outlives the staff account.
+  decidedById  String?
+  decidedBy    User?     @relation("ModerationCaseDecider", fields: [decidedById], references: [id], onDelete: SetNull)
+  decidedAt    DateTime?
+  /// REPORT: what the reporter is told (goes verbatim into REPORT_RESOLVED).
+  /// LISTING_APPEAL: the decision reason, or what happened on WITHDRAWN.
+  decisionNote String?   @db.Text
 
   createdAt DateTime @default(now())
 
+  /// Audit rows that answered this case.
   actions AdminAction[]
 
-  @@unique([reporterId, targetType, targetId, openKey])
-  // The queue: filtered by status, newest first.
-  @@index([status, createdAt])
-  // "everything ever filed against this listing" -- the report detail screen.
+  @@unique([filedById, targetType, targetId, openKey])
+  /// The queue: one type, filtered by status, oldest or newest first.
+  @@index([type, status, createdAt])
+  /// "everything ever filed against this listing" -- the report detail screen.
   @@index([targetType, targetId])
-  @@index([reporterId])
-  // See the note on AdminAction.reportId: declared so the FK's implicit index
-  // does not become the schema of record under a different name.
-  @@index([resolvedById])
+  @@index([filedById])
+  @@index([itemId])
+  @@index([decidedById])
 }
 
 /**
@@ -1974,7 +1763,6 @@ model IdVerification {
   @@index([status, submittedAt])
   // The retry sweep: decided rows whose image is still up there.
   @@index([status, imagePublicId])
-
   // FK-backing indexes. MySQL/InnoDB created these implicitly for every
   // foreign key; Postgres does not, and neither does Prisma on Postgres.
   // Declared so the migration to Postgres keeps every index the live
@@ -2077,10 +1865,11 @@ model AdminAction {
   targetId   String
 
   /**
-   * The report this action answers, when there is one. Bulk cleanup has none.
+   * The moderation case this action answers, when there is one (was reportId;
+   * renamed in schema v2 because a case may now be an appeal). Bulk cleanup has none.
    */
-  reportId String?
-  report   Report? @relation(fields: [reportId], references: [id], onDelete: SetNull)
+  caseId String?
+  case   ModerationCase? @relation(fields: [caseId], references: [id], onDelete: SetNull)
 
   reason String  @db.Text
   /**
@@ -2096,11 +1885,8 @@ model AdminAction {
   @@index([actorId, createdAt])
   @@index([targetType, targetId])
   @@index([createdAt])
-  // Present in the database since the moderation migration; declared here so a
-  // baseline built from this schema reproduces it. Without the declaration MySQL
-  // still indexes reportId to satisfy the foreign key, but names it
-  // AdminAction_reportId_fkey -- same coverage, different name, permanent drift.
-  @@index([reportId])
+  // FK-backing index for caseId.
+  @@index([caseId])
 }
 
 // -- Safe-Zone Hubs ----------------------------------------------------------
@@ -2141,76 +1927,14 @@ model AdminAction {
 // ─────────────────────────────────────────────────────────────────────────────
 
 enum ListingAppealKind {
-  /** Against a LISTING_VALUE_REJECTED decision. Overturn publishes at the requested value. */
-  VALUE_REJECTION
-  /** Against a LISTING_HIDDEN takedown. Overturn clears moderationHiddenAt. */
-  MODERATION_HIDE
-}
-
-enum ListingAppealStatus {
-  OPEN
-  UPHELD
-  OVERTURNED
   /**
-   * The owner deleted the listing while the appeal was open. Closed without
-   * an admin decision -- it is their own listing -- and kept, not deleted,
-   * so the queue's history and the audit rows it points at still make sense.
-   * `decidedById` is null on these; `decisionReason` says what happened.
+   * Against a LISTING_VALUE_REJECTED decision. Overturn publishes at the requested value.
    */
-  WITHDRAWN
-}
-
-/**
- * One owner's appeal against one moderation decision on one listing.
- *
- * ONE APPEAL PER DECISION, AND THE DECISION IS AN AUDIT ROW. `actionId` is
- * the id of the AdminAction being appealed (a LISTING_VALUE_REJECTED or a
- * LISTING_HIDDEN row) and it is UNIQUE here: a rejection can be appealed
- * once, an upheld appeal cannot be re-opened, and a fresh rejection after the
- * owner edits is a fresh decision with a fresh right of appeal. A plain
- * string and not a relation, matching Item -> AdminAction: the audit points
- * at things, nothing points back at the audit.
- *
- * While an appeal is OPEN the listing's visibility does not change -- it is
- * still VALUE_REJECTED or still hidden. Nothing about filing one is a
- * publish. Deleting the listing closes the appeal as WITHDRAWN.
- *
- * `message` is the owner's own words, capped at 300 characters. It is never
- * edited; a second thought is a second appeal, which the unique index refuses.
- *
- * `decidedById` is SetNull so a staff account can be removed without losing
- * the record; the AdminAction written at decision time keeps the name.
- */
-model ListingAppeal {
-  id String @id @default(cuid())
-
-  itemId String
-  item   Item   @relation(fields: [itemId], references: [id], onDelete: Cascade)
-
-  ownerId String
-  owner   User   @relation("ListingAppealOwner", fields: [ownerId], references: [id], onDelete: Cascade)
-
-  kind   ListingAppealKind
-  status ListingAppealStatus @default(OPEN)
-
-  message String @db.VarChar(300)
-
-  /** The AdminAction this answers. Unique: one appeal per decision. */
-  actionId String @unique
-
-  decidedById    String?
-  decidedBy      User?     @relation("ListingAppealDecider", fields: [decidedById], references: [id], onDelete: SetNull)
-  decidedAt      DateTime?
-  decisionReason String?   @db.Text
-
-  createdAt DateTime @default(now())
-
-  // Oldest first is the queue's order; the owner's list and the listing's
-  // history are the other two reads.
-  @@index([status, createdAt])
-  @@index([itemId])
-  @@index([ownerId])
-  @@index([decidedById])
+  VALUE_REJECTION
+  /**
+   * Against a LISTING_HIDDEN takedown. Overturn clears moderationHiddenAt.
+   */
+  MODERATION_HIDE
 }
 
 enum SafeZoneType {
@@ -2276,13 +2000,13 @@ model SafeZoneHub {
 
   /// Trades whose parties CLAIMED they met here. Restrict on that side too, so
   /// a hub carrying meetup history is as undeletable as one carrying listings.
-  trades TradeRequest[] @relation("MeetupClaim")
+  trades Trade[] @relation("MeetupClaim")
 
   /// Trades that have ARRANGED to meet here and not yet confirmed. The claim
   /// above is what happened; this is what is planned. Named relations because
   /// there are now two of them between this pair of models -- see the block on
   /// `TradeRequest.meetupHubId` for why they are not one column.
-  meetupPlans TradeRequest[] @relation("MeetupPlan")
+  meetupPlans Trade[] @relation("MeetupPlan")
 
   /// The picker's query: active hubs in one city. Both filter columns, in the
   /// order the WHERE clause names them.
@@ -2325,6 +2049,7 @@ model ItemSafeZone {
   /// The PK's leading column already serves the other direction.
   @@index([hubId])
 }
+
 // ── Achievements ─────────────────────────────
 //
 // A badge an admin defines, and the copy a user earns. The admin surface
@@ -2405,8 +2130,8 @@ model Achievement {
   /// Stable machine key ("verified", "first_trade"). Unique, because it is what
   /// code and seed scripts refer to a badge by when the cuid would change
   /// between environments.
-  key  String @unique
-  name String
+  key         String @unique
+  name        String
   description String @db.Text
 
   /// Emoji or short text, shown when imageUrl is null. Kept so every badge that
@@ -2419,7 +2144,7 @@ model Achievement {
 
   criterion AchievementCriterion
   /// The number the criterion must reach. Ignored (stored 1) for booleans.
-  threshold Int @default(1)
+  threshold Int                  @default(1)
 
   /// Admin ordering for the shelf; ties broken by name.
   sortOrder Int @default(0)
@@ -2438,48 +2163,100 @@ model Achievement {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  unlocks UserAchievement[]
+  unlocks UserProgress[]
 
   @@index([isActive, sortOrder])
 }
 
-/// One user's earned copy of one badge.
-///
-/// CASCADE from both sides is correct here, unlike Item -> hub: this row is
-/// meaningless without both the user and the definition, and there is nothing
-/// to audit about it going away (the AdminAction log is about decisions, not
-/// about a badge row a user never sees created).
-///
-/// `displayOrder` is the PROFILE shelf slot (1..4, capped in the route). NULL
-/// means "earned but not shown". `homeDisplayOrder` is the single featured slot
-/// on the home feed; also NULL when unused. Both live on this row rather than as
-/// a list on User because the row is the join, and the join is where the
-/// per-achievement display choice belongs.
-model UserAchievement {
-  id String @id @default(cuid())
+/**
+ * Which kind of progress a UserProgress row records.
+ */
+enum ProgressType {
+  /// One daily quest assigned to one user (was QuestAssignment).
+  QUEST
+  /// One badge one user has earned (was UserAchievement).
+  ACHIEVEMENT
+}
 
+/**
+ * A user's progress on something the platform tracks for them (schema v2; was
+ * QuestAssignment + UserAchievement). The columns of the other type are NULL,
+ * enforced by CHECK constraints in 20261003000000_schema_v2_core:
+ * QUEST        periodStart, tier, quest, rewardLeaves NOT NULL; completedAt
+ * optional; achievementId, unlockedAt, displayOrder,
+ * homeDisplayOrder NULL.
+ * ACHIEVEMENT  achievementId, unlockedAt NOT NULL; displayOrder and
+ * homeDisplayOrder optional; every quest column NULL.
+ * Both uniqueness rules survive as plain unique indexes, because Postgres
+ * treats NULLs as distinct: a QUEST row has a NULL achievementId and never
+ * collides on (userId, achievementId); an ACHIEVEMENT row has a NULL
+ * periodStart and never collides on (userId, periodStart, quest). The claim
+ * patterns that lean on them (completeQuest(), the criteria engine's
+ * skipDuplicates insert) keep working unchanged.
+ * ── QUESTS ───────────────────────────────────────────────────────────────────
+ * Daily quests (23 Sep 2026, moved weekly -> daily 24 Sep 2026) ────────────
+ * Five quests a day: 2 Easy (2 Leaves each), 2 Medium (3 each), 1 Hard (5) --
+ * 15 Leaves/day if every one is completed. Assigned fresh each UTC calendar
+ * day (`periodStart`) and reconciled against real DB state the same way
+ * TaskCompletion is -- see reconcileQuests() in @/lib/quests. Every quest is
+ * an existing, already-tracked platform action (send an offer, list an item,
+ * complete a trade); none of it is a new engagement metric like time-in-app,
+ * which is deliberate -- the manuscript frames Baylo's Point System as a
+ * reward system rather than gamification, and a metric with no real-world
+ * action behind it would contradict that.
+ * ONE ROW PER (user, day, quest), not per tier: unlike the original weekly
+ * shape (one quest per tier), Easy and Medium each place TWO quests a day, so
+ * the tier alone no longer identifies a row -- `quest` does, and the pools
+ * are built so a QuestKind is never assigned twice in the same day.
+ * `rewardLeaves` is snapshotted at assignment time so a later change to
+ * QUEST_REWARDS never rewrites what a past day actually paid.
+ * STACKS ON TOP OF WEEKLY_TASK_LEAF_CAP, DELIBERATELY. Quests write
+ * QUEST_REWARD ledger rows, not TASK_REWARD, so the existing 100/week task
+ * cap never sums them -- 15/day of quests is a second, separate allowance on
+ * top of it, not a share of it. A conscious product decision, not an
+ * oversight: see the header of @/lib/quests.
+ * ── ACHIEVEMENTS ─────────────────────────────────────────────────────────────
+ * CASCADE from both the user and the definition: an earned badge is
+ * meaningless without either. `displayOrder` is the PROFILE shelf slot (1..4,
+ * capped in the route), NULL = earned but not shown; `homeDisplayOrder` is the
+ * single featured home slot. NULL displayOrder is a VALID state -- never
+ * "repair" it by predicate.
+ */
+model UserProgress {
+  id     String       @id @default(cuid())
   userId String
-  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user   User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type   ProgressType
 
-  achievementId String
-  achievement   Achievement @relation(fields: [achievementId], references: [id], onDelete: Cascade)
+  // ── QUEST ──
+  /// The UTC calendar day this quest was assigned for.
+  periodStart  DateTime?
+  tier         QuestTier?
+  quest        QuestKind?
+  /// Snapshotted at assignment so a later change to QUEST_REWARDS never
+  /// rewrites what a past day paid.
+  rewardLeaves Int?
+  /// Non-null means paid. Credits Leaves exactly once; see the claim guard in
+  /// completeQuest() in @/lib/quests.
+  completedAt  DateTime?
 
-  /// When the criteria engine granted it. Non-null by definition -- a row only
-  /// exists once earned -- so this is not the "is it unlocked" flag; the row's
-  /// existence is. Kept because the badge shows "Earned <date>".
-  unlockedAt DateTime @default(now())
-
-  /// Profile shelf slot, 1-based. NULL = not displayed. Capped at 4 in
-  /// PATCH /api/v1/achievements/display.
-  displayOrder Int?
-
-  /// The one home-feed slot. NULL = not featured. At most one non-null per user.
+  // ── ACHIEVEMENT ──
+  achievementId    String?
+  achievement      Achievement? @relation(fields: [achievementId], references: [id], onDelete: Cascade)
+  /// When the criteria engine granted it. The badge shows "Earned <date>".
+  unlockedAt       DateTime?
+  /// Profile shelf slot, 1-based. NULL = not displayed.
+  displayOrder     Int?
+  /// The one home-feed slot. NULL = not featured. At most one per user.
   homeDisplayOrder Int?
 
-  /// ONE EARNED COPY PER (user, achievement). The criteria engine inserts with
-  /// skipDuplicates against this constraint, the same claim pattern as
-  /// TaskCompletion -- a concurrent award must not write the row twice.
+  /// When the row was written. For a migrated badge this is its unlockedAt
+  /// (UserAchievement had no createdAt).
+  createdAt DateTime @default(now())
+
+  @@unique([userId, periodStart, quest])
   @@unique([userId, achievementId])
+  @@index([userId, type, periodStart])
   @@index([userId, displayOrder])
   @@index([achievementId])
 }
@@ -2488,7 +2265,6 @@ model UserAchievement {
 
 /**
  * What kind of business it is. A CLOSED LIST, and deliberately not `Category`.
- *
  * Category is what an ITEM is; this is what a BUSINESS is, and the two only
  * look alike until the first sari-sari store, which sells across eight
  * categories and is none of them. Reusing Category would have forced every
@@ -2533,56 +2309,31 @@ enum OrgRejectionReason {
   NOT_A_BUSINESS_DOCUMENT
 }
 
-/** What a member may do. OWNER manages staff and settings; STAFF trades. */
-enum OrgMemberRole {
-  OWNER
-  STAFF
-}
-
-/**
- * PENDING is an invitation that has been sent and not answered. ACTIVE is a
- * member. There is no DECLINED: a refused invitation is deleted, because a
- * tombstone here would occupy the @@unique below and an owner could never
- * re-invite somebody who said no once.
- */
-enum OrgMemberStatus {
-  PENDING
-  ACTIVE
-}
-
 /**
  * An organisation or MSME (Micro, Small and Medium Enterprise, the DTI term) account.
- *
  * ── IT IS A User ROW, AND THAT IS THE WHOLE DESIGN ──────────────────────────
- *
  * Everything that makes an account visible on Baylo is a required foreign key
  * to User: Item.userId, Follow.followeeId, Message.senderId/receiverId,
  * Offer's two sides, TradeRequest's two sides, LeafTransaction.userId. An
  * Organization that were merely "a row beside a user" could own nothing, be
  * followed by nobody and hold no Leaves, and each of those would have needed
  * its own nullable column and its own second code path on every read.
- *
  * So an organisation IS an account: `orgUserId` points at a User row created in
  * the same transaction, flagged `isOrgAccount`, and every existing FK keeps
  * working with no change at all. A staff member posting on the org's behalf
  * writes `Item.userId = orgUserId` -- the same column, the same query, the same
  * shape on the wire.
- *
  * WHAT THE BACKING ROW IS NOT. It is not a person and it never logs in: it has
  * no password, and POST /api/auth/token refuses an `isOrgAccount` row outright.
  * Humans reach it only through OrganizationMember, and only by presenting their
  * OWN credentials plus an org context -- see resolveSession() and actingAs().
- *
  * ── THE LEAF LEDGER IS UNTOUCHED ────────────────────────────────────────────
- *
  * An org holds Leaves the way anybody does, on its own User row, so
  * SUM(User.leaves) == SUM(LeafTransaction.amount) stays true across orgs
  * without a single line of @/lib/leaves or @/lib/bridge-fee changing. That
  * invariant is the reason this model has no balance of its own, and adding one
  * later would break it.
- *
  * ── AND THE TRUST LADDER IS NOT ─────────────────────────────────────────────
- *
  * Organisations do not climb the trade-count trust tiers and do not carry a
  * leaf rank; their badge is this row's `verificationStatus` and nothing else.
  * Enforced by `isOrgAccount` on the backing row, which every reputation
@@ -2629,7 +2380,6 @@ model Organization {
 
   /**
    * The DTI business-name registration number, AS TYPED by the applicant.
-   *
    * Stored and shown to the reviewer beside the document; never checked
    * against any DTI registry. Its only job is to let a reviewer compare the
    * number on the photograph with the number the applicant claims. Nullable
@@ -2645,7 +2395,6 @@ model Organization {
 
   /**
    * The DTI/SEC registration or barangay permit, WHILE IT EXISTS.
-   *
    * SAME RETENTION RULE AS IdVerification.imageUrl, and for the same reason:
    * this is a business document carrying a real person's name and address under
    * RA 10173. It is nulled inside the decision transaction, approve or reject,
@@ -2657,20 +2406,40 @@ model Organization {
   businessDocUrl      String? @db.Text
   businessDocPublicId String? @db.VarChar(255)
 
-  /** When Cloudinary confirmed the destroy. */
-  docDeletedAt DateTime?
-  /** When a destroy last failed. Non-null with businessDocPublicId = retry me. */
+  /**
+   * When Cloudinary confirmed the destroy.
+   */
+  docDeletedAt      DateTime?
+  /**
+   * When a destroy last failed. Non-null with businessDocPublicId = retry me.
+   */
   docDeleteFailedAt DateTime?
 
-  /** Why it was refused. Free of any reviewer's own words, like IdRejectionReason. */
+  /**
+   * Why it was refused. Free of any reviewer's own words, like IdRejectionReason.
+   */
   rejectionReason OrgRejectionReason?
 
-  /** Who decided. SetNull: the decision outlives the staff account that made it. */
+  /**
+   * Who decided. SetNull: the decision outlives the staff account that made it.
+   */
   reviewedById String?
   reviewedBy   User?     @relation("OrganizationReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
   reviewedAt   DateTime?
 
-  members OrganizationMember[]
+  /**
+   * THE ONE PERSON WHO MAY ACT AS THIS ORGANISATION (schema v2).
+   * Was the OrganizationMember table, with OWNER and STAFF roles and PENDING
+   * invitations. Staff were removed: every org-scoped authorisation decision
+   * now reads this column, and "may this person act as this org" is
+   * `ownerId = session.user.id`. A HUMAN row, never an org's backing row.
+   * Restrict: account deletion anonymises a User rather than removing it, and
+   * an owner row must not be removable out from under a live shop.
+   */
+  ownerId       String
+  owner         User     @relation("OrganizationOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  /// When the owner's membership became ACTIVE (OrganizationMember.joinedAt).
+  ownerJoinedAt DateTime
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -2680,58 +2449,11 @@ model Organization {
   /// The retry sweep: decided rows whose document is still up there.
   @@index([verificationStatus, businessDocPublicId])
   @@index([reviewedById])
-}
-
-/**
- * A human's membership of an organisation.
- *
- * ── THE ROW IS THE PERMISSION ───────────────────────────────────────────────
- *
- * There is no org-role column on User and there must not be one: a person can
- * belong to two organisations, and a column on their own row can hold one
- * answer. Every org-scoped authorisation decision in this codebase reads THIS
- * table, through requireOrgMember()/requireOrgOwner() in @/lib/organizations,
- * and an ACTIVE row is the whole of what permits acting as the org.
- *
- * `role` is the only privileged distinction: OWNER manages staff and org
- * settings, STAFF posts and trades. Both may act as the org. The only route
- * that writes OWNER onto an existing row is PATCH
- * /api/v1/organizations/[id]/members/[memberId], under an existing OWNER's
- * session -- the same shape User.role's note describes, for the same reason.
- */
-model OrganizationMember {
-  id String @id @default(cuid())
-
-  organizationId String
-  organization   Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
-
-  /**
-   * The HUMAN. Never an org's backing row -- an organisation is not a member of
-   * itself, and the write paths refuse an `isOrgAccount` userId.
-   */
-  userId String
-  user   User   @relation("OrganizationMemberUser", fields: [userId], references: [id], onDelete: Cascade)
-
-  role   OrgMemberRole   @default(STAFF)
-  status OrgMemberStatus @default(PENDING)
-
-  invitedAt DateTime  @default(now())
-  /** Null while PENDING. Stamped in the same statement that sets ACTIVE. */
-  joinedAt  DateTime?
-
-  /**
-   * ONE MEMBERSHIP PER (org, person). Two rows would mean two answers to "may
-   * this person act as this org", and the invite path uses this constraint to
-   * make a repeat invitation a no-op rather than a duplicate.
-   */
-  @@unique([organizationId, userId])
-  /// "which orgs may this person act as" -- read on every org-context switch.
-  @@index([userId, status])
+  @@index([ownerId])
 }
 
 /**
  * The unit a perishable's `quantity` is counted in.
- *
  * Three values, matching the wizard. An enum rather than free text because the
  * figure is rendered next to the number ("2 KG") and a text column is where
  * "kg", "Kg", "kilos" and "kilograms" all end up being the same unit spelled
