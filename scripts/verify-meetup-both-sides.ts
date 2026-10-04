@@ -114,7 +114,7 @@ async function cleanup() {
   const ids = users.map((u) => u.id)
   if (ids.length) {
     await prisma.notification.deleteMany({ where: { userId: { in: ids } } })
-    await prisma.tradeRequest.deleteMany({ where: { OR: [{ senderId: { in: ids } }, { receiverId: { in: ids } }] } })
+    await prisma.trade.deleteMany({ where: { OR: [{ senderId: { in: ids } }, { receiverId: { in: ids } }] } })
     await prisma.itemSafeZone.deleteMany({ where: { item: { userId: { in: ids } } } })
     await prisma.item.deleteMany({ where: { userId: { in: ids } } })
     await prisma.user.deleteMany({ where: { id: { in: ids } } })
@@ -185,8 +185,9 @@ async function main() {
   const requested = await mkItem(receiver.id, "requested")
   const hubA = await mkHub("hubA")
   const hubB = await mkHub("hubB")
-  const trade = await prisma.tradeRequest.create({
+  const trade = await prisma.trade.create({
     data: {
+      tradeCreatedAt: new Date(), // trade phase from the start (schema v2 CHECK)
       status: "ACCEPTED",
       senderId: sender.id, receiverId: receiver.id,
       offeredItemId: offered.id, requestedItemId: requested.id,
@@ -301,18 +302,18 @@ async function main() {
 
   // ── 6 ──
   head("6  the ONE legitimate one-sided blindness: a hidden trade is not listed")
-  await prisma.tradeRequest.update({ where: { id: trade.id }, data: { hiddenBySender: true } })
+  await prisma.trade.update({ where: { id: trade.id }, data: { hiddenBySender: true } })
   const s6 = await listRow(sender.token, trade.id)
   const r6 = await listRow(receiver.token, trade.id)
   check("sender, who hid it, does not list it", s6 === null, s6)
   check("receiver still lists it, plan intact", !!r6?.meetup?.agreedAt, r6)
   const ms6 = await get(`/api/v1/trades/${trade.id}/meetup`, sender.token)
   check("…but GET …/meetup still answers the sender (hiding is a list filter)", ms6.status === 200 && !!ms6.json.data?.plan, ms6)
-  await prisma.tradeRequest.update({ where: { id: trade.id }, data: { hiddenBySender: false } })
+  await prisma.trade.update({ where: { id: trade.id }, data: { hiddenBySender: false } })
 
   // ── 7 ──
   head("7  a proposal bumps updatedAt (the list's sort key)")
-  const now = await prisma.tradeRequest.findUnique({ where: { id: trade.id }, select: { updatedAt: true } })
+  const now = await prisma.trade.findUnique({ where: { id: trade.id }, select: { updatedAt: true } })
   check("updatedAt moved past the fixture's", !!now && now.updatedAt.getTime() > trade.updatedAt.getTime(), [trade.updatedAt, now?.updatedAt])
 
   // ── 9 ──

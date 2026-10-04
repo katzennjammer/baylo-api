@@ -24,7 +24,7 @@ import { releaseBridgeFee, type ReleaseReason } from "@/lib/bridge-fee"
  * nothing, so a retry cannot double-refund; what the transaction adds is that
  * a rolled-back cancellation cannot leave a refund behind.
  */
-type FeeDb = Pick<PrismaClient, "user" | "leafTransaction" | "offer">
+type FeeDb = Pick<PrismaClient, "user" | "leafTransaction">
 
 export async function releaseTradeFee(
   db: FeeDb,
@@ -32,7 +32,6 @@ export async function releaseTradeFee(
     id: string
     senderId: string
     receiverId: string
-    requestedItemId: string
     bridgeFeeLeaves: number | null
     bridgeFeePaidBySender: boolean | null
   },
@@ -43,21 +42,13 @@ export async function releaseTradeFee(
 
   const userId = trade.bridgeFeePaidBySender ? trade.senderId : trade.receiverId
 
-  // The hold is keyed on the OFFER in the ledger -- that is where it was
-  // written and what the once-only guard checks -- so the offer this trade came
-  // from has to be found. A trade with a fee always has one: the fee can only
-  // be set by the accept path, which is the path that turns an offer into a
-  // trade.
-  const offer = await db.offer.findFirst({
-    where: { senderId: trade.senderId, postId: trade.requestedItemId, status: "ACCEPTED" },
-    select: { id: true },
-    orderBy: { updatedAt: "desc" },
-  })
-  if (!offer) return null
-
+  // The hold is keyed on the deal's id in the ledger -- that is where it was
+  // written and what the once-only guard checks. Since schema v2 a deal is one
+  // Trade row from offer to completion, so that id IS this trade's id; there is
+  // no longer an offer to find first (the old lookup re-found it by sender +
+  // listing + ACCEPTED, which was not unique).
   const released = await releaseBridgeFee(db, {
     userId,
-    offerId: offer.id,
     tradeId: trade.id,
     amount,
     reason,
@@ -70,7 +61,6 @@ export const TRADE_FEE_SELECT = {
   id: true,
   senderId: true,
   receiverId: true,
-  requestedItemId: true,
   bridgeFeeLeaves: true,
   bridgeFeePaidBySender: true,
 } as const

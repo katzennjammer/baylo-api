@@ -36,7 +36,7 @@ export async function POST(
 
     const { id: tradeId } = await params
 
-    const trade = await prisma.tradeRequest.findUnique({
+    const found = await prisma.trade.findUnique({
       where: { id: tradeId },
       include: {
         sender:        { select: { id: true, name: true, email: true } },
@@ -46,7 +46,11 @@ export async function POST(
       },
     })
 
-    if (!trade) return NextResponse.json({ error: "Trade not found" }, { status: 404 })
+    // A deal still in its offer phase is not a trade yet (schema v2).
+    if (!found || found.status === null || found.offeredItem === null) {
+      return NextResponse.json({ error: "Trade not found" }, { status: 404 })
+    }
+    const trade = { ...found, status: found.status, offeredItem: found.offeredItem }
     // Either side: the person, or the shop they are acting as. Codes are
     // generated for both sides at once, so any member may start them for a shop.
     // See @/lib/trade-participant.
@@ -119,7 +123,7 @@ export async function POST(
         create: { tradeId, userId: trade.receiverId, codeHash: receiverHash, codeSealed: receiverSealed, used: false, attempts: 0, expiresAt },
         update: { codeHash: receiverHash, codeSealed: receiverSealed, used: false, attempts: 0, expiresAt },
       }),
-      prisma.tradeRequest.update({
+      prisma.trade.update({
         where: { id: tradeId },
         data:  { status: "CONFIRMING" },
       }),

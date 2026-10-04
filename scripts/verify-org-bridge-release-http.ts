@@ -105,7 +105,8 @@ async function main() {
   /** Let the fire-and-forget quest hook from an offer POST land. */
   const letQuestsSettle = () => new Promise((r) => setTimeout(r, 2500))
   const rows = (offerId: string, type: "BRIDGE_FEE_HOLD" | "BRIDGE_FEE_RELEASE" | "BRIDGE_FEE_PAID") =>
-    prisma.leafTransaction.findMany({ where: { offerId, type }, select: { userId: true, amount: true } })
+    // A fee's rows key on the deal's one id since schema v2 (the ledger has no offerId).
+    prisma.leafTransaction.findMany({ where: { tradeId: offerId, type }, select: { userId: true, amount: true } })
 
   try {
     // ── fixtures ──
@@ -168,7 +169,7 @@ async function main() {
     const offerId = String(sent.body.offerId)
     check("the proposer is the payer", sent.body.bridgeFeePayer === "proposer", String(sent.body.bridgeFeePayer))
     check(`charged ${FEE}`, sent.body.chargedLeaves === FEE, String(sent.body.chargedLeaves))
-    const row = await prisma.offer.findUniqueOrThrow({ where: { id: offerId }, select: { receiverId: true } })
+    const row = await prisma.trade.findUniqueOrThrow({ where: { id: offerId }, select: { receiverId: true } })
     check("the receiver is the org's backing row", row.receiverId === org.orgUserId)
     check(`sender balance ${START} -> ${START - FEE}`, (await feeBalance(sender.id)) === START - FEE, String(await feeBalance(sender.id)))
     const holds = await rows(offerId, "BRIDGE_FEE_HOLD")
@@ -194,8 +195,8 @@ async function main() {
     head("3  the sender withdraws: the fee comes back")
     const w1 = await call(`/api/v1/offers/${offerId}/withdraw`, { token: senderToken, method: "POST", body: {} })
     check("withdraw 200", w1.status === 200, `status ${w1.status} ${JSON.stringify(w1.body).slice(0, 200)}`)
-    const after = await prisma.offer.findUniqueOrThrow({ where: { id: offerId }, select: { status: true } })
-    check("offer WITHDRAWN", after.status === "WITHDRAWN", after.status)
+    const after = await prisma.trade.findUniqueOrThrow({ where: { id: offerId }, select: { offerStatus: true } })
+    check("offer WITHDRAWN", after.offerStatus === "WITHDRAWN", String(after.offerStatus))
     check(`sender balance back to ${START}`, (await feeBalance(sender.id)) === START, String(await feeBalance(sender.id)))
     const rel = await rows(offerId, "BRIDGE_FEE_RELEASE")
     check("exactly one BRIDGE_FEE_RELEASE row, +FEE, on the sender",
@@ -221,15 +222,15 @@ async function main() {
       await letQuestsSettle()
       check("held again", (await feeBalance(sender.id)) === START - FEE)
       // Age it past the cutoff. createdAt is what expireStaleOffers() reads.
-      await prisma.offer.update({
+      await prisma.trade.update({
         where: { id: offer2 },
         data: { createdAt: new Date(Date.now() - (OFFER_EXPIRY_DAYS + 1) * 86_400_000) },
       })
       // The withdraw route sweeps stale offers FIRST, so the sweep wins and the
       // withdraw finds it already expired: one refund, from the expiry.
       const w3 = await call(`/api/v1/offers/${offer2}/withdraw`, { token: senderToken, method: "POST", body: {} })
-      const o2 = await prisma.offer.findUniqueOrThrow({ where: { id: offer2 }, select: { status: true } })
-      check("swept to EXPIRED", o2.status === "EXPIRED", o2.status)
+      const o2 = await prisma.trade.findUniqueOrThrow({ where: { id: offer2 }, select: { offerStatus: true } })
+      check("swept to EXPIRED", o2.offerStatus === "EXPIRED", String(o2.offerStatus))
       check("the withdraw then refuses (409)", w3.status === 409, `status ${w3.status}`)
       check(`sender balance back to ${START}`, (await feeBalance(sender.id)) === START, String(await feeBalance(sender.id)))
       const rel2 = await rows(offer2, "BRIDGE_FEE_RELEASE")
@@ -253,8 +254,8 @@ async function main() {
       })
       check("decline 200, releasedLeaves = FEE", d1.status === 200 && d1.body.releasedLeaves === FEE,
         `status ${d1.status} ${JSON.stringify(d1.body).slice(0, 200)}`)
-      const o3 = await prisma.offer.findUniqueOrThrow({ where: { id: offer3 }, select: { status: true } })
-      check("offer DECLINED", o3.status === "DECLINED", o3.status)
+      const o3 = await prisma.trade.findUniqueOrThrow({ where: { id: offer3 }, select: { offerStatus: true } })
+      check("offer DECLINED", o3.offerStatus === "DECLINED", String(o3.offerStatus))
       check(`sender balance back to ${START}`, (await feeBalance(sender.id)) === START, String(await feeBalance(sender.id)))
       const rel3 = await rows(offer3, "BRIDGE_FEE_RELEASE")
       check("exactly one release row, +FEE, on the sender",
@@ -270,7 +271,7 @@ async function main() {
     head("6  the org, escrow, and the ledger")
     check("the org's balance never moved", (await bal(org.orgUserId)) === orgStart, `${orgStart} -> ${await bal(org.orgUserId)}`)
     check("the org has no ledger rows from any of the offers",
-      (await prisma.leafTransaction.count({ where: { userId: org.orgUserId, offerId: { not: null } } })) === 0)
+      (await prisma.leafTransaction.count({ where: { userId: org.orgUserId, tradeId: { not: null } } })) === 0)
     check("nothing left in escrow for the sender", (await heldBridgeFees(prisma, sender.id)) === 0)
     const other = await prisma.leafTransaction.findMany({
       where: { userId: sender.id, type: { notIn: ["SIGNUP_GRANT", "BRIDGE_FEE_HOLD", "BRIDGE_FEE_RELEASE"] } },
@@ -289,7 +290,7 @@ async function main() {
     await prisma.leafTransaction.deleteMany({ where: { userId: { in: users } } })
     await prisma.notification.deleteMany({ where: { OR: [{ userId: { in: users } }, { actorId: { in: users } }] } })
     await prisma.message.deleteMany({ where: { OR: [{ senderId: { in: users } }, { receiverId: { in: users } }] } })
-    await prisma.offer.deleteMany({ where: { OR: [{ senderId: { in: users } }, { receiverId: { in: users } }] } })
+    await prisma.trade.deleteMany({ where: { OR: [{ senderId: { in: users } }, { receiverId: { in: users } }] } })
     await prisma.item.deleteMany({ where: { userId: { in: users } } })
     await prisma.organization.deleteMany({ where: { id: { in: orgs } } })
     await prisma.user.deleteMany({ where: { id: { in: users } } })

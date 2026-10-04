@@ -178,13 +178,14 @@ export interface QuestView {
 async function questSatisfied(userId: string, quest: QuestKind, periodStart: Date): Promise<boolean> {
   switch (quest) {
     case "SEND_OFFER":
-      return (await prisma.offer.findFirst({
-        where: { senderId: userId, createdAt: { gte: periodStart } },
+      // An offer is a deal with an offer phase; createdAt is when it was sent.
+      return (await prisma.trade.findFirst({
+        where: { senderId: userId, offerStatus: { not: null }, createdAt: { gte: periodStart } },
         select: { id: true },
       })) !== null
     case "RECEIVE_OFFER":
-      return (await prisma.offer.findFirst({
-        where: { receiverId: userId, createdAt: { gte: periodStart } },
+      return (await prisma.trade.findFirst({
+        where: { receiverId: userId, offerStatus: { not: null }, createdAt: { gte: periodStart } },
         select: { id: true },
       })) !== null
     case "FOLLOW_TRADER":
@@ -203,12 +204,12 @@ async function questSatisfied(userId: string, quest: QuestKind, periodStart: Dat
         select: { id: true },
       })) !== null
     case "SEND_BRIDGE_OFFER":
-      return (await prisma.offer.findFirst({
-        where: { senderId: userId, createdAt: { gte: periodStart }, bridgeFeeLeaves: { not: null } },
+      return (await prisma.trade.findFirst({
+        where: { senderId: userId, offerStatus: { not: null }, createdAt: { gte: periodStart }, bridgeFeeLeaves: { not: null } },
         select: { id: true },
       })) !== null
     case "COMPLETE_TRADE":
-      return (await prisma.tradeRequest.findFirst({
+      return (await prisma.trade.findFirst({
         where: {
           status: "COMPLETED", completedAt: { gte: periodStart },
           OR: [{ senderId: userId }, { receiverId: userId }],
@@ -216,7 +217,7 @@ async function questSatisfied(userId: string, quest: QuestKind, periodStart: Dat
         select: { id: true },
       })) !== null
     case "COMPLETE_BRIDGE_TRADE":
-      return (await prisma.tradeRequest.findFirst({
+      return (await prisma.trade.findFirst({
         where: {
           status: "COMPLETED", completedAt: { gte: periodStart },
           bridgeFeeLeaves: { gt: 0 },
@@ -225,7 +226,7 @@ async function questSatisfied(userId: string, quest: QuestKind, periodStart: Dat
         select: { id: true },
       })) !== null
     case "COMPLETE_SAFEZONE_TRADE":
-      return (await prisma.tradeRequest.findFirst({
+      return (await prisma.trade.findFirst({
         where: {
           status: "COMPLETED", completedAt: { gte: periodStart },
           safeZoneHubId: { not: null },

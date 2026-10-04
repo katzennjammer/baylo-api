@@ -2,6 +2,7 @@ import Link from "next/link"
 import { auth } from "@root/auth"
 import prisma from "@/lib/prisma"
 import { REPORT } from "@/lib/report-case"
+import { IN_TRADE_PHASE } from "@/lib/trade-row"
 import { suspensionState } from "@/lib/moderation"
 import UserActions from "./UserActions"
 import { FilterChips } from "@/components/admin/FilterChips"
@@ -84,7 +85,7 @@ export default async function UsersPage({ searchParams }: Props) {
       id: true, name: true, email: true, role: true, isVerified: true,
       idVerifiedGrandfatheredAt: true, createdAt: true, suspendedAt: true,
       suspendedUntil: true, deletedAt: true,
-      _count: { select: { items: true, casesFiled: { where: REPORT }, idVerifications: true, sentRequests: true, receivedRequests: true } },
+      _count: { select: { items: true, casesFiled: { where: REPORT }, idVerifications: true, sentTrades: { where: IN_TRADE_PHASE }, receivedTrades: { where: IN_TRADE_PHASE } } },
       idVerifications: {
         select: { status: true, submittedAt: true },
         orderBy: { submittedAt: "desc" },
@@ -191,7 +192,7 @@ export default async function UsersPage({ searchParams }: Props) {
                     <td style={{ padding: "14px", color: "#555", lineHeight: 1.7 }}>
                       <div>{user._count.items} listings</div>
                       <div>{user._count.casesFiled} reports filed</div>
-                      <div>{user._count.sentRequests + user._count.receivedRequests} trade requests</div>
+                      <div>{user._count.sentTrades + user._count.receivedTrades} trade requests</div>
                     </td>
                     <td style={{ padding: "14px" }}>
                       {user.deletedAt ? (

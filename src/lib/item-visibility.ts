@@ -63,7 +63,7 @@ export async function preciseAccessItemIds(
 ): Promise<Set<string>> {
   if (!viewerId || itemIds.length === 0) return new Set()
 
-  const trades = await prisma.tradeRequest.findMany({
+  const trades = await prisma.trade.findMany({
     where: {
       status: { in: [...ACCEPTED_TRADE_STATES] },
       OR: [{ senderId: viewerId }, { receiverId: viewerId }],
@@ -75,7 +75,8 @@ export async function preciseAccessItemIds(
   const allowed = new Set<string>()
   const requested = new Set(itemIds)
   for (const t of trades) {
-    if (requested.has(t.offeredItemId)) allowed.add(t.offeredItemId)
+    // offeredItemId is set on every trade (schema v2 CHECK); `!` for the type.
+    if (requested.has(t.offeredItemId!)) allowed.add(t.offeredItemId!)
     if (requested.has(t.requestedItemId)) allowed.add(t.requestedItemId)
   }
   return allowed

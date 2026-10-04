@@ -19,6 +19,11 @@
 // descriptive — if settlement is ever repointed at Offer, they fail
 // deterministically instead of passing by luck.
 //
+// Since schema v2 there is no Offer table: a decoy is a SEPARATE deal row for
+// the same sender and listing, in its offer phase only (offerStatus ACCEPTED,
+// no trade phase) -- the shape of the legacy accepted offers that never became
+// trades. Settlement must read the row being settled and nothing else.
+//
 // Driven over HTTP against the real route, per the house convention: this
 // guards /api/trades/[id]/confirm/submit itself, not a reimplementation of it.
 // The one thing seeded directly is the pair of confirmation codes — their
@@ -30,6 +35,7 @@ import bcrypt from "bcryptjs"
 import prisma from "../src/lib/prisma"
 import { signAccessToken } from "../src/lib/auth-tokens"
 import { requireScratchSchema } from "./lib/live-guard"
+import { createTradeRow } from "./lib/deal-rows"
 
 const BASE = process.env.ACCEPT_BASE ?? "http://127.0.0.1:3100"
 const P = "zzsettle-"
@@ -46,7 +52,8 @@ async function cleanup() {
   })
   const ids = users.map((u) => u.id)
   if (!ids.length) return
-  const trades = await prisma.tradeRequest.findMany({
+  // Every deal row, offers (the decoys) included: one table since schema v2.
+  const trades = await prisma.trade.findMany({
     where: { OR: [{ senderId: { in: ids } }, { receiverId: { in: ids } }] },
     select: { id: true },
   })
@@ -55,9 +62,8 @@ async function cleanup() {
   await prisma.leafTransaction.deleteMany({ where: { userId: { in: ids } } })
   await prisma.review.deleteMany({ where: { tradeId: { in: tradeIds } } })
   await prisma.message.deleteMany({ where: { tradeId: { in: tradeIds } } })
-  await prisma.tradeRequest.deleteMany({ where: { id: { in: tradeIds } } })
+  await prisma.trade.deleteMany({ where: { id: { in: tradeIds } } })
   await prisma.notification.deleteMany({ where: { OR: [{ userId: { in: ids } }, { actorId: { in: ids } }] } })
-  await prisma.offer.deleteMany({ where: { OR: [{ senderId: { in: ids } }, { receiverId: { in: ids } }] } })
   await prisma.item.deleteMany({ where: { userId: { in: ids } } })
   await prisma.user.deleteMany({ where: { id: { in: ids } } })
 }
@@ -113,7 +119,7 @@ async function seedCodes(tradeId: string, senderId: string, receiverId: string) 
       create: { tradeId, userId: receiverId, codeHash: rh, used: false, attempts: 0, expiresAt },
       update: { codeHash: rh, used: false, attempts: 0, expiresAt },
     }),
-    prisma.tradeRequest.update({ where: { id: tradeId }, data: { status: "CONFIRMING" } }),
+    prisma.trade.update({ where: { id: tradeId }, data: { status: "CONFIRMING" } }),
   ])
   return { senderCode, receiverCode }
 }
@@ -141,20 +147,18 @@ async function settle(opts: {
   const i1 = await mkItem(a.id, `${opts.tag}-1`)
   const i2 = await mkItem(b.id, `${opts.tag}-2`)
 
-  const trade = await prisma.tradeRequest.create({
-    data: {
-      senderId: a.id, receiverId: b.id,
-      offeredItemId: i1.id, requestedItemId: i2.id,
-      status: "ACCEPTED", offeredLeaves: opts.recordedOnTrade,
-    },
+  const trade = await createTradeRow(prisma, {
+    senderId: a.id, receiverId: b.id,
+    offeredItemId: i1.id, requestedItemId: i2.id,
+    status: "ACCEPTED", offeredLeaves: opts.recordedOnTrade,
   })
 
   // Decoys: accepted offers on (a -> i2) whose amounts disagree with the trade.
   for (const amt of opts.decoyOfferAmounts) {
-    await prisma.offer.create({
+    await prisma.trade.create({
       data: {
-        postId: i2.id, senderId: a.id, receiverId: b.id,
-        offeredItems: "[]", offeredLeaves: amt, status: "ACCEPTED",
+        requestedItemId: i2.id, senderId: a.id, receiverId: b.id,
+        offeredLeaves: amt, offerStatus: "ACCEPTED",
       },
     })
   }
@@ -170,7 +174,7 @@ async function settle(opts: {
   const [ua, ub, t, ledger] = await Promise.all([
     prisma.user.findUniqueOrThrow({ where: { id: a.id }, select: { leaves: true } }),
     prisma.user.findUniqueOrThrow({ where: { id: b.id }, select: { leaves: true } }),
-    prisma.tradeRequest.findUniqueOrThrow({ where: { id: trade.id }, select: { status: true, completedAt: true } }),
+    prisma.trade.findUniqueOrThrow({ where: { id: trade.id }, select: { status: true, completedAt: true } }),
     prisma.leafTransaction.findMany({
       where: { tradeId: trade.id }, select: { userId: true, type: true, amount: true },
     }),
@@ -178,7 +182,7 @@ async function settle(opts: {
   const spend   = ledger.filter((l) => l.type === "TRADE_SPEND")
   const receive = ledger.filter((l) => l.type === "TRADE_RECEIVE")
   return {
-    a, b, trade, status: t.status, ledger,
+    a, b, trade, status: t.status ?? undefined, ledger,
     completedAt: t.completedAt, submittedFrom,
     httpOk: r1.ok && r2.ok,
     r1Status: r1.status, r2Status: r2.status,
@@ -266,11 +270,9 @@ async function main() {
   {
     const a = await freshUser("auth-a", 0), b = await freshUser("auth-b", 0)
     const i1 = await mkItem(a.id, "auth-1"), i2 = await mkItem(b.id, "auth-2")
-    const trade = await prisma.tradeRequest.create({
-      data: {
-        senderId: a.id, receiverId: b.id, offeredItemId: i1.id,
-        requestedItemId: i2.id, status: "ACCEPTED", offeredLeaves: 10,
-      },
+    const trade = await createTradeRow(prisma, {
+      senderId: a.id, receiverId: b.id, offeredItemId: i1.id,
+      requestedItemId: i2.id, status: "ACCEPTED", offeredLeaves: 10,
     })
     const { receiverCode } = await seedCodes(trade.id, a.id, b.id)
     const anon = await submit(trade.id, null, receiverCode)

@@ -7,7 +7,7 @@ alone so a high-risk phase can be dropped at the go/no-go:
 |---|---|---|
 | A core   | `20261003000000_schema_v2_core`   | already there |
 | B ledger | `20261003000001_schema_v2_ledger` | moved back in the Phase B commit |
-| C trade  | `20261003000002_schema_v2_trade`  | the Phase C commit |
+| C trade  | `20261003000002_schema_v2_trade`  | moved back in the Phase C commit |
 
 A migration in THIS folder is invisible to `prisma migrate`, so `schema.prisma`,
 `prisma/migrations/` and the code always describe the same database. Phase B/C

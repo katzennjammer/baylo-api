@@ -164,7 +164,10 @@ function parentFirst(rows: Record<string, unknown>[], parentCol: string): Record
  * backup-baylo-pg.ps1 parses that line by regex.
  */
 async function invariant(pg: Client, schema = "public") {
-  const r = (await pg.query(LEDGER_INVARIANT_SQL(schema))).rows[0]
+  // Live keeps the pre-v2 Offer + TradeRequest layout until the schema v2
+  // cutover, and a restored backup can be either; read whichever this is.
+  const v2 = (await pg.query(`SELECT to_regclass($1) IS NOT NULL AS v2`, [`"${schema}"."Trade"`])).rows[0].v2
+  const r = (await pg.query(LEDGER_INVARIANT_SQL(schema, v2 ? "v2" : "v1"))).rows[0]
   return judge(figuresFromRow(r))
 }
 

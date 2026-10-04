@@ -283,11 +283,12 @@ async function upsertItem(ownerId: string, p: PlannedItem, hubIds: string[], hub
   const [title, category, condition, asked, description, wanted, lookingFor] = p.row
   const existing = await prisma.item.findUnique({
     where: { id: p.id },
-    select: { status: true, isPerishable: true, images: { select: { url: true }, orderBy: { position: "asc" } }, _count: { select: { offers: true, offeredIn: true, requestedIn: true } } },
+    select: { status: true, isPerishable: true, images: { select: { url: true }, orderBy: { position: "asc" } }, _count: { select: { tradesOffered: true, tradesRequested: true } } },
   })
 
   if (existing) {
-    const touched = existing._count.offers + existing._count.offeredIn + existing._count.requestedIn
+    // Every deal row naming it, either side, offer or trade phase (schema v2).
+    const touched = existing._count.tradesOffered + existing._count.tradesRequested
     if (touched > 0) return "kept" as const
     // The photo is the one column a re-run corrects on an untouched listing,
     // so a fix to the image map reaches rows --remove had to keep (an account
@@ -403,7 +404,8 @@ async function remove() {
       id: true, email: true, isOrgAccount: true,
       _count: {
         select: {
-          sentOffers: true, receivedOffers: true, sentRequests: true, receivedRequests: true,
+          // Offers and trades: one Trade row per deal since schema v2.
+          sentTrades: true, receivedTrades: true,
           sentMessages: true, receivedMessages: true, leafTransactions: true,
         },
       },

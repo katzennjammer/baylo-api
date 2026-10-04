@@ -214,19 +214,22 @@ const NO_ENGAGEMENT: Engagement = { offers: 0, likes: 0, comments: 0 }
 /** The viewer's taste signals, each kind capped at SIGNAL_SCAN_CAP newest. */
 export async function loadSignals(db: Db, viewerId: string): Promise<Signal[]> {
   const [trades, offers, likes, own] = await Promise.all([
-    db.tradeRequest.findMany({
+    db.trade.findMany({
       where: { status: "COMPLETED", OR: [{ senderId: viewerId }, { receiverId: viewerId }] },
       select: {
         senderId: true,
         offeredItem: { select: { category: true } },
         requestedItem: { select: { category: true } },
       },
-      orderBy: { createdAt: "desc" },
+      // When the deal became a trade: what TradeRequest.createdAt was.
+      orderBy: { tradeCreatedAt: "desc" },
       take: SIGNAL_SCAN_CAP,
     }),
-    db.offer.findMany({
-      where: { senderId: viewerId },
-      select: { post: { select: { category: true } } },
+    // Every deal this viewer proposed as an offer (schema v2: a Trade row with
+    // an offer phase), newest proposal first.
+    db.trade.findMany({
+      where: { senderId: viewerId, offerStatus: { not: null } },
+      select: { requestedItem: { select: { category: true } } },
       orderBy: { createdAt: "desc" },
       take: SIGNAL_SCAN_CAP,
     }),
@@ -248,9 +251,10 @@ export async function loadSignals(db: Db, viewerId: string): Promise<Signal[]> {
     // The sender gave offeredItem and got requestedItem; the receiver the reverse.
     ...trades.map((t) => ({
       kind: "completedTrade" as const,
-      category: t.senderId === viewerId ? t.requestedItem.category : t.offeredItem.category,
+      // offeredItem is required once a deal is a trade (a CHECK constraint).
+      category: t.senderId === viewerId ? t.requestedItem.category : t.offeredItem!.category,
     })),
-    ...offers.map((o) => ({ kind: "offerSent" as const, category: o.post.category })),
+    ...offers.map((o) => ({ kind: "offerSent" as const, category: o.requestedItem.category })),
     ...likes.map((l) => ({ kind: "like" as const, category: l.post.category })),
     ...own.map((i) => ({ kind: "ownListing" as const, category: i.category })),
   ]
@@ -283,7 +287,11 @@ export async function loadEngagement(
   const where = { postId: { in: [...itemIds] }, createdAt: { gte: since } }
 
   const [offers, likes, comments] = await Promise.all([
-    db.offer.groupBy({ by: ["postId"], where, _count: { _all: true } }),
+    db.trade.groupBy({
+      by: ["requestedItemId"],
+      where: { requestedItemId: { in: [...itemIds] }, offerStatus: { not: null }, createdAt: { gte: since } },
+      _count: { _all: true },
+    }),
     db.like.groupBy({ by: ["postId"], where, _count: { _all: true } }),
     db.comment.groupBy({ by: ["postId"], where, _count: { _all: true } }),
   ])
@@ -293,7 +301,7 @@ export async function loadEngagement(
     e[key] += n
     out.set(id, e)
   }
-  for (const r of offers) bump(r.postId, "offers", r._count._all)
+  for (const r of offers) bump(r.requestedItemId, "offers", r._count._all)
   for (const r of likes) bump(r.postId, "likes", r._count._all)
   for (const r of comments) bump(r.postId, "comments", r._count._all)
   return out

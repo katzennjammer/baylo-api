@@ -91,8 +91,10 @@ const expiryNoticeWhere = (rows: { id: string; userId: string }[]) => ({
 
 async function sideTables(itemIds: string[], ownerIds: string[]) {
   const [offers, trades, stories, notifications, ledger] = await Promise.all([
-    prisma.offer.count({ where: { OR: [{ postId: { in: itemIds } }, { senderId: { in: ownerIds } }, { receiverId: { in: ownerIds } }] } }),
-    prisma.tradeRequest.count({ where: { OR: [{ offeredItemId: { in: itemIds } }, { requestedItemId: { in: itemIds } }] } }),
+    // Offers and trades are one Trade row per deal since schema v2: an offer is
+    // a row with an offer phase, a trade one with a trade phase.
+    prisma.trade.count({ where: { offerStatus: { not: null }, OR: [{ requestedItemId: { in: itemIds } }, { senderId: { in: ownerIds } }, { receiverId: { in: ownerIds } }] } }),
+    prisma.trade.count({ where: { status: { not: null }, OR: [{ offeredItemId: { in: itemIds } }, { requestedItemId: { in: itemIds } }] } }),
     prisma.story.count({ where: { itemId: { in: itemIds } } }),
     prisma.notification.count({ where: { userId: { in: ownerIds } } }),
     ledgerInvariant(prisma),
@@ -119,14 +121,18 @@ async function main() {
       id: true, title: true, status: true, createdAt: true, tradeWithinHours: true, moderationHiddenAt: true,
       userId: true,
       user: { select: { email: true } },
-      _count: { select: { offers: true, offeredIn: true, requestedIn: true } },
+      // Every deal row naming this listing, either side (schema v2).
+      tradesRequested: { select: { offerStatus: true, status: true } },
+      tradesOffered: { select: { offerStatus: true, status: true } },
       stories: { where: { deletedAt: null, expiresAt: { gt: now } }, select: { id: true } },
     },
   })
 
-  // Offers carry offered items as a text list of ids, not a relation.
-  const offeredText = await prisma.offer.findMany({ select: { offeredItems: true } })
-  const namedInOffer = (id: string) => offeredText.some((o) => o.offeredItems.includes(id))
+  // The offered item is a real relation since schema v2 (it was a JSON list).
+  const offersOn = (it: (typeof items)[number]) => it.tradesRequested.filter((t) => t.offerStatus !== null).length
+  const inTrade = (it: (typeof items)[number]) =>
+    [...it.tradesRequested, ...it.tradesOffered].some((t) => t.status !== null)
+  const namedInOffer = (it: (typeof items)[number]) => it.tradesOffered.some((t) => t.offerStatus !== null)
 
   const skipped: { id: string; title: string; why: string }[] = []
   const eligible: typeof items = []
@@ -135,9 +141,9 @@ async function main() {
       it.moderationHiddenAt ? "moderation-hidden"
       : it.status !== "EXPIRED" && it.status !== "AVAILABLE" ? `status ${it.status}`
       : it.tradeWithinHours == null ? "no tradeWithinHours"
-      : it._count.offers > 0 ? `${it._count.offers} offer(s) on it`
-      : it._count.offeredIn + it._count.requestedIn > 0 ? "named in a trade request"
-      : namedInOffer(it.id) ? "named in another offer"
+      : offersOn(it) > 0 ? `${offersOn(it)} offer(s) on it`
+      : inTrade(it) ? "named in a trade request"
+      : namedInOffer(it) ? "named in another offer"
       : it.stories.length > 0 ? "has a live story"
       : null
     if (why) skipped.push({ id: it.id, title: it.title, why })
@@ -201,7 +207,7 @@ async function main() {
       const r = await tx.item.updateMany({
         where: {
           id: e.id, status: e.status, isPerishable: true, moderationHiddenAt: null,
-          offers: { none: {} }, offeredIn: { none: {} }, requestedIn: { none: {} },
+          tradesOffered: { none: {} }, tradesRequested: { none: {} },
         },
         data: { status: "AVAILABLE", createdAt: plan.get(e.id)! },
       })

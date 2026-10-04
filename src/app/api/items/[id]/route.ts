@@ -179,7 +179,7 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
           { status: 409 },
         )
       }
-      const standing = await prisma.offer.count({ where: { postId: id, status: "PENDING" } })
+      const standing = await prisma.trade.count({ where: { requestedItemId: id, offerStatus: "PENDING" } })
       if (standing > 0) {
         return NextResponse.json(
           {

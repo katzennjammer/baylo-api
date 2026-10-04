@@ -56,7 +56,7 @@ async function cleanup() {
   await prisma.leafTransaction.deleteMany({ where: { userId: { in: ids } } })
   // Order matters: both FKs onto SafeZoneHub are RESTRICT, so the trades and
   // the associations have to go before the hubs can.
-  await prisma.tradeRequest.deleteMany({
+  await prisma.trade.deleteMany({
     where: { OR: [{ senderId: { in: ids } }, { receiverId: { in: ids } }] },
   })
   await prisma.itemSafeZone.deleteMany({ where: { item: { userId: { in: ids } } } })
@@ -115,8 +115,9 @@ async function mkTrade(
       ],
     })
   }
-  return prisma.tradeRequest.create({
+  return prisma.trade.create({
     data: {
+      tradeCreatedAt: new Date(), // trade phase from the start (schema v2 CHECK)
       senderId: aId,
       receiverId: bId,
       offeredItemId: ia.id,
@@ -297,10 +298,10 @@ async function main() {
   // ── 7 ── the pre-commitment rule
   head("7  resolveMeetupHub() requires BOTH listings to have named the hub")
 
-  const okClaim = await resolveMeetupHub(prisma, hub.id, t1.offeredItemId, t1.requestedItemId)
+  const okClaim = await resolveMeetupHub(prisma, hub.id, t1.offeredItemId as string, t1.requestedItemId)
   check("accepts a hub both listings were offered at", okClaim.ok, JSON.stringify(okClaim))
 
-  const wrongHub = await resolveMeetupHub(prisma, otherHub.id, t1.offeredItemId, t1.requestedItemId)
+  const wrongHub = await resolveMeetupHub(prisma, otherHub.id, t1.offeredItemId as string, t1.requestedItemId)
   check(
     "refuses a hub NEITHER listing named",
     !wrongHub.ok,
@@ -324,7 +325,7 @@ async function main() {
   head("8  a hub deactivated after the fact still satisfies the claim")
   await prisma.safeZoneHub.update({ where: { id: hub.id }, data: { isActive: false } })
   const afterDeactivation = await resolveMeetupHub(
-    prisma, hub.id, t1.offeredItemId, t1.requestedItemId,
+    prisma, hub.id, t1.offeredItemId as string, t1.requestedItemId,
   )
   check(
     "pre-commitment survives deactivation",

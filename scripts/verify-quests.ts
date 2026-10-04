@@ -48,9 +48,8 @@ async function cleanup() {
   const users = await prisma.user.findMany({ where: { email: { startsWith: P } }, select: { id: true } })
   const ids = users.map((u) => u.id)
   if (ids.length) {
-    await prisma.tradeRequest.deleteMany({ where: { OR: [{ senderId: { in: ids } }, { receiverId: { in: ids } }] } })
+    await prisma.trade.deleteMany({ where: { OR: [{ senderId: { in: ids } }, { receiverId: { in: ids } }] } })
     await prisma.item.deleteMany({ where: { userId: { in: ids } } })
-    await prisma.offer.deleteMany({ where: { OR: [{ senderId: { in: ids } }, { receiverId: { in: ids } }] } })
     await prisma.follow.deleteMany({ where: { OR: [{ followerId: { in: ids } }, { followeeId: { in: ids } }] } })
     await prisma.user.deleteMany({ where: { id: { in: ids } } })
   }
@@ -164,8 +163,9 @@ async function main() {
   } else {
     const before = await prisma.user.findUniqueOrThrow({ where: { id: payer.id }, select: { leaves: true } })
 
-    await prisma.offer.create({
-      data: { postId: target.id, senderId: payer.id, receiverId: owner.id, offeredItems: "[]", createdAt: at },
+    // A deal in its offer phase (schema v2); offerStatus has no default.
+    await prisma.trade.create({
+      data: { requestedItemId: target.id, senderId: payer.id, receiverId: owner.id, offerStatus: "PENDING", createdAt: at },
     })
 
     const after1 = await reconcileQuests(payer.id, new Date(at.getTime() + 1000))
@@ -194,8 +194,9 @@ async function main() {
     const theirs = await mkItem(owner.id, "theirs", 100)
     // Completed YESTERDAY, then touched today -- the exact shape of the bug.
     const old = await mkItem(trader.id, "old", 100)
-    await prisma.tradeRequest.create({
+    await prisma.trade.create({
       data: {
+        tradeCreatedAt: new Date(), // trade phase from the start (schema v2 CHECK)
         senderId: trader.id, receiverId: owner.id,
         offeredItemId: old.id, requestedItemId: theirs.id,
         status: "COMPLETED",
@@ -208,8 +209,9 @@ async function main() {
       stale.find((q) => q.quest === "COMPLETE_TRADE")?.completed === false)
 
     const legacy = await mkItem(trader.id, "legacy", 100)
-    await prisma.tradeRequest.create({
+    await prisma.trade.create({
       data: {
+        tradeCreatedAt: new Date(), // trade phase from the start (schema v2 CHECK)
         senderId: trader.id, receiverId: owner.id,
         offeredItemId: legacy.id, requestedItemId: theirs.id,
         status: "COMPLETED", completedAt: null, updatedAt: new Date(at.getTime() - 30_000),
@@ -220,8 +222,9 @@ async function main() {
       legacyView.find((q) => q.quest === "COMPLETE_TRADE")?.completed === false)
 
     const fresh2 = await mkItem(trader.id, "today", 100)
-    await prisma.tradeRequest.create({
+    await prisma.trade.create({
       data: {
+        tradeCreatedAt: new Date(), // trade phase from the start (schema v2 CHECK)
         senderId: trader.id, receiverId: owner.id,
         offeredItemId: fresh2.id, requestedItemId: theirs.id,
         status: "COMPLETED", completedAt: new Date(at.getTime() - 10_000),
@@ -237,8 +240,8 @@ async function main() {
   if (!narrow) {
     check("found a SEND_OFFER fixture within 60 tries", false)
   } else {
-    await prisma.offer.create({
-      data: { postId: target.id, senderId: narrow.id, receiverId: owner.id, offeredItems: "[]", createdAt: at },
+    await prisma.trade.create({
+      data: { requestedItemId: target.id, senderId: narrow.id, receiverId: owner.id, offerStatus: "PENDING", createdAt: at },
     })
     const other = await reconcileQuests(narrow.id, at, ["LIST_ITEM"])
     check("an unrelated kind leaves SEND_OFFER unpaid",

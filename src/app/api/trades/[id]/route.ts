@@ -23,7 +23,7 @@ export async function PATCH(
     if (!parsed.ok) return parsed.response
     const { action } = parsed.data
 
-    const trade = await prisma.tradeRequest.findUnique({
+    const trade = await prisma.trade.findUnique({
       where: { id: tradeId },
       include: {
         sender:        { select: { id: true, name: true } },
@@ -33,7 +33,10 @@ export async function PATCH(
       },
     })
 
-    if (!trade) return NextResponse.json({ error: "Trade not found" }, { status: 404 })
+    // A deal still in its offer phase is not a trade yet (schema v2).
+    if (!trade || trade.status === null || trade.offeredItemId === null) {
+      return NextResponse.json({ error: "Trade not found" }, { status: 404 })
+    }
 
     // Either side: the person, or the shop they are acting as. Hiding and
     // cancelling a shop's trade is the shop's -- one member hiding it hides it
@@ -65,7 +68,7 @@ export async function PATCH(
        * refuses a second one anyway.
        */
       const refund = await prisma.$transaction(async (tx) => {
-        const moved = await tx.tradeRequest.updateMany({
+        const moved = await tx.trade.updateMany({
           where: { id: tradeId, status: { in: [...cancellable] } },
           data: { status: "CANCELLED" },
         })
@@ -119,7 +122,7 @@ export async function PATCH(
         return NextResponse.json({ error: "Only completed or dead trades can be hidden" }, { status: 400 })
       }
 
-      await prisma.tradeRequest.update({
+      await prisma.trade.update({
         where: { id: tradeId },
         data: isSender ? { hiddenBySender: true } : { hiddenByReceiver: true },
       })

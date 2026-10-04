@@ -344,10 +344,10 @@ async function main() {
     })
     const mine = await prisma.item.findUnique({ where: { id: editId }, select: { valueLeaves: true } })
     if (theirItem && mine?.valueLeaves != null && theirItem.valueLeaves != null) {
-      const pending = await prisma.offer.create({
+      const pending = await prisma.trade.create({
         data: {
-          postId: editId, senderId: other.id, receiverId: user.id, status: "PENDING",
-          offeredItems: JSON.stringify([{ id: theirItem.id }]),
+          requestedItemId: editId, senderId: other.id, receiverId: user.id, offerStatus: "PENDING",
+          offeredItemId: theirItem.id,
         },
         select: { id: true },
       })
@@ -356,7 +356,7 @@ async function main() {
       })
       check("a value edit is refused while an offer is pending",
         locked.status === 409 && locked.body.code === "VALUE_LOCKED_BY_OFFER", `${locked.status} ${show(locked.body.code)}`)
-      await prisma.offer.delete({ where: { id: pending.id } })
+      await prisma.trade.delete({ where: { id: pending.id } })
     }
   }
 

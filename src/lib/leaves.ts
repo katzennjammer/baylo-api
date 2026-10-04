@@ -7,7 +7,7 @@ import type { PrismaClient } from "@/generated/prisma/client"
  */
 
 /** Minimal shape shared by PrismaClient and an interactive transaction client. */
-type LeafDb = Pick<PrismaClient, "user" | "offer">
+type LeafDb = Pick<PrismaClient, "user" | "trade">
 
 /**
  * Leaves a user can still commit right now: their Leaf total minus everything
@@ -39,10 +39,10 @@ export async function availableLeaves(
 ): Promise<number> {
   const [user, committed] = await Promise.all([
     db.user.findUnique({ where: { id: userId }, select: { leaves: true } }),
-    db.offer.aggregate({
+    db.trade.aggregate({
       where: {
         senderId: userId,
-        status: "PENDING",
+        offerStatus: "PENDING",
         offeredLeaves: { not: null },
         ...(opts.excludeOfferId ? { id: { not: opts.excludeOfferId } } : {}),
       },
@@ -84,8 +84,8 @@ export async function leafBalances(
 ): Promise<{ leaves: number; available: number }> {
   const [user, committed] = await Promise.all([
     db.user.findUnique({ where: { id: userId }, select: { leaves: true } }),
-    db.offer.aggregate({
-      where: { senderId: userId, status: "PENDING", offeredLeaves: { not: null } },
+    db.trade.aggregate({
+      where: { senderId: userId, offerStatus: "PENDING", offeredLeaves: { not: null } },
       _sum: { offeredLeaves: true },
     }),
   ])

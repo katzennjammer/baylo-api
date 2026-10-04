@@ -70,7 +70,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
   if (!parsed.ok) return parsed.response
   const { reason, reportId } = parsed.data
 
-  const trade = await prisma.tradeRequest.findUnique({
+  const trade = await prisma.trade.findUnique({
     where: { id },
     select: {
       id: true, status: true, senderId: true, receiverId: true,
@@ -78,7 +78,8 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
       receiver: { select: { name: true } },
     },
   })
-  if (!trade) return notFound("Trade not found")
+  // A deal still in its offer phase is not a trade yet (schema v2).
+  if (!trade || trade.status === null) return notFound("Trade not found")
   if (trade.status !== "COMPLETED") {
     return conflict("Only a completed trade has a reward to reverse", { code: "NOT_COMPLETED" })
   }

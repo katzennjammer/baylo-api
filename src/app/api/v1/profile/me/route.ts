@@ -129,7 +129,7 @@ export async function GET(req: NextRequest) {
   const { page, nextCursor } = paginate(itemRows, limit, (r) => encodeCursor(r.createdAt, r.id))
 
   // ── 4 ── completed trades, for the impact figures.
-  const trades = await prisma.tradeRequest.findMany({
+  const trades = (await prisma.trade.findMany({
     where: {
       status: "COMPLETED",
       OR: [{ senderId: viewerId }, { receiverId: viewerId }],
@@ -140,7 +140,8 @@ export async function GET(req: NextRequest) {
       offeredItem: { select: { category: true } },
       requestedItem: { select: { category: true } },
     },
-  })
+  // A trade always has its offered item (a CHECK constraint since schema v2).
+  })).map((t) => ({ ...t, offeredItem: t.offeredItem! }))
 
   // ── 5 ──
   const reviews = await prisma.review.findMany({

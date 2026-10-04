@@ -104,11 +104,11 @@ export async function deleteAccount(
     // ── Open commitments ────────────────────────────────────────────────────
     // Pending offers are declined rather than left hanging: each one holds
     // Leaves against a counterparty who can no longer complete anything.
-    const offersDeclined = await tx.offer.updateMany({
-      where: { senderId: userId, status: "PENDING" },
-      data: { status: "DECLINED" },
+    const offersDeclined = await tx.trade.updateMany({
+      where: { senderId: userId, offerStatus: "PENDING" },
+      data: { offerStatus: "DECLINED" },
     })
-    await tx.tradeRequest.updateMany({
+    await tx.trade.updateMany({
       where: { OR: [{ senderId: userId }, { receiverId: userId }], status: { in: ["PENDING", "ACCEPTED", "CONFIRMING"] } },
       data: { status: "CANCELLED" },
     })

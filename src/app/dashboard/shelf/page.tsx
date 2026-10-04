@@ -1,6 +1,7 @@
 import { auth } from "@/../auth"
 import { redirect } from "next/navigation"
 import prisma from "@/lib/prisma"
+import { asTrades } from "@/lib/trade-row"
 import { computeImpactData } from "@/lib/impact-constants"
 import ShelfClient from "./ShelfClient"
 import type { ShelfItem } from "./ShelfClient"
@@ -87,14 +88,14 @@ export default async function ShelfPage() {
     prisma.follow.count({
       where: { followeeId: myId, status: "PENDING" },
     }),
-    prisma.tradeRequest.count({
+    prisma.trade.count({
       where: {
         OR: [{ senderId: myId }, { receiverId: myId }],
         status: "COMPLETED",
         updatedAt: { gte: weekAgo },
       },
     }),
-    prisma.tradeRequest.findMany({
+    prisma.trade.findMany({
       where: {
         OR: [{ senderId: myId }, { receiverId: myId }],
         status: "COMPLETED",
@@ -105,7 +106,7 @@ export default async function ShelfPage() {
         offeredItem:   { select: { category: true } },
         requestedItem: { select: { category: true } },
       },
-    }),
+    }).then(asTrades),
     prisma.item.groupBy({
       by: ["category"],
       where: { createdAt: { gte: weekAgo }, status: { not: "REMOVED" } },
@@ -122,12 +123,12 @@ export default async function ShelfPage() {
 
   const [offeredCounts, requestedCounts] = itemIds.length > 0
     ? await Promise.all([
-        prisma.tradeRequest.groupBy({
+        prisma.trade.groupBy({
           by: ["offeredItemId"],
           where: { offeredItemId: { in: itemIds }, status: "COMPLETED" },
           _count: { id: true },
         }),
-        prisma.tradeRequest.groupBy({
+        prisma.trade.groupBy({
           by: ["requestedItemId"],
           where: { requestedItemId: { in: itemIds }, status: "COMPLETED" },
           _count: { id: true },

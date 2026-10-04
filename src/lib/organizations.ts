@@ -403,25 +403,22 @@ export async function activeOrgsFor(
  *   User.totalTrades              completed trades only; an open offer is
  *                                 activity too.
  *
- * Three existence probes (`findFirst` on an id, each served by the FK index)
+ * Two existence probes (`findFirst` on an id, each served by the FK index)
  * rather than counts, because only yes or no is needed.
  */
 export async function hasPersonalActivity(
-  db: Pick<PrismaClient, "item" | "tradeRequest" | "offer">,
+  db: Pick<PrismaClient, "item" | "trade">,
   userId: string,
 ): Promise<boolean> {
-  const [item, trade, offer] = await Promise.all([
+  // One deal row covers offers and trades alike since schema v2.
+  const [item, trade] = await Promise.all([
     db.item.findFirst({ where: { userId }, select: { id: true } }),
-    db.tradeRequest.findFirst({
-      where: { OR: [{ senderId: userId }, { receiverId: userId }] },
-      select: { id: true },
-    }),
-    db.offer.findFirst({
+    db.trade.findFirst({
       where: { OR: [{ senderId: userId }, { receiverId: userId }] },
       select: { id: true },
     }),
   ])
-  return item !== null || trade !== null || offer !== null
+  return item !== null || trade !== null
 }
 
 /**

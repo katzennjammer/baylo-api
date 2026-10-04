@@ -110,7 +110,7 @@ async function main() {
   console.log("\n3. User.totalTrades vs the real COMPLETED count (report only)")
   let drifted = 0
   for (const u of users) {
-    const real = await prisma.tradeRequest.count({
+    const real = await prisma.trade.count({
       where: { status: "COMPLETED", OR: [{ senderId: u.id }, { receiverId: u.id }] },
     })
     if (real === u.totalTrades) continue

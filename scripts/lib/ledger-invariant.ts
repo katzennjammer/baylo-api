@@ -62,9 +62,17 @@ const LIVE_TRADE_STATUSES = ["PENDING", "ACCEPTED", "CONFIRMING"] as const
  * counting every pending fee would claim Leaves nobody has spent. See
  * HELD_ON_OFFER_WHERE in @/lib/bridge-fee, which this mirrors in SQL.
  */
-const OFFER_HELD_SQL = `status = 'PENDING' AND "bridgeFeeLeaves" IS NOT NULL
+const OFFER_HELD_SQL = `"bridgeFeeLeaves" IS NOT NULL
         AND "offeredBracket" IS NOT NULL AND "targetBracket" IS NOT NULL
         AND "offeredBracket" < "targetBracket"`
+
+/**
+ * Which table layout a database has. "v2" is schema v2 (one Trade row per
+ * deal, offer phase in `offerStatus`); "v1" is the pre-v2 Offer +
+ * TradeRequest pair, which live keeps until the cutover -- and which every
+ * backup taken before it holds -- so the raw-SQL path must read both.
+ */
+export type DealShape = "v1" | "v2"
 
 export interface LedgerFigures {
   userLeaves: number
@@ -104,7 +112,7 @@ export function judge(f: LedgerFigures): LedgerJudgement {
   }
 }
 
-type Db = Pick<PrismaClient, "user" | "leafTransaction" | "offer" | "tradeRequest">
+type Db = Pick<PrismaClient, "user" | "leafTransaction" | "trade">
 
 export async function ledgerFigures(db: Db): Promise<LedgerFigures> {
   const [u, all, esc, iss, offers, trades] = await Promise.all([
@@ -112,11 +120,13 @@ export async function ledgerFigures(db: Db): Promise<LedgerFigures> {
     db.leafTransaction.aggregate({ _sum: { amount: true } }),
     db.leafTransaction.aggregate({ _sum: { amount: true }, where: { type: { in: [...ESCROW_TYPES] } } }),
     db.leafTransaction.aggregate({ _sum: { amount: true }, where: { type: { in: [...ISSUANCE_TYPES] } } }),
-    db.offer.findMany({
-      where: { status: "PENDING", bridgeFeeLeaves: { not: null } },
+    // Schema v2: an offer is a deal still in its offer phase, a trade one in
+    // its trade phase -- the same Trade table, told apart by the two columns.
+    db.trade.findMany({
+      where: { offerStatus: "PENDING", bridgeFeeLeaves: { not: null } },
       select: { bridgeFeeLeaves: true, offeredBracket: true, targetBracket: true },
     }),
-    db.tradeRequest.aggregate({
+    db.trade.aggregate({
       _sum: { bridgeFeeLeaves: true },
       where: { status: { in: [...LIVE_TRADE_STATUSES] } },
     }),
@@ -149,9 +159,20 @@ export async function ledgerInvariant(db: Db): Promise<LedgerJudgement> {
  * literal the type does not have, so a backup of a database that predates a
  * newly listed type (FEATURE_BOOST) would fail outright instead of summing 0.
  */
-export function LEDGER_INVARIANT_SQL(schema = "public"): string {
+export function LEDGER_INVARIANT_SQL(schema = "public", shape: DealShape = "v2"): string {
   const q = (t: string) => `"${schema}"."${t}"`
   const list = (xs: readonly string[]) => xs.map((x) => `'${x}'`).join(", ")
+  // The two halves of "held", per layout. v2's offer half is a deal with no
+  // trade phase yet; the old Offer table had only the one status column.
+  const held =
+    shape === "v2"
+      ? `((SELECT COALESCE(SUM("bridgeFeeLeaves"), 0) FROM ${q("Trade")}
+            WHERE status IS NULL AND "offerStatus" = 'PENDING' AND ${OFFER_HELD_SQL})
+         + (SELECT COALESCE(SUM("bridgeFeeLeaves"), 0) FROM ${q("Trade")}
+            WHERE status IN (${list(LIVE_TRADE_STATUSES)})))`
+      : `((SELECT COALESCE(SUM("bridgeFeeLeaves"), 0) FROM ${q("Offer")} WHERE status = 'PENDING' AND ${OFFER_HELD_SQL})
+         + (SELECT COALESCE(SUM("bridgeFeeLeaves"), 0) FROM ${q("TradeRequest")}
+            WHERE status IN (${list(LIVE_TRADE_STATUSES)})))`
   return `
     SELECT
       (SELECT COALESCE(SUM(leaves), 0) FROM ${q("User")})::text AS "userLeaves",
@@ -160,9 +181,7 @@ export function LEDGER_INVARIANT_SQL(schema = "public"): string {
          WHERE type::text IN (${list(ESCROW_TYPES)}))::text AS "escrow",
       (SELECT COALESCE(SUM(amount), 0) FROM ${q("LeafTransaction")}
          WHERE type::text IN (${list(ISSUANCE_TYPES)}))::text AS "issuance",
-      ((SELECT COALESCE(SUM("bridgeFeeLeaves"), 0) FROM ${q("Offer")} WHERE ${OFFER_HELD_SQL})
-       + (SELECT COALESCE(SUM("bridgeFeeLeaves"), 0) FROM ${q("TradeRequest")}
-            WHERE status IN (${list(LIVE_TRADE_STATUSES)})))::text AS "held"`
+      ${held}::text AS "held"`
 }
 
 export function figuresFromRow(row: Record<string, string>): LedgerFigures {

@@ -71,12 +71,13 @@ export async function GET(
 
     const { id: tradeId } = await params
 
-    const trade = await prisma.tradeRequest.findUnique({
+    const trade = await prisma.trade.findUnique({
       where:  { id: tradeId },
       select: { senderId: true, receiverId: true, status: true },
     })
 
-    if (!trade) return NextResponse.json({ error: "Trade not found" }, { status: 404 })
+    // A deal still in its offer phase is not a trade yet (schema v2).
+    if (!trade || trade.status === null) return NextResponse.json({ error: "Trade not found" }, { status: 404 })
     // Either side: the person, or the shop they are acting as. Acting as
     // the shop, "mine" is the SHOP's code -- the one its staff member hands over.
     // See @/lib/trade-participant.

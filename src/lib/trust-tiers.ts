@@ -35,7 +35,7 @@ import { getTrustTier, type TrustTier } from "@/lib/reputation"
  * hand is the kind of thing that turns one endpoint into seventeen.
  */
 
-type TierDb = Pick<PrismaClient, "tradeRequest">
+type TierDb = Pick<PrismaClient, "trade">
 
 export async function loadTrustTiers(
   db: TierDb,
@@ -52,12 +52,12 @@ export async function loadTrustTiers(
     // is identical to the single-user count({ OR: [...] }) for every row where
     // sender and receiver differ, which is every row — a self-trade has no
     // meaning here and no path in the API creates one.
-    db.tradeRequest.groupBy({
+    db.trade.groupBy({
       by: ["senderId"],
       where: { status: "COMPLETED", senderId: { in: ids } },
       _count: { _all: true },
     }),
-    db.tradeRequest.groupBy({
+    db.trade.groupBy({
       by: ["receiverId"],
       where: { status: "COMPLETED", receiverId: { in: ids } },
       _count: { _all: true },

@@ -34,7 +34,7 @@ import {
  * at all. The `already_awarded` check is belt and braces for a replay.
  */
 
-type RewardDb = Pick<PrismaClient, "user" | "leafTransaction" | "tradeRequest" | "item">
+type RewardDb = Pick<PrismaClient, "user" | "leafTransaction" | "trade" | "item">
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
@@ -124,7 +124,7 @@ async function awardOne(
   // Gate 1 -- the pair. Any other COMPLETED trade between these two inside
   // the window, either direction, judged on when THAT trade completed.
   const pairSince = new Date(trade.completedAt.getTime() - TRADE_REWARD_REPEAT_PAIR_DAYS * DAY_MS)
-  const priorPair = await db.tradeRequest.findFirst({
+  const priorPair = await db.trade.findFirst({
     where: {
       id: { not: trade.id },
       status: "COMPLETED",
@@ -142,7 +142,7 @@ async function awardOne(
   // the window, on either side. An item keeps its id through relisting, which
   // is exactly what lets this catch a ring the pair rule cannot see.
   const itemSince = new Date(trade.completedAt.getTime() - TRADE_REWARD_SAME_ITEM_DAYS * DAY_MS)
-  const priorItem = await db.tradeRequest.findFirst({
+  const priorItem = await db.trade.findFirst({
     where: {
       id: { not: trade.id },
       status: "COMPLETED",

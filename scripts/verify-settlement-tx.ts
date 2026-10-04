@@ -15,7 +15,7 @@ async function cleanup() {
   const ids = users.map((u) => u.id)
   if (!ids.length) return
   await prisma.leafTransaction.deleteMany({ where: { userId: { in: ids } } })
-  await prisma.tradeRequest.deleteMany({ where: { OR: [{ senderId: { in: ids } }, { receiverId: { in: ids } }] } })
+  await prisma.trade.deleteMany({ where: { OR: [{ senderId: { in: ids } }, { receiverId: { in: ids } }] } })
   await prisma.item.deleteMany({ where: { userId: { in: ids } } })
   await prisma.user.deleteMany({ where: { id: { in: ids } } })
 }
@@ -30,8 +30,8 @@ async function main() {
     data: { title: P + t, description: "d", category: "BOOKS", condition: "GOOD", userId: uid },
   })
   const i1 = await mk(a.id, "1"), i2 = await mk(b.id, "2")
-  const trade = await prisma.tradeRequest.create({
-    data: { senderId: a.id, receiverId: b.id, offeredItemId: i1.id, requestedItemId: i2.id, status: "CONFIRMING" },
+  const trade = await prisma.trade.create({
+    data: { tradeCreatedAt: new Date(), senderId: a.id, receiverId: b.id, offeredItemId: i1.id, requestedItemId: i2.id, status: "CONFIRMING" },
   })
 
   // Pre-award A so the in-transaction award hits the duplicate path.
@@ -41,7 +41,7 @@ async function main() {
 
   // Now run the settlement shape: trade + item updates, then awards for both.
   await prisma.$transaction(async (tx) => {
-    await tx.tradeRequest.update({ where: { id: trade.id }, data: { status: "COMPLETED" } })
+    await tx.trade.update({ where: { id: trade.id }, data: { status: "COMPLETED" } })
     await tx.item.update({ where: { id: i1.id }, data: { userId: b.id, status: "OWNED" } })
     await tx.item.update({ where: { id: i2.id }, data: { userId: a.id, status: "OWNED" } })
     await tx.user.updateMany({ where: { id: { in: [a.id, b.id] } }, data: { totalTrades: { increment: 1 } } })
@@ -51,12 +51,12 @@ async function main() {
     }
   })
 
-  const t = await prisma.tradeRequest.findUnique({ where: { id: trade.id } })
+  const t = await prisma.trade.findUnique({ where: { id: trade.id } })
   const ua = await prisma.user.findUnique({ where: { id: a.id } })
   const ub = await prisma.user.findUnique({ where: { id: b.id } })
   const it1 = await prisma.item.findUnique({ where: { id: i1.id } })
 
-  check("trade COMPLETED despite the duplicate award", t!.status === "COMPLETED", t!.status)
+  check("trade COMPLETED despite the duplicate award", t!.status === "COMPLETED", String(t!.status))
   check("items transferred", it1!.userId === b.id && it1!.status === "OWNED")
   check("totalTrades incremented", ua!.totalTrades === 1 && ub!.totalTrades === 1)
   check("A not double-awarded", ua!.lifetimeLeaves === 10, `lifetime=${ua!.lifetimeLeaves}`)

@@ -1,4 +1,5 @@
 import prisma from "@/lib/prisma"
+import { asTrades } from "@/lib/trade-row"
 import LoginClient, { type SwapDisplay } from "./LoginClient"
 import { isLeavesOnlyTrade } from "@/lib/trade-format"
 import { ITEM_IMAGES, toImageUrls, type ImagesLike } from "@/lib/item-images"
@@ -21,7 +22,7 @@ function parseFirstImage(raw: ImagesLike): string | null {
 export default async function LoginPage() {
   const googleEnabled = Boolean(process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET)
   const [rawSwaps, userCount, recentUsers] = await Promise.all([
-    prisma.tradeRequest.findMany({
+    prisma.trade.findMany({
       where: { status: "COMPLETED" },
       orderBy: { updatedAt: "desc" },
       take: 3,
@@ -33,10 +34,11 @@ export default async function LoginPage() {
         requestedItemId: true,
         sender: { select: { name: true } },
         receiver: { select: { name: true } },
+        offeredLeaves: true,
         offeredItem: { select: { title: true, images: ITEM_IMAGES } },
         requestedItem: { select: { title: true, images: ITEM_IMAGES } },
       },
-    }),
+    }).then(asTrades),
     prisma.user.count(),
     prisma.user.findMany({
       orderBy: { createdAt: "desc" },
@@ -45,22 +47,13 @@ export default async function LoginPage() {
     }),
   ])
 
-  // Recover offeredLeaves for any Leaves-only completed trades
-  const loginPointsOnly = rawSwaps.filter((t) => isLeavesOnlyTrade(t.offeredItemId, t.requestedItemId))
+  // offeredLeaves for any Leaves-only completed trades. Since schema v2 it is
+  // on the deal's own row; it used to be recovered from the accepted Offer by
+  // sender + listing, which was not unique.
   const loginOfferedLeavesMap = new Map<string, number>()
-
-  if (loginPointsOnly.length > 0) {
-    const offerRecs = await prisma.offer.findMany({
-      where: {
-        OR: loginPointsOnly.map((t) => ({ senderId: t.senderId, postId: t.requestedItemId, status: "ACCEPTED" })),
-        offeredLeaves: { gt: 0 },
-      },
-      select: { senderId: true, postId: true, offeredLeaves: true },
-    })
-    const offerMap = new Map(offerRecs.map((o) => [`${o.senderId}:${o.postId}`, o.offeredLeaves ?? 0]))
-    for (const t of loginPointsOnly) {
-      const lv = offerMap.get(`${t.senderId}:${t.requestedItemId}`)
-      if (lv) loginOfferedLeavesMap.set(t.id, lv)
+  for (const t of rawSwaps) {
+    if (isLeavesOnlyTrade(t.offeredItemId, t.requestedItemId) && (t.offeredLeaves ?? 0) > 0) {
+      loginOfferedLeavesMap.set(t.id, t.offeredLeaves as number)
     }
   }
 

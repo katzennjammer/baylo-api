@@ -72,7 +72,7 @@ async function main() {
   })).map((c) => ({ task: c.task!, refId: c.taskRefId ?? "", userId: c.userId, leaves: c.amount }))
 
   const tradeIds = [...new Set(completions.map((c) => c.refId).filter(Boolean))]
-  const trades = await prisma.tradeRequest.findMany({
+  const trades = await prisma.trade.findMany({
     where: { id: { in: tradeIds } },
     select: { id: true, senderId: true, receiverId: true, updatedAt: true },
   })

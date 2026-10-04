@@ -114,8 +114,8 @@ export async function POST(req: NextRequest) {
     // One live offer per listing per sender. Without this a proposer stacks
     // three bridges on one listing and holds three fees against a listing that
     // can only be traded once.
-    const standing = await prisma.offer.findFirst({
-      where: { postId, senderId, status: "PENDING" },
+    const standing = await prisma.trade.findFirst({
+      where: { requestedItemId: postId, senderId, offerStatus: "PENDING" },
       select: { id: true },
     })
     if (standing) {
@@ -125,11 +125,13 @@ export async function POST(req: NextRequest) {
       )
     }
 
-    const duplicateOfferedItem = await prisma.offer.findFirst({
+    // The offered item is a real column since schema v2, so this is an exact
+    // match rather than a substring search through a JSON list.
+    const duplicateOfferedItem = await prisma.trade.findFirst({
       where: {
         senderId,
-        status: "PENDING",
-        offeredItems: { contains: offeredItemId },
+        offerStatus: "PENDING",
+        offeredItemId,
       },
       select: { id: true },
     })
@@ -178,28 +180,27 @@ export async function POST(req: NextRequest) {
     let offer: { id: string }
     try {
       offer = await prisma.$transaction(async (tx) => {
-        const duplicate = await tx.offer.findFirst({
+        const duplicate = await tx.trade.findFirst({
           where: {
             senderId,
-            status: "PENDING",
-            offeredItems: { contains: offeredItemId },
+            offerStatus: "PENDING",
+            offeredItemId,
           },
           select: { id: true },
         })
         if (duplicate) throw new DuplicateOfferedItem()
 
-        const created = await tx.offer.create({
+        // The deal's one row (schema v2), in its offer phase: `status` stays
+        // NULL until the receiver accepts it into a trade.
+        const created = await tx.trade.create({
           data: {
-            postId,
+            requestedItemId: postId,
             senderId,
             receiverId: post.userId,
-            // The shape the chat card and the accept path read. One item now,
-            // still an array on the wire: the column is a JSON blob with years
-            // of rows in it and re-shaping it would be a migration of text.
-            offeredItems: JSON.stringify([{ id: assessed.offered.id, title: assessed.offered.title }]),
+            offeredItemId: assessed.offered.id,
             offeredLeaves: null,
             message: message?.trim() || null,
-            status: "PENDING",
+            offerStatus: "PENDING",
             // The QUOTE, either direction. Set even when the receiver is the
             // one who will pay it -- their accept sheet needs the number, and
             // the accept path re-derives and re-checks it anyway. It is not a
@@ -218,7 +219,7 @@ export async function POST(req: NextRequest) {
         if (proposerFee > 0) {
           const held = await holdBridgeFee(tx, {
             userId: senderId,
-            offerId: created.id,
+            tradeId: created.id,
             amount: proposerFee,
             at: now,
           })

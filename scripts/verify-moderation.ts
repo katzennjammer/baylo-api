@@ -90,8 +90,7 @@ async function cleanup() {
   await prisma.message.deleteMany({ where: { OR: [{ senderId: { in: ids } }, { receiverId: { in: ids } }] } })
   await prisma.review.deleteMany({ where: { OR: [{ reviewerId: { in: ids } }, { revieweeId: { in: ids } }] } })
   await prisma.swapCode.deleteMany({ where: { userId: { in: ids } } })
-  await prisma.tradeRequest.deleteMany({ where: { OR: [{ senderId: { in: ids } }, { receiverId: { in: ids } }] } })
-  await prisma.offer.deleteMany({ where: { OR: [{ senderId: { in: ids } }, { receiverId: { in: ids } }] } })
+  await prisma.trade.deleteMany({ where: { OR: [{ senderId: { in: ids } }, { receiverId: { in: ids } }] } })
   await prisma.leafTransaction.deleteMany({ where: { userId: { in: ids }, task: { not: null } } })
   await prisma.authToken.deleteMany({ where: { userId: { in: ids } } })
   await prisma.item.deleteMany({ where: { userId: { in: ids } } })
@@ -353,8 +352,9 @@ async function main() {
   const daveItem = await makeItem(dave.id, `${P}Dave Device`)
   const erinItem = await makeItem(erin.id, `${P}Erin Engine`)
 
-  const trade = await prisma.tradeRequest.create({
+  const trade = await prisma.trade.create({
     data: {
+      tradeCreatedAt: new Date(), // trade phase from the start (schema v2 CHECK)
       senderId: dave.id, receiverId: erin.id,
       offeredItemId: daveItem.id, requestedItemId: erinItem.id,
       status: "ACCEPTED",
@@ -373,7 +373,7 @@ async function main() {
   check("debtor may block their creditor (the block itself is not refused)", midBlock.status === 200,
     `got ${midBlock.status}`)
 
-  const tradeAfter = await prisma.tradeRequest.findUnique({
+  const tradeAfter = await prisma.trade.findUnique({
     where: { id: trade.id }, select: { status: true },
   })
 

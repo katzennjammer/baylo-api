@@ -52,7 +52,7 @@ import { releaseBridgeFee } from "@/lib/bridge-fee"
  * sender would be told they had 40 fewer Leaves than they really did.
  */
 
-type OfferDb = Pick<PrismaClient, "offer" | "notification" | "user" | "leafTransaction">
+type OfferDb = Pick<PrismaClient, "trade" | "notification" | "user" | "leafTransaction">
 
 /** The window, in days. See the long note above before changing it. */
 export const OFFER_EXPIRY_DAYS = 3
@@ -109,12 +109,14 @@ export async function expireStaleOffers(
 ): Promise<number> {
   const cutoff = offerExpiryCutoff()
 
-  const stale = await db.offer.findMany({
+  // An offer is a deal still in its offer phase (schema v2: one Trade row per
+  // deal). createdAt is the proposal time, which is what the window measures.
+  const stale = await db.trade.findMany({
     where: {
-      status: "PENDING",
+      offerStatus: "PENDING",
       createdAt: { lt: cutoff },
       ...(scope.senderId ? { senderId: scope.senderId } : {}),
-      ...(scope.postId ? { postId: scope.postId } : {}),
+      ...(scope.postId ? { requestedItemId: scope.postId } : {}),
     },
     select: {
       id: true,
@@ -123,7 +125,7 @@ export async function expireStaleOffers(
       bridgeFeeLeaves: true,
       offeredBracket: true,
       targetBracket: true,
-      post: { select: { id: true, title: true } },
+      requestedItem: { select: { id: true, title: true } },
     },
   })
   if (stale.length === 0) return 0
@@ -173,7 +175,7 @@ export async function expireStaleOffers(
           userId: offer.senderId,
           type: "OFFER_EXPIRED",
           message:
-            `Your offer on "${offer.post.title}" expired after ${OFFER_EXPIRY_DAYS} days` +
+            `Your offer on "${offer.requestedItem.title}" expired after ${OFFER_EXPIRY_DAYS} days` +
             (fee > 0
               ? ` — your ${fee}-Leaf bridging fee is back in your balance`
               : offer.offeredLeaves
@@ -181,7 +183,7 @@ export async function expireStaleOffers(
                 : ""),
           link: `/dashboard/tradeplace`,
           entityType: "item",
-          entityId: offer.post.id,
+          entityId: offer.requestedItem.id,
         },
       })
     } catch {
@@ -212,13 +214,13 @@ async function runExpiry(
   fee: number,
 ): Promise<boolean> {
   const work = async (tx: OfferDb) => {
-    const moved = await tx.offer.updateMany({
-      where: { id: offerId, status: "PENDING" },
-      data: { status: "EXPIRED" },
+    const moved = await tx.trade.updateMany({
+      where: { id: offerId, offerStatus: "PENDING" },
+      data: { offerStatus: "EXPIRED" },
     })
     if (moved.count !== 1) return false
     if (fee > 0) {
-      await releaseBridgeFee(tx, { userId: senderId, offerId, amount: fee, reason: "expired" })
+      await releaseBridgeFee(tx, { userId: senderId, tradeId: offerId, amount: fee, reason: "expired" })
     }
     return true
   }
@@ -229,7 +231,22 @@ async function runExpiry(
 }
 
 /**
- * `Offer.offeredItems` is a JSON string written by a client. Parsed defensively.
+ * The `where` that finds a deal from an id a client sent.
+ *
+ * Since schema v2 an offer and the trade it becomes are ONE Trade row, and a
+ * deal that became a trade before v2 kept the TradeRequest's id; its old Offer
+ * id lives on in `legacyOfferId`. Chat cards written before v2 embed that old
+ * offer id, so an id from a client is looked up both ways. The two id sets
+ * never collide (both are cuids from different rows), so at most one row
+ * matches.
+ */
+export function dealByAnyId(id: string) {
+  return { OR: [{ id }, { legacyOfferId: id }] }
+}
+
+/**
+ * `Offer.offeredItems` was a JSON string written by a client (before schema
+ * v2 made the offered item a real column). Parsed defensively.
  *
  * Anything that is not an object with a non-empty string `id` is dropped, and a
  * malformed blob yields `[]` rather than throwing. Since 16 Sep 2026 a new

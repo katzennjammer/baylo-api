@@ -63,7 +63,7 @@ export async function POST(
   if (!parsed.ok) return parsed.response
   const { confirmHubId, confirmAt } = parsed.data
 
-  const trade = await prisma.tradeRequest.findUnique({
+  const trade = await prisma.trade.findUnique({
     where: { id },
     select: {
       id: true,
@@ -73,7 +73,8 @@ export async function POST(
       ...MEETUP_SELECT,
     },
   })
-  if (!trade) return notFound("Trade not found")
+  // A deal still in its offer phase is not a trade yet (schema v2).
+  if (!trade || trade.status === null) return notFound("Trade not found")
   // Either side: the person, or the shop they are acting as. See
   // @/lib/trade-participant.
   const who = await resolveTradeParticipant(session.user.id, req.headers, trade)
@@ -107,7 +108,7 @@ export async function POST(
     return conflict("That plan changed before you agreed. Have another look.")
   }
 
-  const updated = await prisma.tradeRequest.update({
+  const updated = await prisma.trade.update({
     where: { id },
     data: { meetupAgreedAt: new Date() },
     select: { id: true, ...MEETUP_SELECT },

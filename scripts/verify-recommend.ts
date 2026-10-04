@@ -165,7 +165,7 @@ async function real() {
     async (tx) => {
       await tx.$executeRawUnsafe("SET TRANSACTION READ ONLY")
 
-      const trades = await tx.tradeRequest.findMany({
+      const trades = await tx.trade.findMany({
         where: { status: "COMPLETED" },
         select: { senderId: true, receiverId: true },
       })
@@ -182,9 +182,10 @@ async function real() {
         where: {
           isOrgAccount: false,
           deletedAt: null,
-          sentRequests: { none: { status: "COMPLETED" } },
-          receivedRequests: { none: { status: "COMPLETED" } },
-          OR: [{ sentOffers: { some: {} } }, { likes: { some: {} } }],
+          sentTrades: { none: { status: "COMPLETED" } },
+          receivedTrades: { none: { status: "COMPLETED" } },
+          // An offer sent: a deal with an offer phase (schema v2).
+          OR: [{ sentTrades: { some: { offerStatus: { not: null } } } }, { likes: { some: {} } }],
         },
         select: { id: true },
       })
@@ -192,9 +193,10 @@ async function real() {
         where: {
           isOrgAccount: false,
           deletedAt: null,
-          sentRequests: { none: { status: "COMPLETED" } },
-          receivedRequests: { none: { status: "COMPLETED" } },
-          sentOffers: { none: {} },
+          // No completed trade either way, and no offer sent (schema v2: one
+          // Trade row per deal, so both conditions are on sentTrades).
+          sentTrades: { none: { OR: [{ status: "COMPLETED" }, { offerStatus: { not: null } }] } },
+          receivedTrades: { none: { status: "COMPLETED" } },
           likes: { none: {} },
           items: { none: { status: "AVAILABLE" } },
         },

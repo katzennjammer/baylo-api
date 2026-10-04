@@ -58,12 +58,13 @@ export async function POST(req: Request) {
   const commentStr = typeof comment === "string" ? comment.trim() || null : null
 
   // Load trade — check existence, status, and participation
-  const trade = await prisma.tradeRequest.findUnique({
+  const trade = await prisma.trade.findUnique({
     where: { id: tradeId },
     select: { id: true, status: true, senderId: true, receiverId: true },
   })
 
-  if (!trade) {
+  // A deal still in its offer phase is not a trade yet (schema v2).
+  if (!trade || trade.status === null) {
     return NextResponse.json({ error: "Trade not found" }, { status: 404 })
   }
   if (trade.status !== "COMPLETED") {

@@ -29,7 +29,7 @@ async function cleanup() {
   const ids = users.map((u) => u.id)
   if (!ids.length) return
   await prisma.leafTransaction.deleteMany({ where: { userId: { in: ids } } })
-  await prisma.tradeRequest.deleteMany({ where: { OR: [{ senderId: { in: ids } }, { receiverId: { in: ids } }] } })
+  await prisma.trade.deleteMany({ where: { OR: [{ senderId: { in: ids } }, { receiverId: { in: ids } }] } })
   await prisma.item.deleteMany({ where: { userId: { in: ids } } })
   await prisma.user.deleteMany({ where: { id: { in: ids } } })
 }
@@ -50,14 +50,15 @@ async function buildHistory(owner: { id: string }, tag: string, agesInDays: numb
     const i1 = await mkItem(owner.id, `${tag}o${i}`)
     const i2 = await mkItem(partner.id, `${tag}p${i}i`)
     const at = new Date(Date.now() - agesInDays[i] * DAY)
-    const t = await prisma.tradeRequest.create({
+    const t = await prisma.trade.create({
       data: {
+        tradeCreatedAt: new Date(), // trade phase from the start (schema v2 CHECK)
         senderId: owner.id, receiverId: partner.id,
         offeredItemId: i1.id, requestedItemId: i2.id, status: "COMPLETED",
       },
     })
     // createdAt/updatedAt are managed by Prisma, so backdate them directly.
-    await prisma.$executeRaw`UPDATE "TradeRequest" SET "createdAt" = ${at}, "updatedAt" = ${at} WHERE "id" = ${t.id}`
+    await prisma.$executeRaw`UPDATE "Trade" SET "createdAt" = ${at}, "tradeCreatedAt" = ${at}, "updatedAt" = ${at} WHERE "id" = ${t.id}`
   }
 }
 

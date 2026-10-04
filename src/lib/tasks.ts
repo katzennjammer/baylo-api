@@ -21,7 +21,7 @@ import {
  */
 
 /** Minimal shape shared by PrismaClient and an interactive transaction client. */
-type TaskDb = Pick<PrismaClient, "user" | "leafTransaction" | "tradeRequest">
+type TaskDb = Pick<PrismaClient, "user" | "leafTransaction" | "trade">
 
 const DAY_MS = 24 * 60 * 60 * 1000
 
@@ -120,7 +120,7 @@ export async function isNewTradePartner(
   exceptTradeId?: string,
   tradeAt: Date = new Date(),
 ): Promise<boolean> {
-  const prior = await db.tradeRequest.findFirst({
+  const prior = await db.trade.findFirst({
     where: {
       status:    "COMPLETED",
       updatedAt: { gte: new Date(tradeAt.getTime() - NEW_PARTNER_WINDOW_DAYS * DAY_MS), lt: tradeAt },
@@ -356,7 +356,7 @@ export async function reconcileTasks(userId: string): Promise<TasksStatus | null
     prisma.item.findFirst({
       where: { userId }, orderBy: { createdAt: "asc" }, select: { createdAt: true },
     }),
-    prisma.tradeRequest.findMany({
+    prisma.trade.findMany({
       where:  { OR: [{ senderId: userId }, { receiverId: userId }], status: "COMPLETED" },
       select: { id: true, safeZoneHubId: true, senderId: true, receiverId: true, updatedAt: true },
     }),

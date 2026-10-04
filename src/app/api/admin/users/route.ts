@@ -3,6 +3,7 @@ import { z } from "zod"
 import { requireRole } from "@/lib/api-auth"
 import prisma from "@/lib/prisma"
 import { REPORT } from "@/lib/report-case"
+import { IN_TRADE_PHASE } from "@/lib/trade-row"
 import { ok } from "@/lib/v1/envelope"
 import { parseQuery } from "@/lib/v1/query"
 
@@ -64,8 +65,9 @@ export async function GET(req: NextRequest) {
           items: true,
           casesFiled: { where: REPORT },
           idVerifications: true,
-          sentRequests: true,
-          receivedRequests: true,
+          // Deals in their trade phase (schema v2), under the old wire keys below.
+          sentTrades: { where: IN_TRADE_PHASE },
+          receivedTrades: { where: IN_TRADE_PHASE },
         },
       },
       idVerifications: {
@@ -86,7 +88,11 @@ export async function GET(req: NextRequest) {
     users: users.map((user) => ({
       ...user,
       // The wire key predates ModerationCase: reports filed, appeals excluded.
-      _count: { ...user._count, casesFiled: undefined, reportsMade: user._count.casesFiled },
+      _count: {
+        ...user._count, casesFiled: undefined, reportsMade: user._count.casesFiled,
+        sentTrades: undefined, sentRequests: user._count.sentTrades,
+        receivedTrades: undefined, receivedRequests: user._count.receivedTrades,
+      },
       idVerification: user.idVerifications[0] ?? null,
       idVerifications: undefined,
       suspended: user.suspendedAt !== null && (

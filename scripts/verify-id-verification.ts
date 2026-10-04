@@ -130,10 +130,8 @@ async function cleanup() {
   await prisma.message.deleteMany({
     where: { OR: [{ senderId: { in: ids } }, { receiverId: { in: ids } }] },
   })
-  await prisma.tradeRequest.deleteMany({
-    where: { OR: [{ senderId: { in: ids } }, { receiverId: { in: ids } }] },
-  })
-  await prisma.offer.deleteMany({
+  // Offers and trades: one Trade row per deal since schema v2.
+  await prisma.trade.deleteMany({
     where: { OR: [{ senderId: { in: ids } }, { receiverId: { in: ids } }] },
   })
   await prisma.leafTransaction.deleteMany({ where: { userId: { in: ids }, task: { not: null } } })
@@ -244,8 +242,9 @@ async function main() {
 
   // ACCEPTING a trade. The other (verified) party proposes; the unverified user
   // accepts. This is the one the spec is most explicit about.
-  const trade = await prisma.tradeRequest.create({
+  const trade = await prisma.trade.create({
     data: {
+      tradeCreatedAt: new Date(), // trade phase from the start (schema v2 CHECK)
       senderId: other.id,
       receiverId: unverified.id,
       offeredItemId: theirItem.id,

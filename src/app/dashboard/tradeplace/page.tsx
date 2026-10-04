@@ -1,6 +1,7 @@
 import { auth } from "@/../auth"
 import { redirect } from "next/navigation"
 import prisma from "@/lib/prisma"
+import { asTrades } from "@/lib/trade-row"
 import { ITEM_IMAGES, imagesJson, leadHash } from "@/lib/item-images"
 import TradeplaceClient from "./TradeplaceClient"
 import type { SerializedItem } from "./TradeplaceClient"
@@ -81,7 +82,7 @@ export default async function TradeplacePage({
     prisma.follow.count({
       where: { followeeId: session.user.id, status: "PENDING" },
     }),
-    prisma.tradeRequest.count({
+    prisma.trade.count({
       where: {
         OR: [{ senderId: session.user.id }, { receiverId: session.user.id }],
         status: "COMPLETED",
@@ -89,7 +90,7 @@ export default async function TradeplacePage({
       },
     }),
     // Trader of the week: completed trade pairs in last 7 days
-    prisma.tradeRequest.findMany({
+    prisma.trade.findMany({
       where: { status: "COMPLETED", updatedAt: { gte: weekAgo } },
       select: { senderId: true, receiverId: true },
     }),
@@ -102,7 +103,7 @@ export default async function TradeplacePage({
       take: 1,
     }),
     // Ticker: most recent completed trades with item titles
-    prisma.tradeRequest.findMany({
+    prisma.trade.findMany({
       where: { status: "COMPLETED" },
       include: {
         sender: { select: { name: true } },
@@ -111,20 +112,20 @@ export default async function TradeplacePage({
       },
       orderBy: { updatedAt: "desc" },
       take: 10,
-    }),
+    }).then(asTrades),
   ])
 
   if (!me) redirect("/auth/login")
 
   const itemIds = rawItems.map((i) => i.id)
   const completedTradeItems = itemIds.length > 0
-    ? await prisma.tradeRequest.findMany({
+    ? await prisma.trade.findMany({
         where: {
           status: "COMPLETED",
           OR: [{ offeredItemId: { in: itemIds } }, { requestedItemId: { in: itemIds } }],
         },
         select: { offeredItemId: true, requestedItemId: true },
-      })
+      }).then(asTrades)
     : []
 
   const tradeCountMap = new Map<string, number>()
@@ -191,7 +192,7 @@ export default async function TradeplacePage({
   {
     let topEntry = topUserFromPairs(recentTradePairs)
     if (!topEntry) {
-      const allTimePairs = await prisma.tradeRequest.findMany({
+      const allTimePairs = await prisma.trade.findMany({
         where: { status: "COMPLETED" },
         select: { senderId: true, receiverId: true },
       })

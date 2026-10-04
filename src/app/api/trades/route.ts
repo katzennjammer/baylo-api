@@ -11,6 +11,7 @@ import { enforceNotBlocked } from "@/lib/blocking"
 import {
   isShopMemberPair, legacyParticipantRefusal, resolveTradeParticipant, shopMemberSelfTradeRefusal,
 } from "@/lib/trade-participant"
+import { asTradeRequest, IN_TRADE_PHASE } from "@/lib/trade-row"
 
 export async function GET() {
   try {
@@ -21,27 +22,27 @@ export async function GET() {
     // PENDING counterparty received the other party's exact pickup coordinates.
     // The pickup columns are resolved through the same rule as every other read
     // path, so a PENDING trade sees the coarse point and an ACCEPTED one does not.
-    const trades = await prisma.tradeRequest.findMany({
-      where: { OR: [{ senderId: session.user.id }, { receiverId: session.user.id }] },
+    const trades = await prisma.trade.findMany({
+      where: { ...IN_TRADE_PHASE, OR: [{ senderId: session.user.id }, { receiverId: session.user.id }] },
       include: {
         offeredItem: { select: ITEM_PUBLIC_SELECT },
         requestedItem: { select: ITEM_PUBLIC_SELECT },
         sender: { select: { id: true, name: true, avatar: true } },
         receiver: { select: { id: true, name: true, avatar: true } },
       },
-      orderBy: { createdAt: "desc" },
+      orderBy: { tradeCreatedAt: "desc" },
     })
 
     const viewerId = session.user.id
     const access = await preciseAccessItemIds(
       viewerId,
-      trades.flatMap((t) => [t.offeredItemId, t.requestedItemId]),
+      trades.flatMap((t) => [t.offeredItemId as string, t.requestedItemId]),
     )
 
     return NextResponse.json(
       trades.map((t) => ({
-        ...t,
-        offeredItem: shapeItem(t.offeredItem, viewerId, access),
+        ...asTradeRequest(t),
+        offeredItem: shapeItem(t.offeredItem!, viewerId, access),
         requestedItem: shapeItem(t.requestedItem, viewerId, access),
       })),
     )
@@ -152,7 +153,7 @@ export async function POST(req: NextRequest) {
     const gate = await enforceInitiateTrade(session.user.id, [requestedItemId])
     if (gate.response) return gate.response
 
-    const existing = await prisma.tradeRequest.findFirst({
+    const existing = await prisma.trade.findFirst({
       where: {
         senderId: session.user.id,
         requestedItemId,
@@ -170,13 +171,19 @@ export async function POST(req: NextRequest) {
     })
 
     const { trade, chatMessage } = await prisma.$transaction(async (tx) => {
-      const createdTrade = await tx.tradeRequest.create({
+      // A direct request has no offer phase: `offerStatus` stays NULL and the
+      // deal is a trade from its first moment, so both timestamps are now.
+      const now = new Date()
+      const createdTrade = await tx.trade.create({
         data: {
           senderId: session.user.id,
           receiverId: requestedItem.userId,
           offeredItemId,
           requestedItemId,
           message: message || null,
+          status: "PENDING",
+          createdAt: now,
+          tradeCreatedAt: now,
         },
       })
 
@@ -226,7 +233,7 @@ export async function POST(req: NextRequest) {
     }
     pusher.trigger(`private-user-${requestedItem.userId}`, "new-message", pusherPayload).catch(() => {})
 
-    return NextResponse.json(trade, { status: 201 })
+    return NextResponse.json(asTradeRequest(trade), { status: 201 })
   } catch {
     return NextResponse.json({ error: "Internal server error" }, { status: 500 })
   }
@@ -241,7 +248,7 @@ export async function PATCH(req: NextRequest) {
     if (!parsed.ok) return parsed.response
     const { tradeId, status } = parsed.data
 
-    const trade = await prisma.tradeRequest.findUnique({
+    const found = await prisma.trade.findUnique({
       where: { id: tradeId },
       include: {
         requestedItem: { select: { id: true, title: true, status: true } },
@@ -251,7 +258,12 @@ export async function PATCH(req: NextRequest) {
       },
     })
 
-    if (!trade) return NextResponse.json({ error: "Trade not found" }, { status: 404 })
+    // A deal still in its offer phase is not a trade (and has no offered item
+    // only when it is a legacy Leaves-only offer).
+    if (!found || found.status === null || !found.offeredItemId || !found.offeredItem) {
+      return NextResponse.json({ error: "Trade not found" }, { status: 404 })
+    }
+    const trade = { ...found, offeredItemId: found.offeredItemId, offeredItem: found.offeredItem }
     // The receiver answers: the person, or -- acting as a shop -- the shop, when
     // the request was sent to it. `myId` is that side from here on, so the
     // standing gated and the actor on each notification are the shop's. See
@@ -291,7 +303,7 @@ export async function PATCH(req: NextRequest) {
         }
 
         // Accept this trade and lock items
-        await tx.tradeRequest.update({ where: { id: tradeId }, data: { status: "ACCEPTED" } })
+        await tx.trade.update({ where: { id: tradeId }, data: { status: "ACCEPTED" } })
         const locked = await tx.item.updateMany({
           where: { id: { in: itemIds }, status: "AVAILABLE" },
           data: { status: "IN_TRADE" },
@@ -299,7 +311,7 @@ export async function PATCH(req: NextRequest) {
         if (locked.count !== itemIds.length) throw new Error("item_unavailable")
 
         // Find all other PENDING trades that involve either of these items
-        const rivals = await tx.tradeRequest.findMany({
+        const rivals = await tx.trade.findMany({
           where: {
             id: { not: tradeId },
             status: "PENDING",
@@ -312,7 +324,7 @@ export async function PATCH(req: NextRequest) {
         })
 
         if (rivals.length > 0) {
-          await tx.tradeRequest.updateMany({
+          await tx.trade.updateMany({
             where: { id: { in: rivals.map((r) => r.id) } },
             data: { status: "REJECTED" },
           })
@@ -352,7 +364,7 @@ export async function PATCH(req: NextRequest) {
       })
 
       // Pusher: notify accepted sender + each rival's sender in real-time
-      const rivals2 = await prisma.tradeRequest.findMany({
+      const rivals2 = await prisma.trade.findMany({
         where: {
           id: { not: tradeId },
           status: "REJECTED",
@@ -391,12 +403,12 @@ export async function PATCH(req: NextRequest) {
 
     if (status === "REJECTED") {
       // The status and the refund together; see releaseTradeFee().
-      const rejected = await prisma.tradeRequest.findUnique({
+      const rejected = await prisma.trade.findUnique({
         where: { id: tradeId },
         select: TRADE_FEE_SELECT,
       })
       await prisma.$transaction(async (tx) => {
-        await tx.tradeRequest.update({ where: { id: tradeId }, data: { status: "REJECTED" } })
+        await tx.trade.update({ where: { id: tradeId }, data: { status: "REJECTED" } })
         if (rejected) await releaseTradeFee(tx, rejected, "rejected")
       })
       await prisma.notification.create({

@@ -37,7 +37,7 @@ export async function POST(
     const body = parsed.data
     const submitted = body.code
 
-    const trade = await prisma.tradeRequest.findUnique({
+    const found = await prisma.trade.findUnique({
       where: { id: tradeId },
       include: {
         sender:        { select: { id: true, name: true, email: true } },
@@ -47,7 +47,11 @@ export async function POST(
       },
     })
 
-    if (!trade) return NextResponse.json({ error: "Trade not found" }, { status: 404 })
+    // A deal still in its offer phase is not a trade yet (schema v2).
+    if (!found || found.status === null || found.offeredItemId === null || found.offeredItem === null) {
+      return NextResponse.json({ error: "Trade not found" }, { status: 404 })
+    }
+    const trade = { ...found, status: found.status, offeredItemId: found.offeredItemId, offeredItem: found.offeredItem }
     // Either side: the person, or the shop they are acting as. A staff
     // member entering the partner's code while acting as the shop IS the shop
     // fulfilling its side: its code row is marked used and its items move.
@@ -222,7 +226,7 @@ export async function POST(
     }
 
     if (claimHubId) {
-      await prisma.tradeRequest.update({
+      await prisma.trade.update({
         where: { id: tradeId },
         data:  { safeZoneHubId: claimHubId },
       })
@@ -253,7 +257,7 @@ export async function POST(
 
     try {
       rewards = await prisma.$transaction(async (tx) => {
-        const freshTrade = await tx.tradeRequest.findUnique({
+        const freshTrade = await tx.trade.findUnique({
           where:  { id: tradeId },
           select: {
             status: true,
@@ -284,17 +288,6 @@ export async function POST(
         // See the regression test in scripts/verify-settlement-offeredleaves.ts.
         const leaves = freshTrade?.offeredLeaves ?? 0
 
-        // Provenance only — which offer this settlement came from, for the
-        // ledger's optional offerId. Ordered so it is at least deterministic;
-        // nothing about the amount depends on it, and a miss is not an error.
-        const offer = leaves > 0
-          ? await tx.offer.findFirst({
-              where:   { senderId: trade.senderId, postId: trade.requestedItemId, status: "ACCEPTED" },
-              select:  { id: true },
-              orderBy: { updatedAt: "desc" },
-            })
-          : null
-
         if (leaves > 0) {
           const freshSender = await tx.user.findUnique({
             where:  { id: trade.senderId },
@@ -307,7 +300,7 @@ export async function POST(
         // else. The daily trade quests read it; updatedAt would move on any
         // later write to the row. See the column's note.
         const completedAt = new Date()
-        await tx.tradeRequest.update({ where: { id: tradeId }, data: { status: "COMPLETED", completedAt } })
+        await tx.trade.update({ where: { id: tradeId }, data: { status: "COMPLETED", completedAt } })
         await tx.item.update({ where: { id: trade.offeredItemId },   data: { userId: trade.receiverId, status: "OWNED" } })
         await tx.item.update({ where: { id: trade.requestedItemId }, data: { userId: trade.senderId,   status: "OWNED" } })
         await tx.user.updateMany({
@@ -332,14 +325,14 @@ export async function POST(
             data: {
               userId: trade.senderId, type: "TRADE_SPEND", amount: -leaves,
               description: `Leaves given to ${trade.receiver.name} for trade`,
-              offerId: offer?.id, tradeId, eventAt: settledAt,
+              tradeId, eventAt: settledAt,
             },
           })
           await tx.leafTransaction.create({
             data: {
               userId: trade.receiverId, type: "TRADE_RECEIVE", amount: leaves,
               description: `Leaves received from ${trade.sender.name} for trade`,
-              offerId: offer?.id, tradeId, eventAt: settledAt,
+              tradeId, eventAt: settledAt,
             },
           })
         }
@@ -358,7 +351,7 @@ export async function POST(
          * review), and re-deriving would pay the wrong person because somebody
          * edited a listing. See the column's note.
          *
-         * payBridgeFee() refuses a second payment against the same offer, so a
+         * payBridgeFee() refuses a second payment against the same deal, so a
          * replayed settlement cannot pay twice.
          */
         const fee = freshTrade?.bridgeFeeLeaves ?? 0
@@ -366,23 +359,16 @@ export async function POST(
           const paidBySender = freshTrade!.bridgeFeePaidBySender as boolean
           const feeTo = paidBySender ? trade.receiverId : trade.senderId
           const feeFrom = paidBySender ? trade.sender.name : trade.receiver.name
-          // The offer this trade came from, for the ledger's offerId and for
-          // the once-only guard, which is keyed on it.
-          const feeOffer = await tx.offer.findFirst({
-            where:   { senderId: trade.senderId, postId: trade.requestedItemId, status: "ACCEPTED" },
-            select:  { id: true },
-            orderBy: { updatedAt: "desc" },
+          // The hold, and the once-only guard, are keyed on this deal's id:
+          // since schema v2 the offer and the trade are one row, so there is
+          // no longer an offer to re-find first.
+          await payBridgeFee(tx, {
+            receiverId: feeTo,
+            proposerName: feeFrom ?? "your trading partner",
+            tradeId,
+            amount: fee,
+            at: new Date(),
           })
-          if (feeOffer) {
-            await payBridgeFee(tx, {
-              receiverId: feeTo,
-              proposerName: feeFrom ?? "your trading partner",
-              offerId: feeOffer.id,
-              tradeId,
-              amount: fee,
-              at: new Date(),
-            })
-          }
         }
 
         // Task rewards are awarded here, at the moment settlement completes —
@@ -392,7 +378,7 @@ export async function POST(
         // counterparty is new to the user inside NEW_PARTNER_WINDOW_DAYS.
         // safeZoneHubId is re-read here: the second submitter may have set it
         // in this very request, after `trade` was loaded.
-        const settled = await tx.tradeRequest.findUnique({
+        const settled = await tx.trade.findUnique({
           where:  { id: tradeId },
           select: { safeZoneHubId: true },
         })

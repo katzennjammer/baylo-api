@@ -66,9 +66,9 @@ export type HoldResult =
  */
 export async function holdBridgeFee(
   db: FeeDb,
-  input: { userId: string; offerId: string; amount: number; at?: Date },
+  input: { userId: string; tradeId: string; amount: number; at?: Date },
 ): Promise<HoldResult> {
-  const { userId, offerId, amount } = input
+  const { userId, tradeId, amount } = input
   const at = input.at ?? new Date()
 
   const user = await db.user.findUnique({ where: { id: userId }, select: { leaves: true } })
@@ -90,7 +90,7 @@ export async function holdBridgeFee(
       type: "BRIDGE_FEE_HOLD",
       amount: -amount,
       description: `Bridging fee held (${amount} Leaves)`,
-      offerId,
+      tradeId,
       eventAt: at,
     },
   })
@@ -114,11 +114,11 @@ const RELEASE_COPY: Record<ReleaseReason, string> = {
  */
 export async function releaseBridgeFee(
   db: FeeDb,
-  input: { userId: string; offerId: string; tradeId?: string | null; amount: number; reason: ReleaseReason; at?: Date },
+  input: { userId: string; tradeId: string; amount: number; reason: ReleaseReason; at?: Date },
 ): Promise<boolean> {
-  const { userId, offerId, amount, reason } = input
+  const { userId, tradeId, amount, reason } = input
   if (amount <= 0) return false
-  if (await isClosed(db, offerId)) return false
+  if (await isClosed(db, tradeId)) return false
 
   await db.user.update({ where: { id: userId }, data: { leaves: { increment: amount } } })
   await db.leafTransaction.create({
@@ -127,8 +127,7 @@ export async function releaseBridgeFee(
       type: "BRIDGE_FEE_RELEASE",
       amount,
       description: `Bridging fee returned (${amount} Leaves) — ${RELEASE_COPY[reason]}`,
-      offerId,
-      tradeId: input.tradeId ?? null,
+      tradeId,
       eventAt: input.at ?? new Date(),
     },
   })
@@ -143,11 +142,11 @@ export async function releaseBridgeFee(
  */
 export async function payBridgeFee(
   db: FeeDb,
-  input: { receiverId: string; proposerName: string; offerId: string; tradeId: string; amount: number; at?: Date },
+  input: { receiverId: string; proposerName: string; tradeId: string; amount: number; at?: Date },
 ): Promise<boolean> {
-  const { receiverId, offerId, tradeId, amount } = input
+  const { receiverId, tradeId, amount } = input
   if (amount <= 0) return false
-  if (await isClosed(db, offerId)) return false
+  if (await isClosed(db, tradeId)) return false
 
   await db.user.update({ where: { id: receiverId }, data: { leaves: { increment: amount } } })
   await db.leafTransaction.create({
@@ -156,7 +155,6 @@ export async function payBridgeFee(
       type: "BRIDGE_FEE_PAID",
       amount,
       description: `Bridging fee received from ${input.proposerName} (${amount} Leaves)`,
-      offerId,
       tradeId,
       eventAt: input.at ?? new Date(),
     },
@@ -164,9 +162,9 @@ export async function payBridgeFee(
   return true
 }
 
-async function isClosed(db: FeeDb, offerId: string): Promise<boolean> {
+async function isClosed(db: FeeDb, tradeId: string): Promise<boolean> {
   const closing = await db.leafTransaction.findFirst({
-    where: { offerId, type: { in: [...CLOSING_TYPES] } },
+    where: { tradeId, type: { in: [...CLOSING_TYPES] } },
     select: { id: true },
   })
   return closing !== null
@@ -194,7 +192,7 @@ export const LIVE_TRADE_STATUSES = ["PENDING", "ACCEPTED", "CONFIRMING"] as cons
  * something bigger than their listing.
  */
 export const HELD_ON_OFFER_WHERE = {
-  status: "PENDING",
+  offerStatus: "PENDING",
   bridgeFeeLeaves: { not: null },
   // The proposer-pays direction, spelled as a column comparison rather than a
   // stored flag: both brackets are on the row, and a derived condition cannot
@@ -211,16 +209,16 @@ export const HELD_ON_OFFER_WHERE = {
  * checks -- see scripts/lib/ledger-invariant.ts.
  */
 export async function heldBridgeFees(
-  db: Pick<PrismaClient, "offer" | "tradeRequest">,
+  db: Pick<PrismaClient, "trade">,
   userId: string,
 ): Promise<number> {
   const [offers, tradesAsSender, tradesAsReceiver] = await Promise.all([
     // Offers this user SENT that are still pending and that they pay for.
-    db.offer.findMany({
+    db.trade.findMany({
       where: { senderId: userId, ...HELD_ON_OFFER_WHERE },
       select: { bridgeFeeLeaves: true, offeredBracket: true, targetBracket: true },
     }),
-    db.tradeRequest.aggregate({
+    db.trade.aggregate({
       where: {
         senderId: userId,
         status: { in: [...LIVE_TRADE_STATUSES] },
@@ -228,7 +226,7 @@ export async function heldBridgeFees(
       },
       _sum: { bridgeFeeLeaves: true },
     }),
-    db.tradeRequest.aggregate({
+    db.trade.aggregate({
       where: {
         receiverId: userId,
         status: { in: [...LIVE_TRADE_STATUSES] },

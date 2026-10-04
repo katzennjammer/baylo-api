@@ -136,8 +136,9 @@ async function main() {
       status: "IN_TRADE",
     },
   })
-  await prisma.tradeRequest.create({
+  await prisma.trade.create({
     data: {
+      tradeCreatedAt: new Date(), // trade phase from the start (schema v2 CHECK)
       id: ids.trade,
       senderId: ids.debtor,
       receiverId: ids.creditor,
@@ -261,7 +262,7 @@ async function cleanup() {
     where: { userId: { in: [ids.debtor, ids.creditor, ids.stranger] } },
   })
   await prisma.swapCode.deleteMany({ where: { tradeId: ids.trade } })
-  await prisma.tradeRequest.deleteMany({ where: { id: ids.trade } })
+  await prisma.trade.deleteMany({ where: { id: ids.trade } })
   await prisma.item.deleteMany({ where: { id: { in: [ids.itemA, ids.itemB] } } })
   await prisma.user.deleteMany({ where: { id: { in: [ids.debtor, ids.creditor, ids.stranger] } } })
 }

@@ -202,7 +202,7 @@ export async function enforceNotBlocked(
  */
 export async function blockConsequences(viewerId: string, otherId: string) {
   const [trades] = await Promise.all([
-    prisma.tradeRequest.findMany({
+    prisma.trade.findMany({
       where: {
         status: { in: ["PENDING", "ACCEPTED", "CONFIRMING"] },
         OR: [
@@ -224,7 +224,7 @@ export async function blockConsequences(viewerId: string, otherId: string) {
       id: t.id,
       status: t.status,
       // Named so the warning can be specific: "your trade for X is unaffected".
-      offeredItem: t.offeredItem.title,
+      offeredItem: t.offeredItem!.title,
       requestedItem: t.requestedItem.title,
     })),
     // Deferred Points Agreements were retired 16 Sep 2026 and their table was

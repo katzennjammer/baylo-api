@@ -114,7 +114,8 @@ async function apply() {
 async function remove() {
   const rows = await prisma.item.findMany({
     where: { id: { startsWith: PREFIX } },
-    select: { id: true, _count: { select: { offers: true, offeredIn: true, requestedIn: true } } },
+    // Every deal row naming it, either side, offer or trade phase (schema v2).
+    select: { id: true, _count: { select: { tradesOffered: true, tradesRequested: true } } },
   })
   if (rows.length === 0) {
     console.log("  nothing to remove")
@@ -125,7 +126,7 @@ async function remove() {
   // the listing is REMOVED (hidden, the same path a user's own delete takes)
   // rather than deleted. A listing nobody touched is deleted outright.
   for (const r of rows) {
-    const touched = r._count.offers + r._count.offeredIn + r._count.requestedIn
+    const touched = r._count.tradesOffered + r._count.tradesRequested
     if (touched > 0) {
       await prisma.item.update({ where: { id: r.id }, data: { status: "REMOVED" as never } })
       console.log(`  ${r.id.padEnd(18)} marked REMOVED (${touched} offer/trade rows reference it)`)

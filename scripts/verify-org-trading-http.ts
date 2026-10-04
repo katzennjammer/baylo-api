@@ -176,7 +176,7 @@ async function main() {
     })
     check("bob can offer on the org's listing", toOrg.status === 201, brief(toOrg))
     const toOrgRow = toOrg.status === 201
-      ? await prisma.offer.findUnique({ where: { id: String(toOrg.body.offerId) }, select: { receiverId: true } })
+      ? await prisma.trade.findUnique({ where: { id: String(toOrg.body.offerId) }, select: { receiverId: true } })
       : null
     check("the offer's receiver is the org's backing row", toOrgRow?.receiverId === org.orgUserId,
       `receiver ${toOrgRow?.receiverId}`)
@@ -190,7 +190,7 @@ async function main() {
       check("staff with X-Baylo-Org can accept an offer on the org's listing",
         accAsOrg.status === 200, brief(accAsOrg))
       const tr = accAsOrg.status === 200
-        ? await prisma.tradeRequest.findUnique({ where: { id: String(accAsOrg.body.tradeId) }, select: { receiverId: true } })
+        ? await prisma.trade.findUnique({ where: { id: String(accAsOrg.body.tradeId) }, select: { receiverId: true } })
         : null
       check("the trade's receiver is the org's backing row", tr?.receiverId === org.orgUserId, `receiver ${tr?.receiverId}`)
     }
@@ -203,7 +203,7 @@ async function main() {
     })
     check("[KNOWN FAIL, deferred F] staff with X-Baylo-Org can offer an org item", fromOrg.status === 201, brief(fromOrg))
     if (fromOrg.status === 201) {
-      const row = await prisma.offer.findUnique({
+      const row = await prisma.trade.findUnique({
         where: { id: String(fromOrg.body.offerId) }, select: { senderId: true },
       })
       check("[KNOWN FAIL, deferred F] and the offer is sent BY the org, not the staff member", row?.senderId === org.orgUserId,
@@ -228,10 +228,11 @@ async function main() {
     // An offer that got in before the membership existed: written directly,
     // the way it would have been sent before the staff member joined.
     const staffThing = await item(staff.id, "staff old thing")
-    const early = await prisma.offer.create({
+    // A deal row in its offer phase (schema v2).
+    const early = await prisma.trade.create({
       data: {
-        postId: orgItem3.id, senderId: staff.id, receiverId: org.orgUserId,
-        offeredItems: JSON.stringify([{ id: staffThing.id }]), status: "PENDING",
+        requestedItemId: orgItem3.id, senderId: staff.id, receiverId: org.orgUserId,
+        offeredItemId: staffThing.id, offerStatus: "PENDING",
         offeredBracket: 1, targetBracket: 1,
       },
       select: { id: true },
@@ -241,8 +242,8 @@ async function main() {
     })
     check("the shop cannot ACCEPT an offer from its own member",
       selfAccept.status === 403 && selfAccept.body.code === "SHOP_MEMBER_SELF_TRADE", brief(selfAccept))
-    const earlyAfter = await prisma.offer.findUniqueOrThrow({ where: { id: early.id }, select: { status: true } })
-    check("and the offer is still PENDING", earlyAfter.status === "PENDING", earlyAfter.status)
+    const earlyAfter = await prisma.trade.findUniqueOrThrow({ where: { id: early.id }, select: { offerStatus: true } })
+    check("and the offer is still PENDING", earlyAfter.offerStatus === "PENDING", String(earlyAfter.offerStatus))
     const selfDecline = await call(`/api/offers/${early.id}`, {
       token: ownerToken, orgId: org.organizationId, method: "PATCH", body: { action: "decline" },
     })
@@ -279,8 +280,8 @@ async function main() {
       })
       check("staff WITHOUT the header are not the receiver (403 Forbidden)",
         noHeader.status === 403 && noHeader.body.code === undefined, brief(noHeader))
-      const still = await prisma.offer.findUniqueOrThrow({ where: { id: String(toOrg2.body.offerId) }, select: { status: true } })
-      check("and the offer is untouched (PENDING)", still.status === "PENDING", still.status)
+      const still = await prisma.trade.findUniqueOrThrow({ where: { id: String(toOrg2.body.offerId) }, select: { offerStatus: true } })
+      check("and the offer is untouched (PENDING)", still.offerStatus === "PENDING", String(still.offerStatus))
     }
     const removedList = await call("/api/v1/trades?tab=active", { token: leaverToken, orgId: org.organizationId })
     check("the removed member's Trades list as the shop is refused ORG_CONTEXT_REFUSED",
@@ -315,8 +316,7 @@ async function main() {
     check("the org's backing row got NO quest assignments", orgRows === 0, `${orgRows} rows`)
   } finally {
     const ids = created.users
-    await prisma.tradeRequest.deleteMany({ where: { OR: [{ senderId: { in: ids } }, { receiverId: { in: ids } }] } })
-    await prisma.offer.deleteMany({ where: { OR: [{ senderId: { in: ids } }, { receiverId: { in: ids } }] } })
+    await prisma.trade.deleteMany({ where: { OR: [{ senderId: { in: ids } }, { receiverId: { in: ids } }] } })
     await prisma.message.deleteMany({ where: { OR: [{ senderId: { in: ids } }, { receiverId: { in: ids } }] } })
     // Match notifications land on OTHER people's accounts -- anyone whose
     // listing wants what this posted -- so deleting by our own user ids misses

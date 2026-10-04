@@ -564,9 +564,9 @@ async function seedTrades() {
       hiddenBySender: false,
       hiddenByReceiver: false,
     }
-    await prisma.tradeRequest.upsert({
+    await prisma.trade.upsert({
       where: { id: t.id },
-      create: { id: t.id, createdAt: t.settledAt, ...shared },
+      create: { id: t.id, createdAt: t.settledAt, tradeCreatedAt: t.settledAt, ...shared },
       update: shared,
     })
   }
@@ -574,16 +574,18 @@ async function seedTrades() {
 
 async function seedOffer() {
   const o = PENDING_OFFER
+  // A deal in its offer phase (schema v2: one Trade row per deal, `status`
+  // NULL until it is accepted into a trade).
   const shared = {
-    postId: o.postId,
+    requestedItemId: o.postId,
     senderId: o.senderId,
     receiverId: o.receiverId,
-    offeredItems: JSON.stringify(o.offeredItems),
+    offeredItemId: o.offeredItems[0].id,
     offeredLeaves: o.offeredLeaves,
     message: o.message,
-    status: "PENDING" as never,
+    offerStatus: "PENDING" as never,
   }
-  await prisma.offer.upsert({
+  await prisma.trade.upsert({
     where: { id: o.id },
     create: { id: o.id, createdAt: o.createdAt, ...shared },
     update: shared,

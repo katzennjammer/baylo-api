@@ -151,7 +151,7 @@ export async function GET(
   // side rather than read from User.totalTrades, which the types note says
   // has drifted above the real count on live rows.
   const orgCompletedTrades = user.organization
-    ? await prisma.tradeRequest.count({
+    ? await prisma.trade.count({
         where: { status: "COMPLETED", OR: [{ senderId: id }, { receiverId: id }] },
       })
     : null

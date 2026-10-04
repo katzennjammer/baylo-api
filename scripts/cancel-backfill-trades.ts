@@ -52,7 +52,7 @@ async function main() {
   const ledgerBefore = await prisma.leafTransaction.count()
 
   for (const tradeId of TRADE_IDS) {
-    const trade = await prisma.tradeRequest.findUnique({
+    const trade = await prisma.trade.findUnique({
       where: { id: tradeId },
       select: {
         id: true, status: true, offeredLeaves: true, senderId: true, receiverId: true,
@@ -65,14 +65,15 @@ async function main() {
     if (trade.status !== "ACCEPTED") { console.log(`${tradeId}: already ${trade.status}, skipped`); continue }
 
     await prisma.$transaction(async (tx) => {
-      const moved = await tx.tradeRequest.updateMany({
+      const moved = await tx.trade.updateMany({
         where: { id: tradeId, status: "ACCEPTED" },
         data: { status: "CANCELLED" },
       })
       if (moved.count !== 1) throw new Error(`${tradeId}: status moved under us`)
 
       const freed = await tx.item.updateMany({
-        where: { id: { in: [trade.offeredItemId, trade.requestedItemId] }, status: "IN_TRADE" },
+        // offeredItemId is set on every trade (schema v2 CHECK).
+        where: { id: { in: [trade.offeredItemId as string, trade.requestedItemId] }, status: "IN_TRADE" },
         data: { status: "AVAILABLE" },
       })
 

@@ -96,8 +96,9 @@ export async function GET(
   if (!session?.user?.id) return unauthenticated()
   const { id } = await params
 
-  const trade = await prisma.tradeRequest.findUnique({ where: { id }, select: TRADE_SELECT })
-  if (!trade) return notFound("Trade not found")
+  const trade = await prisma.trade.findUnique({ where: { id }, select: TRADE_SELECT })
+  // A deal still in its offer phase is not a trade yet (schema v2).
+  if (!trade || trade.status === null) return notFound("Trade not found")
   // Either side: the person, or the shop they are acting as. See
   // @/lib/trade-participant.
   const who = await resolveTradeParticipant(session.user.id, req.headers, trade)
@@ -125,8 +126,9 @@ export async function GET(
    * `theirs` to say which places would become shared the moment they were added.
    */
   const viewerIsSender = trade.senderId === viewerId
-  const yourItemId = viewerIsSender ? trade.offeredItemId : trade.requestedItemId
-  const theirItemId = viewerIsSender ? trade.requestedItemId : trade.offeredItemId
+  // offeredItemId is set on every trade (a schema v2 CHECK); `as string` for the type.
+  const yourItemId = viewerIsSender ? (trade.offeredItemId as string) : trade.requestedItemId
+  const theirItemId = viewerIsSender ? trade.requestedItemId : (trade.offeredItemId as string)
 
   const [hubs, named] = await Promise.all([
     allHubs(prisma),
@@ -161,8 +163,9 @@ export async function POST(
   if (!parsed.ok) return parsed.response
   const { hubId, note } = parsed.data
 
-  const trade = await prisma.tradeRequest.findUnique({ where: { id }, select: TRADE_SELECT })
-  if (!trade) return notFound("Trade not found")
+  const trade = await prisma.trade.findUnique({ where: { id }, select: TRADE_SELECT })
+  // A deal still in its offer phase is not a trade yet (schema v2).
+  if (!trade || trade.status === null) return notFound("Trade not found")
   // Either side: the person, or the shop they are acting as. See
   // @/lib/trade-participant.
   const who = await resolveTradeParticipant(session.user.id, req.headers, trade)
@@ -209,7 +212,7 @@ export async function POST(
 
   const viewerIsSender = trade.senderId === viewerId
 
-  const updated = await prisma.tradeRequest.update({
+  const updated = await prisma.trade.update({
     where: { id },
     data: {
       meetupHubId: hubId,

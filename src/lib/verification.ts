@@ -3,7 +3,7 @@ import { SIGNUP_GRANT_LEAVES } from "@/lib/task-constants"
 import { awardTask } from "@/lib/tasks"
 import type { PrismaClient } from "@/generated/prisma/client"
 
-type TaskDb = Pick<PrismaClient, "user" | "leafTransaction" | "tradeRequest">
+type TaskDb = Pick<PrismaClient, "user" | "leafTransaction" | "trade">
 
 /**
  * The one place an account becomes verified.

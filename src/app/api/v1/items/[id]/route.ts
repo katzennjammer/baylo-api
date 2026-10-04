@@ -199,8 +199,8 @@ export async function GET(
     preciseAccessItemIds(viewerId, [item.id]),
     isOwner
       ? Promise.resolve(null)
-      : prisma.offer.findFirst({
-          where: { postId: item.id, senderId: viewerId, status: "PENDING" },
+      : prisma.trade.findFirst({
+          where: { requestedItemId: item.id, senderId: viewerId, offerStatus: "PENDING" },
           select: { id: true },
           orderBy: { createdAt: "desc" },
         }),

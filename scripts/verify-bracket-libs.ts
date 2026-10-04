@@ -57,6 +57,7 @@ import { assessOffer } from "../src/lib/offer-check"
 import { releaseTradeFee } from "../src/lib/trade-fee-release"
 import { decideItemValue } from "../src/lib/valuation-server"
 import { ledgerInvariant } from "./lib/ledger-invariant"
+import { createTradeRow } from "./lib/deal-rows"
 
 const P = "ZZBRKLIB_"
 let pass = 0
@@ -116,8 +117,8 @@ async function cleanup() {
   const users = await prisma.user.findMany({ where: { email: { startsWith: P } }, select: { id: true } })
   const ids = users.map((u) => u.id)
   if (ids.length === 0) return
-  await prisma.tradeRequest.deleteMany({ where: { OR: [{ senderId: { in: ids } }, { receiverId: { in: ids } }] } })
-  await prisma.offer.deleteMany({ where: { OR: [{ senderId: { in: ids } }, { receiverId: { in: ids } }] } })
+  // Offers and trades are one Trade row per deal (schema v2).
+  await prisma.trade.deleteMany({ where: { OR: [{ senderId: { in: ids } }, { receiverId: { in: ids } }] } })
   await prisma.item.deleteMany({ where: { userId: { in: ids } } })
   // LeafTransaction cascades from User. The fixture accounts' rows net to
   // exactly their balances, so removing both sides together keeps the global
@@ -251,17 +252,18 @@ async function main() {
 
   // ═══ 4  the fee ═══
   head("4  hold → release, hold → pay, short balance")
-  const offer1 = await prisma.offer.create({
+  // An offer: a deal row in its offer phase (schema v2), `status` NULL.
+  const offer1 = await prisma.trade.create({
     data: {
-      postId: b3.id, senderId: a.id, receiverId: b.id, status: "PENDING",
-      offeredItems: JSON.stringify([{ id: a2.id, title: a2.title }]),
+      requestedItemId: b3.id, senderId: a.id, receiverId: b.id, offerStatus: "PENDING",
+      offeredItemId: a2.id,
       bridgeFeeLeaves: 20, offeredBracket: 2, targetBracket: 3, consentAt: new Date(), policyVersion: "test",
     },
   })
-  const hold1 = await prisma.$transaction((tx) => holdBridgeFee(tx, { userId: a.id, offerId: offer1.id, amount: 20 }))
+  const hold1 = await prisma.$transaction((tx) => holdBridgeFee(tx, { userId: a.id, tradeId: offer1.id, amount: 20 }))
   check("hold takes 20 off the proposer", hold1.ok && (await balance(a.id)).leaves === 80)
   {
-    const r = await rows({ offerId: offer1.id })
+    const r = await rows({ tradeId: offer1.id })
     check("…and writes one BRIDGE_FEE_HOLD row for -20", r.length === 1 && r[0].type === "BRIDGE_FEE_HOLD" && r[0].amount === -20)
   }
   {
@@ -271,49 +273,50 @@ async function main() {
   }
 
   // short balance
-  const offerShort = await prisma.offer.create({
+  const offerShort = await prisma.trade.create({
     data: {
-      postId: b3.id, senderId: c.id, receiverId: b.id, status: "PENDING",
-      offeredItems: "[]", bridgeFeeLeaves: 20, offeredBracket: 2, targetBracket: 3,
+      requestedItemId: b3.id, senderId: c.id, receiverId: b.id, offerStatus: "PENDING",
+      bridgeFeeLeaves: 20, offeredBracket: 2, targetBracket: 3,
     },
   })
-  const short = await prisma.$transaction((tx) => holdBridgeFee(tx, { userId: c.id, offerId: offerShort.id, amount: 20 }))
+  const short = await prisma.$transaction((tx) => holdBridgeFee(tx, { userId: c.id, tradeId: offerShort.id, amount: 20 }))
   check("a short balance refuses and says how much they have", !short.ok && short.have === 5)
-  check("…balance untouched, no ledger row", (await balance(c.id)).leaves === 5 && (await rows({ offerId: offerShort.id })).length === 0)
-  await prisma.offer.delete({ where: { id: offerShort.id } })
+  check("…balance untouched, no ledger row", (await balance(c.id)).leaves === 5 && (await rows({ tradeId: offerShort.id })).length === 0)
+  await prisma.trade.delete({ where: { id: offerShort.id } })
 
   // release
   const released = await prisma.$transaction(async (tx) => {
-    await tx.offer.update({ where: { id: offer1.id }, data: { status: "DECLINED" } })
-    return releaseBridgeFee(tx, { userId: a.id, offerId: offer1.id, amount: 20, reason: "declined" })
+    await tx.trade.update({ where: { id: offer1.id }, data: { offerStatus: "DECLINED" } })
+    return releaseBridgeFee(tx, { userId: a.id, tradeId: offer1.id, amount: 20, reason: "declined" })
   })
   check("release gives the 20 back", released && (await balance(a.id)).leaves === 100)
   {
-    const r = await rows({ offerId: offer1.id })
+    const r = await rows({ tradeId: offer1.id })
     check("…and writes one BRIDGE_FEE_RELEASE row for +20", r.length === 2 && r[1].type === "BRIDGE_FEE_RELEASE" && r[1].amount === 20)
   }
-  const again = await prisma.$transaction((tx) => releaseBridgeFee(tx, { userId: a.id, offerId: offer1.id, amount: 20, reason: "declined" }))
-  check("a second release is refused, nothing written", again === false && (await rows({ offerId: offer1.id })).length === 2 && (await balance(a.id)).leaves === 100)
+  const again = await prisma.$transaction((tx) => releaseBridgeFee(tx, { userId: a.id, tradeId: offer1.id, amount: 20, reason: "declined" }))
+  check("a second release is refused, nothing written", again === false && (await rows({ tradeId: offer1.id })).length === 2 && (await balance(a.id)).leaves === 100)
   {
     const j = await invariant("after release")
     check("escrow back to where it started", j.escrow === start.escrow && j.held === start.held)
   }
 
   // pay
-  const offer2 = await prisma.offer.create({
+  const offer2 = await prisma.trade.create({
     data: {
-      postId: b3.id, senderId: a.id, receiverId: b.id, status: "PENDING",
-      offeredItems: JSON.stringify([{ id: a2.id, title: a2.title }]),
+      requestedItemId: b3.id, senderId: a.id, receiverId: b.id, offerStatus: "PENDING",
+      offeredItemId: a2.id,
       bridgeFeeLeaves: 20, offeredBracket: 2, targetBracket: 3, consentAt: new Date(), policyVersion: "test",
     },
   })
-  await prisma.$transaction((tx) => holdBridgeFee(tx, { userId: a.id, offerId: offer2.id, amount: 20 }))
-  // accept: the fee moves to the trade row, the offer is ACCEPTED
+  await prisma.$transaction((tx) => holdBridgeFee(tx, { userId: a.id, tradeId: offer2.id, amount: 20 }))
+  // accept: the SAME row enters its trade phase (schema v2), and the fee is
+  // recorded on it with its payer -- what PATCH /api/offers/[id] does.
   const trade = await prisma.$transaction(async (tx) => {
-    await tx.offer.update({ where: { id: offer2.id }, data: { status: "ACCEPTED" } })
-    return tx.tradeRequest.create({
+    return tx.trade.update({
+      where: { id: offer2.id },
       data: {
-        senderId: a.id, receiverId: b.id, offeredItemId: a2.id, requestedItemId: b3.id,
+        offerStatus: "ACCEPTED", tradeCreatedAt: new Date(),
         // BOTH columns. A live trade with a fee and no payer is a bug the
         // accept route cannot produce -- it writes them together -- and the
         // per-user escrow figure cannot attribute one. Checked below.
@@ -321,6 +324,7 @@ async function main() {
       },
     })
   })
+  check("accept keeps ONE row: the trade's id is the offer's id", trade.id === offer2.id)
   {
     const j = await invariant("with the fee on a live trade")
     check("escrow still 20, counted once (on the trade, not the ACCEPTED offer)", j.escrow === start.escrow + 20 && j.held === start.held + 20)
@@ -329,26 +333,26 @@ async function main() {
     // The invariant the two columns exist to keep: a live trade that carries a
     // fee always says who paid it. Without this, the global escrow figure and
     // the per-user one disagree and nobody can be refunded.
-    const orphanFees = await prisma.tradeRequest.count({
+    const orphanFees = await prisma.trade.count({
       where: { status: { in: ["PENDING", "ACCEPTED", "CONFIRMING"] }, bridgeFeeLeaves: { not: null }, bridgeFeePaidBySender: null },
     })
     check("no live trade carries a fee without a payer", orphanFees === 0, `${orphanFees}`)
   }
   const completedAt = new Date()
   const paid = await prisma.$transaction(async (tx) => {
-    await tx.tradeRequest.update({ where: { id: trade.id }, data: { status: "COMPLETED", updatedAt: completedAt } })
-    return payBridgeFee(tx, { receiverId: b.id, proposerName: "A", offerId: offer2.id, tradeId: trade.id, amount: 20, at: completedAt })
+    await tx.trade.update({ where: { id: trade.id }, data: { status: "COMPLETED", updatedAt: completedAt } })
+    return payBridgeFee(tx, { receiverId: b.id, proposerName: "A", tradeId: trade.id, amount: 20, at: completedAt })
   })
   check("pay credits the receiver 20", paid && (await balance(b.id)).leaves === 20)
   check("…the proposer stays at 80", (await balance(a.id)).leaves === 80)
   {
-    const r = await rows({ offerId: offer2.id })
-    check("…and writes one BRIDGE_FEE_PAID row on the receiver, pointing at both", r.length === 2 && r[1].type === "BRIDGE_FEE_PAID" && r[1].amount === 20 && r[1].userId === b.id && r[1].tradeId === trade.id)
+    const r = await rows({ tradeId: offer2.id })
+    check("…and writes one BRIDGE_FEE_PAID row on the receiver, on the same deal id as the HOLD", r.length === 2 && r[1].type === "BRIDGE_FEE_PAID" && r[1].amount === 20 && r[1].userId === b.id && r[1].tradeId === trade.id)
     check("…lifetimeLeaves untouched by a fee", (await balance(b.id)).lifetime === 0)
   }
-  const payAgain = await prisma.$transaction((tx) => payBridgeFee(tx, { receiverId: b.id, proposerName: "A", offerId: offer2.id, tradeId: trade.id, amount: 20 }))
+  const payAgain = await prisma.$transaction((tx) => payBridgeFee(tx, { receiverId: b.id, proposerName: "A", tradeId: trade.id, amount: 20 }))
   check("a second pay is refused", payAgain === false && (await balance(b.id)).leaves === 20)
-  const releaseAfterPay = await prisma.$transaction((tx) => releaseBridgeFee(tx, { userId: a.id, offerId: offer2.id, amount: 20, reason: "cancelled" }))
+  const releaseAfterPay = await prisma.$transaction((tx) => releaseBridgeFee(tx, { userId: a.id, tradeId: offer2.id, amount: 20, reason: "cancelled" }))
   check("a release after a pay is refused", releaseAfterPay === false && (await balance(a.id)).leaves === 80)
   {
     const j = await invariant("after pay")
@@ -360,10 +364,10 @@ async function main() {
   const rcv = await user("rcv", 100)
   const rcvItem = await item(rcv.id, "rcv-b2", 150)   // bracket 2, the listing
   const upItem = await item(a.id, "a-b3-up", 350)     // bracket 3, offered
-  const upOffer = await prisma.offer.create({
+  const upOffer = await prisma.trade.create({
     data: {
-      postId: rcvItem.id, senderId: a.id, receiverId: rcv.id, status: "PENDING",
-      offeredItems: JSON.stringify([{ id: upItem.id, title: upItem.title }]),
+      requestedItemId: rcvItem.id, senderId: a.id, receiverId: rcv.id, offerStatus: "PENDING",
+      offeredItemId: upItem.id,
       // The QUOTE. 10 x the lower bracket (2) = 20, owed by the RECEIVER.
       bridgeFeeLeaves: 20, offeredBracket: 3, targetBracket: 2,
     },
@@ -381,27 +385,27 @@ async function main() {
   // A receiver who cannot cover it.
   const poor = await user("poor", 5)
   const poorItem = await item(poor.id, "poor-b2", 160)
-  const poorOffer = await prisma.offer.create({
+  const poorOffer = await prisma.trade.create({
     data: {
-      postId: poorItem.id, senderId: a.id, receiverId: poor.id, status: "PENDING",
-      offeredItems: JSON.stringify([{ id: upItem.id, title: upItem.title }]),
+      requestedItemId: poorItem.id, senderId: a.id, receiverId: poor.id, offerStatus: "PENDING",
+      offeredItemId: upItem.id,
       bridgeFeeLeaves: 20, offeredBracket: 3, targetBracket: 2,
     },
   })
-  const poorHold = await prisma.$transaction((tx) => holdBridgeFee(tx, { userId: poor.id, offerId: poorOffer.id, amount: 20 }))
+  const poorHold = await prisma.$transaction((tx) => holdBridgeFee(tx, { userId: poor.id, tradeId: poorOffer.id, amount: 20 }))
   check("a receiver who cannot cover the fee is refused, with what they have", !poorHold.ok && poorHold.have === 5)
   check("…nothing written, nothing moved",
-    (await rows({ offerId: poorOffer.id })).length === 0 && (await balance(poor.id)).leaves === 5)
-  await prisma.offer.delete({ where: { id: poorOffer.id } })
+    (await rows({ tradeId: poorOffer.id })).length === 0 && (await balance(poor.id)).leaves === 5)
+  await prisma.trade.delete({ where: { id: poorOffer.id } })
 
   // The accept: the receiver's Leaves move, and the trade records WHO paid.
   const upTrade = await prisma.$transaction(async (tx) => {
-    const held = await holdBridgeFee(tx, { userId: rcv.id, offerId: upOffer.id, amount: 20 })
+    const held = await holdBridgeFee(tx, { userId: rcv.id, tradeId: upOffer.id, amount: 20 })
     if (!held.ok) throw new Error("hold failed")
-    await tx.offer.update({ where: { id: upOffer.id }, data: { status: "ACCEPTED", consentAt: new Date(), policyVersion: "test" } })
-    return tx.tradeRequest.create({
+    return tx.trade.update({
+      where: { id: upOffer.id },
       data: {
-        senderId: a.id, receiverId: rcv.id, offeredItemId: upItem.id, requestedItemId: rcvItem.id,
+        offerStatus: "ACCEPTED", consentAt: new Date(), policyVersion: "test", tradeCreatedAt: new Date(),
         status: "ACCEPTED", bridgeFeeLeaves: 20, bridgeFeePaidBySender: false,
       },
     })
@@ -409,7 +413,7 @@ async function main() {
   check("accepting takes the fee off the RECEIVER", (await balance(rcv.id)).leaves === 80)
   check("…and not off the proposer", (await balance(a.id)).leaves === 80)
   {
-    const r = await rows({ offerId: upOffer.id })
+    const r = await rows({ tradeId: upOffer.id })
     check("one HOLD row, on the receiver", r.length === 1 && r[0].type === "BRIDGE_FEE_HOLD" && r[0].userId === rcv.id && r[0].amount === -20)
     const j = await invariant("with a receiver-paid fee on a live trade")
     check("escrow is 20 and the rows agree", j.escrow === start.escrow + 20 && j.held === start.held + 20)
@@ -420,8 +424,8 @@ async function main() {
   // Completion pays it to the PROPOSER -- the side that gave the higher item.
   const upAt = new Date()
   const upPaid = await prisma.$transaction(async (tx) => {
-    await tx.tradeRequest.update({ where: { id: upTrade.id }, data: { status: "COMPLETED" } })
-    return payBridgeFee(tx, { receiverId: a.id, proposerName: "RCV", offerId: upOffer.id, tradeId: upTrade.id, amount: 20, at: upAt })
+    await tx.trade.update({ where: { id: upTrade.id }, data: { status: "COMPLETED" } })
+    return payBridgeFee(tx, { receiverId: a.id, proposerName: "RCV", tradeId: upTrade.id, amount: 20, at: upAt })
   })
   check("completion pays the fee to the PROPOSER", upPaid && (await balance(a.id)).leaves === 100)
   check("…the receiver stays down 20", (await balance(rcv.id)).leaves === 80)
@@ -433,27 +437,28 @@ async function main() {
   // And the cancel path, on a second up-bridge: the RECEIVER gets it back.
   const rcv2Item = await item(rcv.id, "rcv-b2-second", 170)
   const up2Item = await item(a.id, "a-b3-up2", 360)
-  const up2Offer = await prisma.offer.create({
+  const up2Offer = await prisma.trade.create({
     data: {
-      postId: rcv2Item.id, senderId: a.id, receiverId: rcv.id, status: "ACCEPTED",
-      offeredItems: JSON.stringify([{ id: up2Item.id, title: up2Item.title }]),
-      bridgeFeeLeaves: 20, offeredBracket: 3, targetBracket: 2, consentAt: new Date(), policyVersion: "test",
+      requestedItemId: rcv2Item.id, senderId: a.id, receiverId: rcv.id, offerStatus: "PENDING",
+      offeredItemId: up2Item.id,
+      bridgeFeeLeaves: 20, offeredBracket: 3, targetBracket: 2,
     },
   })
   const up2Trade = await prisma.$transaction(async (tx) => {
-    await holdBridgeFee(tx, { userId: rcv.id, offerId: up2Offer.id, amount: 20 })
-    return tx.tradeRequest.create({
+    await holdBridgeFee(tx, { userId: rcv.id, tradeId: up2Offer.id, amount: 20 })
+    return tx.trade.update({
+      where: { id: up2Offer.id },
       data: {
-        senderId: a.id, receiverId: rcv.id, offeredItemId: up2Item.id, requestedItemId: rcv2Item.id,
-        status: "ACCEPTED", bridgeFeeLeaves: 20, bridgeFeePaidBySender: false,
+        offerStatus: "ACCEPTED", consentAt: new Date(), policyVersion: "test", tradeCreatedAt: new Date(),
+        status: "ACCEPTED", bridgeFeePaidBySender: false,
       },
     })
   })
   check("the second up-bridge holds 20 from the receiver", (await balance(rcv.id)).leaves === 60)
   const cancelled = await prisma.$transaction(async (tx) => {
-    await tx.tradeRequest.update({ where: { id: up2Trade.id }, data: { status: "CANCELLED" } })
+    await tx.trade.update({ where: { id: up2Trade.id }, data: { status: "CANCELLED" } })
     return releaseTradeFee(tx, {
-      id: up2Trade.id, senderId: a.id, receiverId: rcv.id, requestedItemId: rcv2Item.id,
+      id: up2Trade.id, senderId: a.id, receiverId: rcv.id,
       bridgeFeeLeaves: 20, bridgeFeePaidBySender: false,
     }, "cancelled")
   })
@@ -490,23 +495,23 @@ async function main() {
   check("a replay pays nothing (already_awarded)", replay.sender.reason === "already_awarded" && replay.receiver.reason === "already_awarded" && (await balance(a.id)).leaves === before.a.leaves + 4)
 
   // placeholder + unvalued
-  const ph = await prisma.tradeRequest.create({ data: { senderId: a.id, receiverId: b.id, offeredItemId: b3.id, requestedItemId: b3.id, status: "COMPLETED" } })
+  const ph = await createTradeRow(prisma, { senderId: a.id, receiverId: b.id, offeredItemId: b3.id, requestedItemId: b3.id, status: "COMPLETED" })
   const phOut = await prisma.$transaction((tx) => awardTradeRewards(tx, { ...ph, completedAt: new Date() }))
   check("a placeholder trade (same item both sides) pays nothing", phOut.sender.reason === "placeholder" && phOut.receiver.reason === "placeholder")
-  const unv = await prisma.tradeRequest.create({ data: { senderId: a.id, receiverId: b.id, offeredItemId: aNull.id, requestedItemId: bNull.id, status: "COMPLETED" } })
+  const unv = await createTradeRow(prisma, { senderId: a.id, receiverId: b.id, offeredItemId: aNull.id, requestedItemId: bNull.id, status: "COMPLETED" })
   const unvOut = await prisma.$transaction((tx) => awardTradeRewards(tx, { ...unv, completedAt: new Date(Date.now() + 60_000) }))
   check("an unvalued given item pays nothing", unvOut.sender.reason === "unvalued" && unvOut.receiver.reason === "unvalued")
-  await prisma.tradeRequest.deleteMany({ where: { id: { in: [ph.id, unv.id] } } })
+  await prisma.trade.deleteMany({ where: { id: { in: [ph.id, unv.id] } } })
 
   // repeat pair: a second A↔B trade a day later, with fresh items
   const a3b = await item(a.id, "a-b3-second", 320)
   const b3b = await item(b.id, "b-b3-second", 420)
   const dayLater = new Date(completedAt.getTime() + 86_400_000)
-  const pair = await prisma.tradeRequest.create({ data: { senderId: b.id, receiverId: a.id, offeredItemId: b3b.id, requestedItemId: a3b.id, status: "COMPLETED", updatedAt: dayLater } })
+  const pair = await createTradeRow(prisma, { senderId: b.id, receiverId: a.id, offeredItemId: b3b.id, requestedItemId: a3b.id, status: "COMPLETED", updatedAt: dayLater })
   const pairOut = await prisma.$transaction((tx) => awardTradeRewards(tx, { ...pair, completedAt: dayLater }))
   check("the same pair a day later → repeat_pair, both sides", pairOut.sender.reason === "repeat_pair" && pairOut.receiver.reason === "repeat_pair")
   const eightDays = new Date(completedAt.getTime() + 8 * 86_400_000)
-  await prisma.tradeRequest.update({ where: { id: pair.id }, data: { updatedAt: eightDays } })
+  await prisma.trade.update({ where: { id: pair.id }, data: { updatedAt: eightDays } })
   // The first trade's row sits at completedAt; eight days on, it is outside the 7-day window.
   const pairLater = await prisma.$transaction((tx) => awardTradeRewards(tx, { ...pair, completedAt: eightDays }))
   check("…but eight days later the pair is fresh again", pairLater.sender.reason === "awarded" && pairLater.receiver.reason === "awarded")
@@ -514,11 +519,11 @@ async function main() {
   // same item: A gives a2 (already traded at completedAt) to C, 10 days on. Pair A–C is fresh.
   const c1 = await item(c.id, "c-b2", 180)
   const tenDays = new Date(completedAt.getTime() + 10 * 86_400_000)
-  const ring = await prisma.tradeRequest.create({ data: { senderId: a.id, receiverId: c.id, offeredItemId: a2.id, requestedItemId: c1.id, status: "COMPLETED", updatedAt: tenDays } })
+  const ring = await createTradeRow(prisma, { senderId: a.id, receiverId: c.id, offeredItemId: a2.id, requestedItemId: c1.id, status: "COMPLETED", updatedAt: tenDays })
   const ringOut = await prisma.$transaction((tx) => awardTradeRewards(tx, { ...ring, completedAt: tenDays }))
   check("the same item ten days on → same_item for the giver only", ringOut.sender.reason === "same_item" && ringOut.receiver.reason === "awarded" && ringOut.receiver.amount === 4)
   const fortyDays = new Date(completedAt.getTime() + 40 * 86_400_000)
-  const ring2 = await prisma.tradeRequest.create({ data: { senderId: a.id, receiverId: c.id, offeredItemId: a3.id, requestedItemId: c1.id, status: "COMPLETED", updatedAt: fortyDays } })
+  const ring2 = await createTradeRow(prisma, { senderId: a.id, receiverId: c.id, offeredItemId: a3.id, requestedItemId: c1.id, status: "COMPLETED", updatedAt: fortyDays })
   // c1 was in `ring` at tenDays, 30 days before fortyDays: exactly at the edge, inside.
   const ring2Out = await prisma.$transaction((tx) => awardTradeRewards(tx, { ...ring2, completedAt: fortyDays }))
   check("the receiver's item from 30 days ago is still inside the item window", ring2Out.receiver.reason === "same_item")
@@ -534,11 +539,11 @@ async function main() {
     prisma.leafTransaction.create({ data: { userId: d.id, type: "TRADE_REWARD", amount: 20, description: `${P} cap fixture`, tradeId: "zzfixture2", eventAt: new Date(now.getTime() - 7200_000) } }),
     prisma.user.update({ where: { id: d.id }, data: { leaves: { increment: 40 }, lifetimeLeaves: { increment: 40 } } }),
   ])
-  const capTrade = await prisma.tradeRequest.create({ data: { senderId: d.id, receiverId: e.id, offeredItemId: d1.id, requestedItemId: e1.id, status: "COMPLETED", updatedAt: now } })
+  const capTrade = await createTradeRow(prisma, { senderId: d.id, receiverId: e.id, offeredItemId: d1.id, requestedItemId: e1.id, status: "COMPLETED", updatedAt: now })
   const capOut = await prisma.$transaction((tx) => awardTradeRewards(tx, { ...capTrade, completedAt: now }))
   check(`D at the ${TRADE_REWARD_DAILY_CAP_LEAVES}-Leaf daily cap → daily_cap; E still paid`, capOut.sender.reason === "daily_cap" && capOut.receiver.reason === "awarded")
   const tomorrow = new Date(now.getTime() + 25 * 3600_000)
-  const capTrade2 = await prisma.tradeRequest.create({ data: { senderId: e.id, receiverId: d.id, offeredItemId: e1.id, requestedItemId: d1.id, status: "COMPLETED", updatedAt: tomorrow } })
+  const capTrade2 = await createTradeRow(prisma, { senderId: e.id, receiverId: d.id, offeredItemId: e1.id, requestedItemId: d1.id, status: "COMPLETED", updatedAt: tomorrow })
   void capTrade2
   await invariant("after the gates")
 
@@ -561,7 +566,7 @@ async function main() {
   const f1 = await item(f.id, "f-b1", 40)
   const g1 = await item(g.id, "g-b1", 45)
   const fgAt = new Date(now.getTime() + 48 * 3600_000)
-  const fg = await prisma.tradeRequest.create({ data: { senderId: f.id, receiverId: g.id, offeredItemId: f1.id, requestedItemId: g1.id, status: "COMPLETED", updatedAt: fgAt } })
+  const fg = await createTradeRow(prisma, { senderId: f.id, receiverId: g.id, offeredItemId: f1.id, requestedItemId: g1.id, status: "COMPLETED", updatedAt: fgAt })
   await prisma.$transaction((tx) => awardTradeRewards(tx, { ...fg, completedAt: fgAt }))
   // F spends the 2 Leaves on a (legacy-shaped) settlement pair to G.
   await prisma.$transaction([

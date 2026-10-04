@@ -82,7 +82,7 @@ export default async function ReviewQueuePage() {
         COUNT(*)            AS "zeroSwaps",
         MAX(tc."createdAt") AS "lastAt"
       FROM "LeafTransaction" tc
-      JOIN "TradeRequest" tr ON tr."id" = tc."taskRefId"
+      JOIN "Trade" tr ON tr."id" = tc."taskRefId"
       WHERE tc."task" IN ('SAFEZONE_MEETUP', 'VERIFIED_SWAP')
         AND tc."amount" = 0
       GROUP BY tc."userId", "partnerId"

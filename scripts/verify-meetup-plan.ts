@@ -58,7 +58,7 @@ async function cleanup() {
   if (ids.length) {
     // Order matters: BOTH FKs onto SafeZoneHub are RESTRICT — the claim and now
     // the plan — so trades and associations go before the hubs can.
-    await prisma.tradeRequest.deleteMany({
+    await prisma.trade.deleteMany({
       where: { OR: [{ senderId: { in: ids } }, { receiverId: { in: ids } }] },
     })
     await prisma.itemSafeZone.deleteMany({ where: { item: { userId: { in: ids } } } })
@@ -124,8 +124,9 @@ async function main() {
     ],
   })
 
-  const trade = await prisma.tradeRequest.create({
+  const trade = await prisma.trade.create({
     data: {
+      tradeCreatedAt: new Date(), // trade phase from the start (schema v2 CHECK)
       status: "ACCEPTED",
       senderId: a.id,
       receiverId: b.id,
@@ -198,7 +199,7 @@ async function main() {
   // ── 5 ──
   head("5  a proposal is unanswered")
   const at = soon(3)
-  const proposed = await prisma.tradeRequest.update({
+  const proposed = await prisma.trade.update({
     where: { id: trade.id },
     data: {
       meetupHubId: both.id,
@@ -224,7 +225,7 @@ async function main() {
   check("the other side can", mayAgree(true, false))
   check("and it holds the other way round too", !mayAgree(false, false) && mayAgree(false, true))
 
-  const agreed = await prisma.tradeRequest.update({
+  const agreed = await prisma.trade.update({
     where: { id: trade.id },
     data: { meetupAgreedAt: new Date() },
     select: { meetupAgreedAt: true },
@@ -233,7 +234,7 @@ async function main() {
 
   // ── 6 ──
   head("6  a counter replaces the plan and clears the agreement")
-  const countered = await prisma.tradeRequest.update({
+  const countered = await prisma.trade.update({
     where: { id: trade.id },
     data: {
       meetupHubId: closed.id,
@@ -250,7 +251,7 @@ async function main() {
 
   // ── 7 ── THE ONE THAT MATTERS
   head("7  NO plan write ever touched safeZoneHubId")
-  const after = await prisma.tradeRequest.findUnique({
+  const after = await prisma.trade.findUnique({
     where: { id: trade.id },
     select: { safeZoneHubId: true, meetupHubId: true },
   })
@@ -273,7 +274,7 @@ async function main() {
   })
   check("a half-written plan reports as no plan", half === null)
 
-  const cleared = await prisma.tradeRequest.update({
+  const cleared = await prisma.trade.update({
     where: { id: trade.id },
     data: { ...NO_MEETUP_PLAN },
     select: { meetupHubId: true, meetupAt: true, meetupProposedBySender: true },

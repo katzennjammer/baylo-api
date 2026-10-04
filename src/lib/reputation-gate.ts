@@ -82,7 +82,7 @@ export async function loadStanding(userId: string): Promise<TraderStanding> {
         isOrgAccount: true, organization: { select: { verificationStatus: true } },
       },
     }),
-    prisma.tradeRequest.count({
+    prisma.trade.count({
       where: { status: "COMPLETED", OR: [{ senderId: userId }, { receiverId: userId }] },
     }),
   ])

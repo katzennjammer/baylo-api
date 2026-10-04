@@ -1,6 +1,7 @@
 import { auth } from "@/../auth"
 import { redirect } from "next/navigation"
 import prisma from "@/lib/prisma"
+import { asTrades } from "@/lib/trade-row"
 import DashShell from "../_shell/DashShell"
 import {
   computeGreenScore,
@@ -75,7 +76,7 @@ export default async function ImpactPage() {
   if (!user) redirect("/auth/login")
 
   // Fetch all completed trades with category data
-  const tradesRaw = await prisma.tradeRequest.findMany({
+  const tradesRaw = await prisma.trade.findMany({
     where: {
       OR: [{ senderId: user.id }, { receiverId: user.id }],
       status: "COMPLETED",
@@ -85,7 +86,7 @@ export default async function ImpactPage() {
       offeredItem:   { select: { category: true } },
       requestedItem: { select: { category: true } },
     },
-  })
+  }).then(asTrades)
 
   const impact = computeImpactData(user.id, tradesRaw)
   const treesEquiv = Math.floor(impact.co2Avoided / KG_CO2_PER_TREE)

@@ -189,8 +189,8 @@ async function main() {
     check(`${label}: staff, as the shop, submit the person's code and complete it`,
       s2.status === 200 && s2.body.completed === true, brief(s2))
     check(`${label}: the shop's completed screen reports no reward`, s2.body.reward === 0, String(s2.body.reward))
-    const t = await prisma.tradeRequest.findUniqueOrThrow({ where: { id: tradeId }, select: { status: true } })
-    check(`${label}: trade COMPLETED`, t.status === "COMPLETED", t.status)
+    const t = await prisma.trade.findUniqueOrThrow({ where: { id: tradeId }, select: { status: true } })
+    check(`${label}: trade COMPLETED`, t.status === "COMPLETED", String(t.status))
     return { person: s1, shop: s2 }
   }
 
@@ -239,7 +239,7 @@ async function main() {
     })
     check("1: staff, acting as the shop, accept", a1.status === 200 && typeof a1.body.tradeId === "string", brief(a1))
     const trade1 = String(a1.body.tradeId)
-    const t1 = await prisma.tradeRequest.findUniqueOrThrow({ where: { id: trade1 }, select: { senderId: true, receiverId: true } })
+    const t1 = await prisma.trade.findUniqueOrThrow({ where: { id: trade1 }, select: { senderId: true, receiverId: true } })
     check("1: the trade's receiver is the shop's backing row", t1.receiverId === verified.orgUserId && t1.senderId === p1.id)
     const notif = await prisma.notification.findFirst({ where: { userId: p1.id, type: "TRADE_ACCEPTED" }, select: { actorId: true } })
     check("1: the person's notification is from the SHOP, not the staff member", notif?.actorId === verified.orgUserId, String(notif?.actorId))
@@ -308,8 +308,8 @@ async function main() {
     })
     check("2b: INSUFFICIENT_LEAVES, need vs the SHOP's have (0)",
       short.status === 400 && short.body.code === "INSUFFICIENT_LEAVES" && short.body.have === 0, brief(short))
-    const o2Row = await prisma.offer.findUniqueOrThrow({ where: { id: String(o2.body.offerId) }, select: { status: true } })
-    check("2b: the offer is still PENDING", o2Row.status === "PENDING", o2Row.status)
+    const o2Row = await prisma.trade.findUniqueOrThrow({ where: { id: String(o2.body.offerId) }, select: { offerStatus: true } })
+    check("2b: the offer is still PENDING", o2Row.offerStatus === "PENDING", String(o2Row.offerStatus))
 
     head("2c  funded, but no consent")
     await fund(verified.orgUserId, 50)
@@ -327,10 +327,11 @@ async function main() {
     check(`2d: charged ${UP_FEE}`, a2.body.chargedLeaves === UP_FEE, String(a2.body.chargedLeaves))
     check(`2d: shop 50 -> ${50 - UP_FEE}`, (await bal(verified.orgUserId)) === 50 - UP_FEE, String(await bal(verified.orgUserId)))
     check("2d: the staff member's own balance did not move", (await bal(staff.id)) === staffStart)
-    const hold2 = await ledgerRows({ offerId: String(o2.body.offerId), type: "BRIDGE_FEE_HOLD" })
+    // The fee's rows key on the deal's one id (schema v2: no ledger offerId).
+    const hold2 = await ledgerRows({ tradeId: String(o2.body.offerId), type: "BRIDGE_FEE_HOLD" })
     check("2d: one BRIDGE_FEE_HOLD, -fee, on the SHOP",
       hold2.length === 1 && hold2[0].userId === verified.orgUserId && hold2[0].amount === -UP_FEE, JSON.stringify(hold2))
-    const o2After = await prisma.offer.findUniqueOrThrow({ where: { id: String(o2.body.offerId) }, select: { consentAt: true } })
+    const o2After = await prisma.trade.findUniqueOrThrow({ where: { id: String(o2.body.offerId) }, select: { consentAt: true } })
     check("2d: consent recorded on the offer", o2After.consentAt !== null)
     await invariant("with the shop's fee in escrow")
 
@@ -463,8 +464,7 @@ async function main() {
     await prisma.leafTransaction.deleteMany({ where: { userId: { in: users } } })
       await prisma.notification.deleteMany({ where: { OR: [{ userId: { in: users } }, { actorId: { in: users } }] } })
     await prisma.message.deleteMany({ where: { OR: [{ senderId: { in: users } }, { receiverId: { in: users } }] } })
-    await prisma.tradeRequest.deleteMany({ where: { OR: [{ senderId: { in: users } }, { receiverId: { in: users } }] } })
-    await prisma.offer.deleteMany({ where: { OR: [{ senderId: { in: users } }, { receiverId: { in: users } }] } })
+    await prisma.trade.deleteMany({ where: { OR: [{ senderId: { in: users } }, { receiverId: { in: users } }] } })
     await prisma.item.deleteMany({ where: { userId: { in: users } } })
     await prisma.organization.deleteMany({ where: { id: { in: orgs } } })
     await prisma.user.deleteMany({ where: { id: { in: users } } })

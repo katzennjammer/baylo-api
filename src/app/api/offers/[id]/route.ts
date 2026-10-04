@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { resolveSession } from "@/lib/api-auth"
 import prisma from "@/lib/prisma"
 import pusher from "@/lib/pusher"
-import { expireStaleOffers, parseOfferedItemIds } from "@/lib/offers"
+import { dealByAnyId, expireStaleOffers } from "@/lib/offers"
 import { offerActionSchema, parseBody } from "@/lib/validation"
 import { enforceAcceptTrade } from "@/lib/reputation-gate"
 import { assessOffer, refusalStatus } from "@/lib/offer-check"
@@ -67,7 +67,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     const session = await resolveSession()
     if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
-    const { id: offerId } = await params
+    const { id: requestedId } = await params
 
     // Sweep before reading the row, so an offer that aged out is seen as
     // EXPIRED rather than accepted three days late — and its fee is already
@@ -78,15 +78,17 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     if (!parsed.ok) return parsed.response
     const { action, consent } = parsed.data
 
-    const offer = await prisma.offer.findUnique({
-      where: { id: offerId },
+    const offer = await prisma.trade.findFirst({
+      where: dealByAnyId(requestedId),
       include: {
-        post: { select: { id: true, title: true, images: ITEM_IMAGES, valueLeaves: true } },
+        requestedItem: { select: { id: true, title: true, images: ITEM_IMAGES, valueLeaves: true } },
         sender: { select: { id: true, name: true } },
         receiver: { select: { id: true, name: true } },
       },
     })
-    if (!offer) return NextResponse.json({ error: "Offer not found" }, { status: 404 })
+    if (!offer || offer.offerStatus === null) return NextResponse.json({ error: "Offer not found" }, { status: 404 })
+    // The row's own id from here on: the URL may carry a pre-v2 offer id.
+    const offerId = offer.id
     // The receiver decides: the person, or -- acting as a shop (X-Baylo-Org,
     // ACTIVE membership) -- the shop, for an offer on the shop's listing. From
     // here on `myId` is that side: the standing the gates read, the actor on
@@ -97,16 +99,15 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     const who = await resolveTradeParticipant(session.user.id, req.headers, offer, "receiver")
     if (!who.ok) return legacyParticipantRefusal(who)
     const myId = who.participantId
-    if (offer.status !== "PENDING") {
+    if (offer.offerStatus !== "PENDING") {
       return NextResponse.json({ error: "Offer already resolved" }, { status: 400 })
     }
     if (offer.senderId === offer.receiverId) {
       return NextResponse.json({ error: "Cannot trade with yourself" }, { status: 400 })
     }
 
-    // The item the sender put up. A legacy row may name several; the first is
-    // the one every shipped client ever sent and the one the card drew.
-    const offeredItemId = parseOfferedItemIds(offer.offeredItems)[0] ?? null
+    // The item the sender put up. NULL only on a legacy Leaves-only offer.
+    const offeredItemId = offer.offeredItemId
     const fee = offer.bridgeFeeLeaves ?? 0
     /**
      * Who owes it, from the brackets stored on the offer. Re-derived from the
@@ -140,7 +141,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       const assessed = await assessOffer(prisma, {
         proposerId: offer.senderId,
         offeredItemId,
-        targetItemId: offer.postId,
+        targetItemId: offer.requestedItemId,
       })
       if (!assessed.ok) {
         return NextResponse.json(
@@ -187,11 +188,11 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
        * 409 rather than the gate's own 403, because it is not the ACCEPTER who
        * is refused — telling them they need premium would be false.
        */
-      const senderGate = await enforceAcceptTrade(offer.senderId, [offer.postId])
+      const senderGate = await enforceAcceptTrade(offer.senderId, [offer.requestedItemId])
       if (senderGate.response) {
         return NextResponse.json(
           {
-            error: `${offer.sender?.name ?? "The sender"} can no longer take on "${offer.post.title}" — their premium subscription has lapsed. The offer stays where it is.`,
+            error: `${offer.sender?.name ?? "The sender"} can no longer take on "${offer.requestedItem.title}" — their premium subscription has lapsed. The offer stays where it is.`,
             code: "SENDER_GATE_FAILED",
           },
           { status: 409 },
@@ -244,9 +245,9 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     try {
       outcome = await prisma.$transaction(async (tx) => {
       // Conditional on PENDING, so two taps produce one resolution.
-      const moved = await tx.offer.updateMany({
-        where: { id: offerId, status: "PENDING" },
-        data: { status: newStatus },
+      const moved = await tx.trade.updateMany({
+        where: { id: offerId, offerStatus: "PENDING" },
+        data: { offerStatus: newStatus },
       })
       if (moved.count !== 1) return { raced: true as const }
 
@@ -257,7 +258,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         if (fee > 0 && proposerPays) {
           await releaseBridgeFee(tx, {
             userId: offer.senderId,
-            offerId,
+            tradeId: offerId,
             amount: fee,
             reason: "declined",
           })
@@ -271,7 +272,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       if (fee > 0 && !proposerPays) {
         const held = await holdBridgeFee(tx, {
           userId: offer.receiverId,
-          offerId,
+          tradeId: offerId,
           amount: fee,
           at: now,
         })
@@ -286,15 +287,11 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
          * still reads PENDING after a refused accept.)
          */
         if (!held.ok) throw new ReceiverShort(fee, held.have)
-        await tx.offer.update({
-          where: { id: offerId },
-          data: { consentAt: now, policyVersion: TRADING_POLICY_VERSION },
-        })
       }
 
       const [offeredItem, requestedItem] = await Promise.all([
         tx.item.findUnique({ where: { id: offeredItemId as string }, select: { title: true, status: true } }),
-        tx.item.findUnique({ where: { id: offer.postId }, select: { title: true, status: true } }),
+        tx.item.findUnique({ where: { id: offer.requestedItemId }, select: { title: true, status: true } }),
       ])
 
       if (offeredItem?.status !== "AVAILABLE" || requestedItem?.status !== "AVAILABLE") {
@@ -303,21 +300,24 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
 
       const locked = await tx.item.updateMany({
         where: {
-          id: { in: [offeredItemId as string, offer.postId] },
+          id: { in: [offeredItemId as string, offer.requestedItemId] },
           status: "AVAILABLE",
         },
         data: { status: "IN_TRADE" },
       })
       if (locked.count !== 2) throw new Error("item_unavailable")
 
-      const trade = await tx.tradeRequest.create({
+      // The SAME row enters its trade phase (schema v2). Before v2 this created
+      // a separate TradeRequest and copied the offer's columns onto it; sender,
+      // receiver, both items and the message are already on this row.
+      const trade = await tx.trade.update({
+        where: { id: offerId },
         data: {
-          senderId: offer.senderId,
-          receiverId: offer.receiverId,
-          offeredItemId: offeredItemId as string,
-          requestedItemId: offer.postId,
           status: "ACCEPTED",
-          message: offer.message,
+          tradeCreatedAt: now,
+          // An up-bridge's consent belongs to the receiver, who pays; it is
+          // recorded at this accept, onto this same row.
+          ...(fee > 0 && !proposerPays ? { consentAt: now, policyVersion: TRADING_POLICY_VERSION } : {}),
           // Legacy column, never written from here any more: an offer created
           // after 16 Sep 2026 carries no Leaves. Old ACCEPTED trades keep
           // theirs and settle on it.
@@ -332,13 +332,13 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         select: { id: true },
       })
 
-      const rivals = await tx.offer.findMany({
+      const rivals = await tx.trade.findMany({
         where: {
           id: { not: offerId },
-          status: "PENDING",
+          offerStatus: "PENDING",
           OR: [
-            { postId: { in: [offeredItemId as string, offer.postId] } },
-            { offeredItems: { contains: offeredItemId as string } },
+            { requestedItemId: { in: [offeredItemId as string, offer.requestedItemId] } },
+            { offeredItemId: offeredItemId as string },
           ],
         },
         select: {
@@ -351,16 +351,16 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       })
 
       if (rivals.length > 0) {
-        await tx.offer.updateMany({
-          where: { id: { in: rivals.map((rival) => rival.id) }, status: "PENDING" },
-          data: { status: "DECLINED" },
+        await tx.trade.updateMany({
+          where: { id: { in: rivals.map((rival) => rival.id) }, offerStatus: "PENDING" },
+          data: { offerStatus: "DECLINED" },
         })
         for (const rival of rivals) {
           const proposerPaid = rival.offeredBracket !== null && rival.targetBracket !== null && rival.offeredBracket < rival.targetBracket
           if (proposerPaid && rival.bridgeFeeLeaves) {
             await releaseBridgeFee(tx, {
               userId: rival.senderId,
-              offerId: rival.id,
+              tradeId: rival.id,
               amount: rival.bridgeFeeLeaves,
               reason: "rejected",
             })
@@ -373,7 +373,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         trade: {
           id: trade.id,
           offeredItemTitle: offeredItem?.title ?? "Item",
-          requestedItemTitle: requestedItem?.title ?? offer.post.title,
+          requestedItemTitle: requestedItem?.title ?? offer.requestedItem.title,
         },
       }
       })
@@ -417,8 +417,8 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         read: false,
         message:
           action === "accept"
-            ? `accepted your offer on "${offer.post.title}"`
-            : `declined your offer on "${offer.post.title}"` +
+            ? `accepted your offer on "${offer.requestedItem.title}"`
+            : `declined your offer on "${offer.requestedItem.title}"` +
               (fee > 0 && proposerPays
                 ? ` — your ${fee}-Leaf bridging fee is back in your balance`
                 : ""),
@@ -449,9 +449,9 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       proposerName: offer.sender?.name ?? "They",
       accepterName: actorName,
       offeredItemTitle: offeredItemForCard?.title ?? tradeRecord?.offeredItemTitle ?? "Item",
-      requestedItemTitle: offer.post.title,
+      requestedItemTitle: offer.requestedItem.title,
       offeredItemImage: firstImage(offeredItemForCard?.images),
-      requestedItemImage: firstImage(offer.post.images),
+      requestedItemImage: firstImage(offer.requestedItem.images),
     }
     const senderSystemContent = JSON.stringify(updatePayload)
     const receiverSystemContent = JSON.stringify(updatePayload)

@@ -24,7 +24,7 @@ async function cleanup() {
   const ids = users.map((u) => u.id)
   if (!ids.length) return
   await prisma.leafTransaction.deleteMany({ where: { userId: { in: ids } } })
-  await prisma.tradeRequest.deleteMany({ where: { OR: [{ senderId: { in: ids } }, { receiverId: { in: ids } }] } })
+  await prisma.trade.deleteMany({ where: { OR: [{ senderId: { in: ids } }, { receiverId: { in: ids } }] } })
   await prisma.item.deleteMany({ where: { userId: { in: ids } } })
   await prisma.user.deleteMany({ where: { id: { in: ids } } })
 }
@@ -38,8 +38,8 @@ async function mkItem(userId: string, tag: string) {
   })
 }
 async function mkCompletedTrade(aId: string, bId: string, i1: string, i2: string) {
-  return prisma.tradeRequest.create({
-    data: { senderId: aId, receiverId: bId, offeredItemId: i1, requestedItemId: i2, status: "COMPLETED" },
+  return prisma.trade.create({
+    data: { tradeCreatedAt: new Date(), senderId: aId, receiverId: bId, offeredItemId: i1, requestedItemId: i2, status: "COMPLETED" },
   })
 }
 

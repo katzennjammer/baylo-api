@@ -414,8 +414,8 @@ export async function loadReportSummary(requestedDays: number): Promise<ReportSu
     prisma.item.count({ where: available }),
     prisma.item.count({ where: hidden }),
     prisma.item.count({ where: joinedInWindow }),
-    prisma.tradeRequest.count({ where: { status: "COMPLETED" } }),
-    prisma.tradeRequest.count({ where: completedInWindow }),
+    prisma.trade.count({ where: { status: "COMPLETED" } }),
+    prisma.trade.count({ where: completedInWindow }),
     prisma.moderationCase.count({ where: reportsJoinedInWindow }),
     prisma.moderationCase.count({ where: resolvedInWindow }),
     prisma.idVerification.count({ where: pendingIds }),
@@ -443,8 +443,8 @@ export async function loadReportSummary(requestedDays: number): Promise<ReportSu
     // is where the parties SAID they met. Counting only one would answer half the
     // question, so both are counted and the page labels them separately.
     prisma.safeZoneHub.findMany({ select: { id: true, name: true, city: true, type: true, isActive: true } }),
-    prisma.tradeRequest.groupBy({ by: ["meetupHubId"], where: plannedMeetups, _count: { id: true }, orderBy: { _count: { id: "desc" } } }),
-    prisma.tradeRequest.groupBy({ by: ["safeZoneHubId"], where: claimedMeetups, _count: { id: true }, orderBy: { _count: { id: "desc" } } }),
+    prisma.trade.groupBy({ by: ["meetupHubId"], where: plannedMeetups, _count: { id: true }, orderBy: { _count: { id: "desc" } } }),
+    prisma.trade.groupBy({ by: ["safeZoneHubId"], where: claimedMeetups, _count: { id: true }, orderBy: { _count: { id: "desc" } } }),
 
     prisma.review.aggregate({ where: joinedInWindow, _avg: { rating: true }, _count: { id: true } }),
 

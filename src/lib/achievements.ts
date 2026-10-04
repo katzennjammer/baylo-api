@@ -112,17 +112,17 @@ async function readActivity(db: Db, userId: string): Promise<Activity | null> {
         },
       }),
       db.item.count({ where: { userId } }),
-      db.tradeRequest.count({
+      db.trade.count({
         where: { status: "COMPLETED", OR: [{ senderId: userId }, { receiverId: userId }] },
       }),
-      db.tradeRequest.count({
+      db.trade.count({
         where: {
           status: "COMPLETED",
           safeZoneHubId: { not: null },
           OR: [{ senderId: userId }, { receiverId: userId }],
         },
       }),
-      db.tradeRequest.count({
+      db.trade.count({
         where: {
           status: "COMPLETED",
           bridgeFeeLeaves: { gt: 0 },
