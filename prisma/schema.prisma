@@ -657,14 +657,17 @@ model Trade {
   updatedAt      DateTime  @updatedAt
   /// The moment settlement committed -- written once, inside the completion
   /// transaction in confirm/submit, and never touched again. `updatedAt` is
-  /// NOT this: any later write to the row (a hide flag, a meetup field) moves
+  /// NOT this: any later write to the row (a meetup field, say) moves
   /// it, which is how an old trade could count toward TODAY's trade quest.
-  /// NULL on every trade completed before 25 Sep 2026, when the column was
-  /// added; nothing backfills it, and nothing that reads it needs the past.
+  /// Trades completed before 25 Sep 2026, when the column was added, were
+  /// BACKFILLED by 20261004000001_schema_v2_trade_completed_backfill: the
+  /// earliest paid settlement row in the ledger, else the row's updatedAt.
+  /// So it is non-null on every COMPLETED trade, but approximate on those.
   completedAt    DateTime?
 
-  hiddenBySender   Boolean @default(false)
-  hiddenByReceiver Boolean @default(false)
+  // hiddenBySender / hiddenByReceiver were DROPPED in schema v2
+  // (20261004000002_schema_v2_drop_trade_hidden): only the web dashboard ever
+  // set them and no row on live had either one true.
 
   /// WHICH Safe-Zone hub the parties say they met at. NULL means they did not
   /// claim one, and it is what the SAFEZONE_MEETUP reward keys off -- the

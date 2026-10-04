@@ -131,8 +131,8 @@ export async function GET(req: NextRequest) {
     where: {
       status: { in: [...states] },
       OR: [
-        { senderId: viewerId, hiddenBySender: false },
-        { receiverId: viewerId, hiddenByReceiver: false },
+        { senderId: viewerId },
+        { receiverId: viewerId },
       ],
       ...(keyset ?? {}),
     },
@@ -208,7 +208,7 @@ export async function GET(req: NextRequest) {
 
   // ── 5 ── incoming still awaiting this viewer.
   const pendingIncoming = await prisma.trade.count({
-    where: { receiverId: viewerId, status: "PENDING", hiddenByReceiver: false },
+    where: { receiverId: viewerId, status: "PENDING" },
   })
 
   const now = Date.now()

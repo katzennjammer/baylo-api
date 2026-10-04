@@ -30,7 +30,19 @@ for (const oid of [1082, 1114, 1083, 1184]) types.setTypeParser(oid, (v) => v)
 types.setTypeParser(20, (v) => v)
 types.setTypeParser(1700, (v) => v)
 
-const V2 = ["20261003000000_schema_v2_core", "20261003000001_schema_v2_ledger", "20261003000002_schema_v2_trade", "20261004000000_schema_v2_audit_fixes"]
+const V2 = [
+  "20261003000000_schema_v2_core", "20261003000001_schema_v2_ledger", "20261003000002_schema_v2_trade",
+  "20261004000000_schema_v2_audit_fixes", "20261004000001_schema_v2_trade_completed_backfill",
+  "20261004000002_schema_v2_drop_trade_hidden",
+]
+// Which held-back part each v2 migration needs. --skip <part> skips the part
+// and everything that depends on it.
+const PART: Record<string, string> = {
+  "20261003000001_schema_v2_ledger": "ledger",
+  "20261003000002_schema_v2_trade": "trade",
+  "20261004000001_schema_v2_trade_completed_backfill": "trade",
+  "20261004000002_schema_v2_drop_trade_hidden": "trade",
+}
 const TRAILER = "-- Baylo data dump complete"
 
 function arg(name: string): string | undefined {
@@ -115,7 +127,7 @@ async function main() {
 
     await pg.query(`SET search_path TO "${schema}"`)
     for (const m of V2) {
-      if ((m.endsWith("_ledger") && skip.has("ledger")) || (m.endsWith("_trade") && skip.has("trade"))) {
+      if (PART[m] && skip.has(PART[m])) {
         console.log(`  SKIPPED ${m}`); continue
       }
       // A phase not yet landed keeps its migration in prisma/schema-v2-pending/

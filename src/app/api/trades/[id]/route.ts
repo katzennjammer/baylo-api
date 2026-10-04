@@ -9,7 +9,11 @@ import { legacyParticipantRefusal, resolveTradeParticipant } from "@/lib/trade-p
 // PATCH /api/trades/[id]
 // body: { action: "cancel" | "hide" }
 // cancel: sets status CANCELLED, frees items if IN_TRADE, notifies other party
-// hide:   soft-hides trade from current user's view only (hiddenBySender or hiddenByReceiver)
+// hide:   RETIRED in schema v2 -> 410. Per-party hiding (Trade.hiddenBySender /
+//         hiddenByReceiver) was only reachable from the web dashboard, never
+//         from the app, and no row on live ever had it set; the columns are
+//         dropped by 20261004000002_schema_v2_drop_trade_hidden. Still parsed so
+//         an old client gets a clear 410 rather than a 400.
 export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
@@ -22,6 +26,9 @@ export async function PATCH(
     const parsed = await parseBody(req, tradeActionSchema)
     if (!parsed.ok) return parsed.response
     const { action } = parsed.data
+    if (action === "hide") {
+      return NextResponse.json({ error: "Hiding trades is no longer supported" }, { status: 410 })
+    }
 
     const trade = await prisma.trade.findUnique({
       where: { id: tradeId },
@@ -38,9 +45,8 @@ export async function PATCH(
       return NextResponse.json({ error: "Trade not found" }, { status: 404 })
     }
 
-    // Either side: the person, or the shop they are acting as. Hiding and
-    // cancelling a shop's trade is the shop's -- one member hiding it hides it
-    // for every member, like reading a shop thread. See @/lib/trade-participant.
+    // Either side: the person, or the shop they are acting as. Cancelling a
+    // shop's trade is the shop's. See @/lib/trade-participant.
     const who = await resolveTradeParticipant(session.user.id, req.headers, trade)
     if (!who.ok) return legacyParticipantRefusal(who)
     const isSender = who.isSender
@@ -112,22 +118,6 @@ export async function PATCH(
 
       void otherName
       return NextResponse.json({ ok: true, releasedLeaves: refund?.amount ?? 0 })
-    }
-
-    // ── hide (soft-remove from current user's view only) ──────────────────────
-    if (action === "hide") {
-      // Only allow hiding dead trades (completed / declined / cancelled)
-      const hideable = ["COMPLETED", "REJECTED", "CANCELLED"]
-      if (!hideable.includes(trade.status)) {
-        return NextResponse.json({ error: "Only completed or dead trades can be hidden" }, { status: 400 })
-      }
-
-      await prisma.trade.update({
-        where: { id: tradeId },
-        data: isSender ? { hiddenBySender: true } : { hiddenByReceiver: true },
-      })
-
-      return NextResponse.json({ ok: true })
     }
 
     return NextResponse.json({ error: "Unknown action" }, { status: 400 })

@@ -63,14 +63,13 @@ export default async function TradesPage() {
       where: {
         ...IN_TRADE_PHASE,
         OR: [
-          { senderId: myId,   hiddenBySender:   false },
-          { receiverId: myId, hiddenByReceiver: false },
+          { senderId: myId },
+          { receiverId: myId },
         ],
       },
       select: {
         // tradeCreatedAt: when the deal became a trade, shown as createdAt below.
         id: true, status: true, tradeCreatedAt: true, updatedAt: true, offeredLeaves: true,
-        hiddenBySender: true, hiddenByReceiver: true,
         senderId: true, receiverId: true,
         offeredItemId: true, requestedItemId: true,
         offeredItem:   { select: { id: true, title: true, images: ITEM_IMAGES, category: true, status: true, valueLeaves: true } },

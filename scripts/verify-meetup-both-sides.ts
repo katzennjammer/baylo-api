@@ -301,15 +301,21 @@ async function main() {
   )
 
   // ── 6 ──
-  head("6  the ONE legitimate one-sided blindness: a hidden trade is not listed")
-  await prisma.trade.update({ where: { id: trade.id }, data: { hiddenBySender: true } })
+  // Per-party hiding was the one legitimate one-sided blindness. It was
+  // dropped in schema v2 (20261004000002_schema_v2_drop_trade_hidden), so
+  // there is no longer any state in which one side lists a trade and the
+  // other does not.
+  head("6  no one-sided blindness: hiding is retired (410), both sides list it")
+  const hide6 = await fetch(`${BASE}/api/trades/${trade.id}`, {
+    method: "PATCH",
+    headers: { authorization: `Bearer ${sender.token}`, "content-type": "application/json" },
+    body: JSON.stringify({ action: "hide" }),
+  })
+  check("PATCH {action: hide} answers 410", hide6.status === 410, hide6.status)
   const s6 = await listRow(sender.token, trade.id)
   const r6 = await listRow(receiver.token, trade.id)
-  check("sender, who hid it, does not list it", s6 === null, s6)
+  check("sender still lists it, plan intact", !!s6?.meetup?.agreedAt, s6)
   check("receiver still lists it, plan intact", !!r6?.meetup?.agreedAt, r6)
-  const ms6 = await get(`/api/v1/trades/${trade.id}/meetup`, sender.token)
-  check("…but GET …/meetup still answers the sender (hiding is a list filter)", ms6.status === 200 && !!ms6.json.data?.plan, ms6)
-  await prisma.trade.update({ where: { id: trade.id }, data: { hiddenBySender: false } })
 
   // ── 7 ──
   head("7  a proposal bumps updatedAt (the list's sort key)")

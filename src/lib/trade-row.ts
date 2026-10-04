@@ -39,7 +39,7 @@ const OFFER_ONLY = ["legacyOfferId", "offerStatus", "offeredBracket", "targetBra
 
 /** Trade-phase columns, which an Offer never had (plus the two renamed below). */
 const TRADE_ONLY = [
-  "status", "tradeCreatedAt", "completedAt", "hiddenBySender", "hiddenByReceiver", "safeZoneHubId", "meetupHubId",
+  "status", "tradeCreatedAt", "completedAt", "safeZoneHubId", "meetupHubId",
   "meetupAt", "meetupNote", "meetupProposedBySender", "meetupAgreedAt", "bridgeFeePaidBySender", "legacyOfferId",
   "offeredItemId", "requestedItemId", "requestedItem", "offerStatus", "offeredItem",
 ] as const

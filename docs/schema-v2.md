@@ -19,6 +19,8 @@ Branch: `feature/schema-v2` (API repo, from `feature/stories-v1` @ `8c0277f`).
 | Migration 2: ledger (high risk, separable) | `prisma/migrations/20261003000001_schema_v2_ledger/migration.sql` |
 | Migration 3: trade (high risk, separable) | `prisma/migrations/20261003000002_schema_v2_trade/migration.sql` |
 | Migration 4: audit fixes (schema only, needs core) | `prisma/migrations/20261004000000_schema_v2_audit_fixes/migration.sql` |
+| Migration 5: completedAt backfill (data, needs trade) | `prisma/migrations/20261004000001_schema_v2_trade_completed_backfill/migration.sql` |
+| Migration 6: drop Trade hide flags (needs trade) | `prisma/migrations/20261004000002_schema_v2_drop_trade_hidden/migration.sql` |
 | Scratch builder | `scripts/schema-v2/build-scratch.ts` |
 | Verifier | `scripts/schema-v2/verify-v2.ts` |
 | Scratch schemas (kept for week 2) | `schema_v2_wk1` (new structure) and `schema_v2_wk1_src` (old structure, same data, untouched reference) |
@@ -98,7 +100,7 @@ Notation: `Old.col → New.col`. "=" means the same table and the same column. T
 | Offer.createdAt | Trade.createdAt (proposal time; TradeRequest.createdAt when there was no offer) |
 | TradeRequest.createdAt | Trade.tradeCreatedAt |
 | Offer.updatedAt / TradeRequest.updatedAt | Trade.updatedAt = the later of the two |
-| TradeRequest.completedAt, hiddenBySender, hiddenByReceiver, safeZoneHubId, meetupHubId, meetupAt, meetupNote, meetupProposedBySender, meetupAgreedAt, bridgeFeePaidBySender | Trade, same names |
+| TradeRequest.completedAt, hiddenBySender, hiddenByReceiver, safeZoneHubId, meetupHubId, meetupAt, meetupNote, meetupProposedBySender, meetupAgreedAt, bridgeFeePaidBySender | Trade, same names (the two hidden flags are then dropped by migration 6, section 2g) |
 | Offer.offeredLeaves / TradeRequest.offeredLeaves | Trade.offeredLeaves (the trade's settled figure wins; it differs on 4 pairs, see 2c) |
 | Offer.bridgeFeeLeaves / TradeRequest.bridgeFeeLeaves | Trade.bridgeFeeLeaves (identical on all pairs, asserted) |
 | Offer.offeredBracket, targetBracket, consentAt, policyVersion | Trade, same names |
@@ -332,6 +334,20 @@ These come from a read-only audit of the copy. The migration is schema only, wri
 - **Added two CHECKs on Item:**
   - `Item_perishable_window_check`: `isPerishable = (tradeWithinHours IS NOT NULL)`.
   - `Item_pickup_shape_check`: both coordinates or neither, and an address only with a pin. A pin **without** an address stays legal, because the API accepts one (`pickupAddress` is optional in validation).
+
+## 2g. Trade.completedAt backfill and the hide flags (migrations 5 and 6, 4 Oct 2026)
+
+Both depend on the trade migration. `build-scratch.ts --skip trade` skips them too.
+
+- **`20261004000001_schema_v2_trade_completed_backfill`** fills `completedAt` on COMPLETED trades where it is NULL, and only there. That is 12 rows in the 3 Oct backup, all completed before the column was added on 25 Sep.
+  - **Source:** the earliest ledger row that paid out for the trade's settlement (TASK_REWARD, TRADE_REWARD, TRADE_SPEND/RECEIVE or BRIDGE_FEE_PAID, with amount ≠ 0). Otherwise the trade's `updatedAt` (3 of the 12).
+  - Denied 0-Leaf task rows are excluded, because they carry the 24 Aug migration time.
+  - The migration asserts that no COMPLETED trade is left NULL and that no value falls before `tradeCreatedAt`.
+  - **Live gets this at cutover:** `migrate deploy` runs it against whatever legacy NULLs live has then. Settlement has written `completedAt` itself since 25 Sep, so the set should still be these 12.
+- **`20261004000002_schema_v2_drop_trade_hidden`** drops `hiddenBySender` and `hiddenByReceiver`.
+  - Only the web dashboard ever set them, and no row on live had either one true on 4 Oct.
+  - The migration refuses if any row is hidden by then, because dropping the columns would unhide it.
+  - `PATCH /api/trades/[id] {action: "hide"}` now answers **410**, and the dashboard no longer offers "Remove".
 
 ## 3. Verification on the copy (Step 3 result)
 

@@ -465,13 +465,12 @@ function resolveBadgeKey(trade: SerializedTrade, myId: string): BadgeKey {
   return trade.status as BadgeKey
 }
 
-function TradeCard({ trade, myId, onConfirm, onCompleted, onCancel, onHide, onOpenChat }: {
+function TradeCard({ trade, myId, onConfirm, onCompleted, onCancel, onOpenChat }: {
   trade:       SerializedTrade
   myId:        string
   onConfirm:   (t: SerializedTrade) => void
   onCompleted: (t: SerializedTrade) => void
   onCancel:    (t: SerializedTrade) => void
-  onHide:      (t: SerializedTrade) => void
   onOpenChat:  (name: string, partnerId: string) => void
 }) {
   const [imgErr, setImgErr] = React.useState(false)
@@ -483,7 +482,6 @@ function TradeCard({ trade, myId, onConfirm, onCompleted, onCancel, onHide, onOp
 
   const badgeKey  = resolveBadgeKey(trade, myId)
   const canConfirm = trade.status === "ACCEPTED" || trade.status === "CONFIRMING"
-  const isDead     = ["COMPLETED", "REJECTED", "CANCELLED"].includes(trade.status)
   const isCancellable = ["PENDING", "ACCEPTED", "CONFIRMING"].includes(trade.status)
 
   const leavesOnly = isLeavesOnlyTrade(trade.offeredItem.id, trade.requestedItem.id)
@@ -505,12 +503,6 @@ function TradeCard({ trade, myId, onConfirm, onCompleted, onCancel, onHide, onOp
       icon: "xCircle" as IconName,
       label: "Cancel trade",
       onClick: () => onCancel(trade),
-      destructive: true,
-    }] : []),
-    ...(isDead ? [{
-      icon: "eyeOff" as IconName,
-      label: trade.status === "COMPLETED" ? "Remove from history" : "Remove",
-      onClick: () => onHide(trade),
       destructive: true,
     }] : []),
   ]
@@ -752,10 +744,9 @@ function OfferRow({ offer, onAccept, onDecline, loadingId }: {
 
 // ── HistoryRow — History tab ──────────────────────────────────────────────────
 
-function HistoryRow({ trade, myId, onHide, onRate }: {
+function HistoryRow({ trade, myId, onRate }: {
   trade:  SerializedTrade
   myId:   string
-  onHide: (t: SerializedTrade) => void
   onRate: (t: SerializedTrade) => void
 }) {
   const [hov, setHov] = React.useState(false)
@@ -843,20 +834,6 @@ function HistoryRow({ trade, myId, onHide, onRate }: {
           )
         )}
 
-        <button
-          onClick={() => onHide(trade)}
-          style={{
-            display: "flex", alignItems: "center", gap: 4,
-            padding: "3px 8px", borderRadius: 8, border: "none",
-            background: "none", color: "#9CA3AF", fontSize: 11,
-            cursor: "pointer", fontFamily: "inherit",
-          }}
-          onMouseEnter={(e) => (e.currentTarget.style.color = "#EF4444")}
-          onMouseLeave={(e) => (e.currentTarget.style.color = "#9CA3AF")}
-        >
-          <Icon name="eyeOff" size={11} />
-          Remove
-        </button>
       </div>
     </div>
   )
@@ -888,7 +865,7 @@ type ActiveFilter = "all" | "awaiting" | "confirming"
 
 interface DialogState {
   trade:         SerializedTrade
-  action:        "cancel" | "hide"
+  action:        "cancel"
 }
 
 export default function TradesClient({
@@ -1015,14 +992,10 @@ export default function TradesClient({
     }
   }
 
-  // ── Dialog: confirm cancel / hide ─────────────────────────────────────────
+  // ── Dialog: confirm cancel ────────────────────────────────────────────────
 
   function openCancelDialog(trade: SerializedTrade) {
     setDialog({ trade, action: "cancel" })
-  }
-
-  function openHideDialog(trade: SerializedTrade) {
-    setDialog({ trade, action: "hide" })
   }
 
   async function handleDialogConfirm() {
@@ -1041,16 +1014,8 @@ export default function TradesClient({
         throw new Error(body?.error ?? "Request failed")
       }
 
-      if (action === "cancel") {
-        setTrades((prev) => prev.map((t) => t.id === trade.id ? { ...t, status: "CANCELLED" } : t))
-        setToast({ msg: "Trade cancelled.", type: "success" })
-      } else {
-        setTrades((prev) => prev.filter((t) => t.id !== trade.id))
-        setToast({
-          msg: trade.status === "COMPLETED" ? "Removed from history." : "Removed.",
-          type: "success",
-        })
-      }
+      setTrades((prev) => prev.map((t) => t.id === trade.id ? { ...t, status: "CANCELLED" } : t))
+      setToast({ msg: "Trade cancelled.", type: "success" })
       setDialog(null)
     } catch (err) {
       setToast({ msg: err instanceof Error ? err.message : "Something went wrong.", type: "error" })
@@ -1286,7 +1251,6 @@ export default function TradesClient({
                         onConfirm={setConfirmTrade}
                         onCompleted={(t) => { setRatingTrade(t); router.refresh() }}
                         onCancel={openCancelDialog}
-                        onHide={openHideDialog}
                         onOpenChat={openChat}
                       />
                     ))}
@@ -1337,7 +1301,6 @@ export default function TradesClient({
                       key={t.id}
                       trade={t}
                       myId={myId}
-                      onHide={openHideDialog}
                       onRate={setRatingTrade}
                     />
                   ))}
@@ -1356,34 +1319,16 @@ export default function TradesClient({
       </div>
 
 
-      {/* ── Cancel / hide confirmation dialog ───────────────────────────────── */}
+      {/* ── Cancel confirmation dialog ──────────────────────────────────────── */}
       {dialog && (
         <ConfirmDialog
-          title={
-            dialog.action === "cancel"
-              ? "Cancel this trade?"
-              : dialog.trade.status === "COMPLETED"
-              ? "Remove from history?"
-              : "Remove this trade?"
-          }
-          body={
-            dialog.action === "cancel"
-              ? `This will notify ${
-                  dialog.trade.sender.id === myId
-                    ? dialog.trade.receiver.name
-                    : dialog.trade.sender.name
-                } and end the trade.`
-              : dialog.trade.status === "COMPLETED"
-              ? "This removes it from your view only and won’t undo the completed swap or affect your eco-impact score."
-              : "This removes it from your list only."
-          }
-          confirmLabel={
-            dialog.action === "cancel"
-              ? "Cancel trade"
-              : dialog.trade.status === "COMPLETED"
-              ? "Remove from history"
-              : "Remove"
-          }
+          title="Cancel this trade?"
+          body={`This will notify ${
+            dialog.trade.sender.id === myId
+              ? dialog.trade.receiver.name
+              : dialog.trade.sender.name
+          } and end the trade.`}
+          confirmLabel="Cancel trade"
           onConfirm={handleDialogConfirm}
           onCancel={() => setDialog(null)}
           loading={dialogLoading}

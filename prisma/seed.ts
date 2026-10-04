@@ -561,8 +561,9 @@ async function seedTrades() {
       requestedItemId: t.requestedItemId,
       offeredLeaves: t.offeredLeaves,
       safeZoneHubId: t.safeZoneHubId,
-      hiddenBySender: false,
-      hiddenByReceiver: false,
+      // Seeded as already settled, so completedAt is the settlement moment
+      // (the v2 backfill gives these rows the same value).
+      completedAt: t.settledAt,
     }
     await prisma.trade.upsert({
       where: { id: t.id },

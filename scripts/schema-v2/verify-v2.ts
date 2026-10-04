@@ -197,8 +197,19 @@ async function main() {
     const trMissing = await one(`SELECT count(*) FROM ${o("TradeRequest")} x WHERE NOT EXISTS (SELECT 1 FROM ${n("Trade")} y WHERE y.id = x.id)`)
     const ofMissing = await one(`SELECT count(*) FROM ${o("Offer")} x WHERE NOT EXISTS (SELECT 1 FROM ${n("Trade")} y WHERE y."legacyOfferId" = x.id)`)
     check(trMissing === 0 && ofMissing === 0, `every TradeRequest id and every Offer id is in Trade (${trMissing} / ${ofMissing} missing)`)
-    const trBad = await one(`SELECT count(*) FROM ${o("TradeRequest")} x JOIN ${n("Trade")} y ON y.id = x.id WHERE y.status::text <> x.status::text OR y."senderId" <> x."senderId" OR y."receiverId" <> x."receiverId" OR y."offeredItemId" <> x."offeredItemId" OR y."requestedItemId" <> x."requestedItemId" OR y."tradeCreatedAt" <> x."createdAt" OR y."completedAt" IS DISTINCT FROM x."completedAt" OR y."offeredLeaves" IS DISTINCT FROM x."offeredLeaves" OR y."bridgeFeeLeaves" IS DISTINCT FROM x."bridgeFeeLeaves" OR y."bridgeFeePaidBySender" IS DISTINCT FROM x."bridgeFeePaidBySender" OR y."safeZoneHubId" IS DISTINCT FROM x."safeZoneHubId" OR y."meetupHubId" IS DISTINCT FROM x."meetupHubId" OR y."meetupAt" IS DISTINCT FROM x."meetupAt" OR y."meetupNote" IS DISTINCT FROM x."meetupNote" OR y."meetupProposedBySender" IS DISTINCT FROM x."meetupProposedBySender" OR y."meetupAgreedAt" IS DISTINCT FROM x."meetupAgreedAt" OR y."hiddenBySender" <> x."hiddenBySender" OR y."hiddenByReceiver" <> x."hiddenByReceiver" OR y.message IS DISTINCT FROM x.message`)
-    check(trBad === 0, `every TradeRequest field carried onto its Trade (${trBad} differ)`)
+    const trBad = await one(`SELECT count(*) FROM ${o("TradeRequest")} x JOIN ${n("Trade")} y ON y.id = x.id WHERE y.status::text <> x.status::text OR y."senderId" <> x."senderId" OR y."receiverId" <> x."receiverId" OR y."offeredItemId" <> x."offeredItemId" OR y."requestedItemId" <> x."requestedItemId" OR y."tradeCreatedAt" <> x."createdAt" OR (y."completedAt" IS DISTINCT FROM x."completedAt" AND NOT (x."completedAt" IS NULL AND x.status = 'COMPLETED')) OR y."offeredLeaves" IS DISTINCT FROM x."offeredLeaves" OR y."bridgeFeeLeaves" IS DISTINCT FROM x."bridgeFeeLeaves" OR y."bridgeFeePaidBySender" IS DISTINCT FROM x."bridgeFeePaidBySender" OR y."safeZoneHubId" IS DISTINCT FROM x."safeZoneHubId" OR y."meetupHubId" IS DISTINCT FROM x."meetupHubId" OR y."meetupAt" IS DISTINCT FROM x."meetupAt" OR y."meetupNote" IS DISTINCT FROM x."meetupNote" OR y."meetupProposedBySender" IS DISTINCT FROM x."meetupProposedBySender" OR y."meetupAgreedAt" IS DISTINCT FROM x."meetupAgreedAt" OR y.message IS DISTINCT FROM x.message`)
+    check(trBad === 0, `every TradeRequest field carried onto its Trade (${trBad} differ; completedAt backfill checked below)`)
+
+    // 20261004000001: completedAt backfilled on legacy COMPLETED trades, and only there.
+    const legacyDone = await one(`SELECT count(*) FROM ${o("TradeRequest")} WHERE status = 'COMPLETED' AND "completedAt" IS NULL`)
+    const filled = await one(`SELECT count(*) FROM ${o("TradeRequest")} x JOIN ${n("Trade")} y ON y.id = x.id WHERE x.status = 'COMPLETED' AND x."completedAt" IS NULL AND y."completedAt" IS NOT NULL AND y."completedAt" >= y."tradeCreatedAt"`)
+    const stillNull = await cnt(n, "Trade", `WHERE status = 'COMPLETED' AND "completedAt" IS NULL`)
+    check(filled === legacyDone && stillNull === 0, `completedAt backfilled on all ${legacyDone} legacy COMPLETED trades (${filled} filled, at or after tradeCreatedAt; ${stillNull} COMPLETED left NULL)`)
+
+    // 20261004000002: the hide flags are gone, and none was set, so nothing came undone.
+    const hiddenOld = await one(`SELECT count(*) FROM ${o("TradeRequest")} WHERE "hiddenBySender" OR "hiddenByReceiver"`)
+    const hiddenCols = await one(`SELECT count(*) FROM information_schema.columns WHERE table_schema = $1 AND table_name = 'Trade' AND column_name IN ('hiddenBySender', 'hiddenByReceiver')`, [NEW])
+    check(hiddenOld === 0 && hiddenCols === 0, `Trade.hiddenBySender/hiddenByReceiver dropped (${hiddenCols} left) and no old trade was hidden (${hiddenOld}), so no hide came undone`)
     const ofBad = await one(`SELECT count(*) FROM ${o("Offer")} x JOIN ${n("Trade")} y ON y."legacyOfferId" = x.id WHERE y."offerStatus"::text <> x.status::text OR y."senderId" <> x."senderId" OR y."receiverId" <> x."receiverId" OR y."requestedItemId" <> x."postId" OR y."createdAt" <> x."createdAt" OR y."offeredBracket" IS DISTINCT FROM x."offeredBracket" OR y."targetBracket" IS DISTINCT FROM x."targetBracket" OR y."consentAt" IS DISTINCT FROM x."consentAt" OR y."policyVersion" IS DISTINCT FROM x."policyVersion" OR y."bridgeFeeLeaves" IS DISTINCT FROM x."bridgeFeeLeaves" OR (json_array_length(x."offeredItems"::json) = 1 AND y."offeredItemId" IS DISTINCT FROM x."offeredItems"::json -> 0 ->> 'id')`)
     check(ofBad === 0, `every Offer field carried onto its Trade (${ofBad} differ)`)
     const ofOnlyBad = await one(`SELECT count(*) FROM ${o("Offer")} x JOIN ${n("Trade")} y ON y.id = x.id WHERE y.message IS DISTINCT FROM x.message OR y."offeredLeaves" IS DISTINCT FROM x."offeredLeaves" OR y."updatedAt" <> x."updatedAt" OR y.status IS NOT NULL`)
@@ -367,11 +378,13 @@ async function main() {
       const tr = await json(`SELECT row_to_json(x) j FROM ${o("TradeRequest")} x WHERE id = $1`, [s.id])
       const of = s.legacyOfferId ? await json(`SELECT row_to_json(x) j FROM ${o("Offer")} x WHERE id = $1`, [s.legacyOfferId]) : null
       let ok = true
-      if (tr) ok = cmp(`Trade ${s.id} vs TradeRequest`, { ...tr, tradeCreatedAt: tr.createdAt }, b, {}, ["createdAt", "updatedAt", "offerStatus", "legacyOfferId", "offeredBracket", "targetBracket", "consentAt", "policyVersion"]) && ok
+      // A legacy COMPLETED trade's completedAt was backfilled (checked in section 1).
+      const backfilled = tr && tr.status === "COMPLETED" && tr.completedAt === null ? ["completedAt"] : []
+      if (tr) ok = cmp(`Trade ${s.id} vs TradeRequest`, { ...tr, tradeCreatedAt: tr.createdAt }, b, {}, ["createdAt", "updatedAt", "offerStatus", "legacyOfferId", "offeredBracket", "targetBracket", "consentAt", "policyVersion", ...backfilled]) && ok
       if (of) {
         const offerItem = (JSON.parse(of.offeredItems) as { id: string }[])[0]?.id ?? null
         ok = cmp(`Trade ${s.id} vs Offer ${s.legacyOfferId}`, { ...of, offerStatus: of.status, requestedItemId: of.postId }, b, {},
-          ["id", "status", "legacyOfferId", "updatedAt", "tradeCreatedAt", "completedAt", "hiddenBySender", "hiddenByReceiver", "safeZoneHubId", "meetupHubId", "meetupAt", "meetupNote", "meetupProposedBySender", "meetupAgreedAt", "bridgeFeePaidBySender",
+          ["id", "status", "legacyOfferId", "updatedAt", "tradeCreatedAt", "completedAt", "safeZoneHubId", "meetupHubId", "meetupAt", "meetupNote", "meetupProposedBySender", "meetupAgreedAt", "bridgeFeePaidBySender",
            ...(tr ? ["offeredLeaves", "message", "offeredItemId"] : [])]) && ok
         if (offerItem && b.offeredItemId !== offerItem) { ok = false; fail(`Trade ${s.id} offered item ${b.offeredItemId}, offer named ${offerItem}`) }
         if (!tr && b.status !== null) { ok = false; fail(`Trade ${s.id} has a trade phase but no TradeRequest`) }
