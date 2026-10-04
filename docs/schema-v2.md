@@ -18,6 +18,7 @@ Branch: `feature/schema-v2` (API repo, from `feature/stories-v1` @ `8c0277f`).
 | Migration 1: core | `prisma/migrations/20261003000000_schema_v2_core/migration.sql` |
 | Migration 2: ledger (high risk, separable) | `prisma/migrations/20261003000001_schema_v2_ledger/migration.sql` |
 | Migration 3: trade (high risk, separable) | `prisma/migrations/20261003000002_schema_v2_trade/migration.sql` |
+| Migration 4: audit fixes (schema only, needs core) | `prisma/migrations/20261004000000_schema_v2_audit_fixes/migration.sql` |
 | Scratch builder | `scripts/schema-v2/build-scratch.ts` |
 | Verifier | `scripts/schema-v2/verify-v2.ts` |
 | Scratch schemas (kept for week 2) | `schema_v2_wk1` (new structure) and `schema_v2_wk1_src` (old structure, same data, untouched reference) |
@@ -204,7 +205,7 @@ Every per-type rule below is a **CHECK constraint** in the migrations. Prisma ne
 | allowed status | OPEN, REVIEWING, ACTIONED, DISMISSED | OPEN, UPHELD, OVERTURNED, WITHDRAWN |
 
 - Uniqueness: `(filedById, targetType, targetId, openKey)` (one live report per reporter and target; appeal rows are all NULL there) and `actionId` (one appeal per decision; report rows are NULL).
-- FKs: filedById → User (Cascade), itemId → Item (Cascade), decidedById → User (SetNull), and AdminAction.caseId → ModerationCase (SetNull).
+- FKs: filedById → User (Cascade), itemId → Item (Cascade), decidedById → User (SetNull), and AdminAction.caseId → ModerationCase (SetNull). Since migration 4: actionId → AdminAction (Restrict).
 - A report's target stays a (type, id) pair, **deliberately not an FK** (a report must survive its target).
 
 **UserProgress**, `type ∈ {QUEST, ACHIEVEMENT}`
@@ -319,6 +320,18 @@ To hold one back:
 3. Ship only the week-2 code for the rest.
 
 Week-2 code should keep #18 and #20 on their own commits for the same reason.
+
+## 2f. Audit fixes (migration 4, 4 Oct 2026)
+
+These come from a read-only audit of the copy. The migration is schema only, writes no rows, and asserts its preconditions first.
+
+- **Dropped two redundant indexes.** Each one is the leading column of another index on the same table:
+  - `LeafTransaction_userId_idx` is covered by (userId, createdAt), (userId, eventAt) and the unique (userId, task, taskRefId);
+  - `ModerationCase_filedById_idx` is covered by the unique (filedById, targetType, targetId, openKey).
+- **Added the FK `ModerationCase.actionId` → AdminAction (Restrict).** Audit rows are never deleted by the app, so the FK costs nothing. Three test cleanups (verify-appeals, verify-moderation, verify-value-review) now delete cases before audit rows.
+- **Added two CHECKs on Item:**
+  - `Item_perishable_window_check`: `isPerishable = (tradeWithinHours IS NOT NULL)`.
+  - `Item_pickup_shape_check`: both coordinates or neither, and an address only with a pin. A pin **without** an address stays legal, because the API accepts one (`pickupAddress` is optional in validation).
 
 ## 3. Verification on the copy (Step 3 result)
 

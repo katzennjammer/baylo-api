@@ -66,8 +66,8 @@ async function cleanup() {
   if (ids.length === 0) return
   const items = await prisma.item.findMany({ where: { userId: { in: ids } }, select: { id: true } })
   const itemIds = items.map((i) => i.id)
-  await prisma.adminAction.deleteMany({ where: { OR: [{ actorId: { in: ids } }, { targetId: { in: [...ids, ...itemIds] } }] } })
   await prisma.moderationCase.deleteMany({ where: { itemId: { in: itemIds } } })
+  await prisma.adminAction.deleteMany({ where: { OR: [{ actorId: { in: ids } }, { targetId: { in: [...ids, ...itemIds] } }] } })
   await prisma.notification.deleteMany({ where: { OR: [{ userId: { in: ids } }, { actorId: { in: ids } }] } })
   await prisma.item.deleteMany({ where: { userId: { in: ids } } })
   await prisma.user.deleteMany({ where: { id: { in: ids } } })

@@ -77,9 +77,10 @@ async function cleanup() {
 
   // Order matters: AdminAction.actorId is RESTRICT, so audit rows must go
   // before the users they name. That constraint is deliberate (see the model)
-  // and this is the one place that has to work around it.
-  await prisma.adminAction.deleteMany({ where: { OR: [{ actorId: { in: ids } }, { targetId: { in: ids } }] } })
+  // and this is the one place that has to work around it. Cases go first of
+  // all: an appeal's actionId is RESTRICT toward the audit row it answers.
   await prisma.moderationCase.deleteMany({ where: { OR: [{ filedById: { in: ids } }, { decidedById: { in: ids } }] } })
+  await prisma.adminAction.deleteMany({ where: { OR: [{ actorId: { in: ids } }, { targetId: { in: ids } }] } })
   const items = await prisma.item.findMany({ where: { userId: { in: ids } }, select: { id: true } })
   const itemIds = items.map((i) => i.id)
   await prisma.adminAction.deleteMany({ where: { targetId: { in: itemIds } } })

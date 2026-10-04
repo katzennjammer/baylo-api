@@ -415,6 +415,10 @@ model Item {
   // precision plus pickupAddress identifies a seller's home. Only the owner and
   // an accepted trade counterparty may see them; everyone else gets the
   // 2-decimal-place (~1 km) rounding that resolvePickup() applies.
+  //
+  // CHECK Item_pickup_shape_check (20261004000000_schema_v2_audit_fixes): both
+  // coordinates or neither, and an address only with a pin. A pin with no
+  // address is legal.
   pickupLat     Float?
   pickupLng     Float?
   pickupAddress String? @db.Text
@@ -504,6 +508,9 @@ model Item {
   /// replayable: a job that did not run for two days expires exactly the
   /// listings that were already past their window, and running it twice
   /// changes nothing the first run did not.
+  ///
+  /// Set exactly when isPerishable is: CHECK Item_perishable_window_check
+  /// (20261004000000_schema_v2_audit_fixes).
   tradeWithinHours Int?
 
   // Featured boosts were REMOVED in schema v2 (isFeatured, featuredUntil,
@@ -1402,8 +1409,8 @@ model LeafTransaction {
   createdAt DateTime @default(now())
   eventAt   DateTime
 
+  // No bare [userId] index: all three below lead with userId and back the FK.
   @@unique([userId, task, taskRefId])
-  @@index([userId])
   @@index([userId, createdAt])
   @@index([userId, eventAt])
 }
@@ -1504,9 +1511,10 @@ enum ModerationCaseStatus {
  * ── ONE APPEAL PER DECISION ──────────────────────────────────────────────────
  * `actionId` is the id of the AdminAction being appealed (a
  * LISTING_VALUE_REJECTED or LISTING_HIDDEN row), UNIQUE: a rejection can be
- * appealed once. A plain string and not a relation: the audit points at
- * things, nothing points back at the audit. NULL on every REPORT row, which a
- * unique index permits any number of.
+ * appealed once. A foreign key since 20261004000000_schema_v2_audit_fixes
+ * (Restrict): audit rows are never deleted, so the FK costs nothing and makes
+ * a dangling appeal impossible. NULL on every REPORT row, which a unique index
+ * permits any number of.
  * ── ONE LIVE REPORT PER REPORTER PER TARGET: `openKey` ───────────────────────
  * Holds the literal "live" while a REPORT is OPEN or REVIEWING and NULL once it
  * is resolved, so the @@unique below permits exactly one live report per
@@ -1542,7 +1550,10 @@ model ModerationCase {
   /// The owner's own words, capped at 300 characters. Never edited.
   message    String?            @db.VarChar(300)
   /// The AdminAction this appeal answers. Unique: one appeal per decision.
+  /// Restrict: a decision cannot be deleted while an appeal against it exists
+  /// (the app never deletes audit rows; test cleanups delete the appeal first).
   actionId   String?            @unique
+  action     AdminAction?       @relation("AppealedAction", fields: [actionId], references: [id], onDelete: Restrict)
 
   // ── The decision, both types ──
   /// Who closed it. SetNull: the case outlives the staff account.
@@ -1556,14 +1567,14 @@ model ModerationCase {
   createdAt DateTime @default(now())
 
   /// Audit rows that answered this case.
-  actions AdminAction[]
+  actions AdminAction[] @relation("CaseActions")
 
+  // Also backs the filedById FK, so there is no separate [filedById] index.
   @@unique([filedById, targetType, targetId, openKey])
   /// The queue: one type, filtered by status, oldest or newest first.
   @@index([type, status, createdAt])
   /// "everything ever filed against this listing" -- the report detail screen.
   @@index([targetType, targetId])
-  @@index([filedById])
   @@index([itemId])
   @@index([decidedById])
 }
@@ -1871,14 +1882,17 @@ model AdminAction {
    * renamed in schema v2 because a case may now be an appeal). Bulk cleanup has none.
    */
   caseId String?
-  case   ModerationCase? @relation(fields: [caseId], references: [id], onDelete: SetNull)
+  case   ModerationCase? @relation("CaseActions", fields: [caseId], references: [id], onDelete: SetNull)
+
+  /// The appeal against this decision, if one was filed (ModerationCase.actionId).
+  appeal ModerationCase? @relation("AppealedAction")
 
   reason String  @db.Text
   /**
    * JSON snapshot of what changed -- prior item status, prior suspension dates,
    * the listing title as it read at takedown. A plain Text column and not a
-   * relation, matching LeafTransaction.tradeId: the audit points at things,
-   * nothing points back at the audit.
+   * relation, matching LeafTransaction.tradeId: the audit records what it
+   * acted on, it is not joined through.
    */
   detail String? @db.Text
 

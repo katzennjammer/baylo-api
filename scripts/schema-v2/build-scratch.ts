@@ -30,7 +30,7 @@ for (const oid of [1082, 1114, 1083, 1184]) types.setTypeParser(oid, (v) => v)
 types.setTypeParser(20, (v) => v)
 types.setTypeParser(1700, (v) => v)
 
-const V2 = ["20261003000000_schema_v2_core", "20261003000001_schema_v2_ledger", "20261003000002_schema_v2_trade"]
+const V2 = ["20261003000000_schema_v2_core", "20261003000001_schema_v2_ledger", "20261003000002_schema_v2_trade", "20261004000000_schema_v2_audit_fixes"]
 const TRAILER = "-- Baylo data dump complete"
 
 function arg(name: string): string | undefined {

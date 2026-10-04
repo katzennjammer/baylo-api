@@ -44,8 +44,8 @@ export async function loadAppeals(status: "open" | "decided", limit: number) {
     message: message!,
   }))
 
-  // The decisions being appealed, in one query. actionId is a plain string
-  // (the audit is pointed at, never joined), so this is the join by hand.
+  // The decisions being appealed, in one query. (actionId has been a real FK
+  // since the v2 audit fixes; this hand join still works and is left as is.)
   const actionIds = appeals.map((a) => a.actionId)
   const actions = actionIds.length
     ? await prisma.adminAction.findMany({
