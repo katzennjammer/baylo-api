@@ -1,258 +1,303 @@
 # Schema v2 cutover runbook
 
-**Status:** Stage 1 (rehearsal) and the pre-Stage-2 fixes are done (5 Oct 2026). Nothing in this runbook has been run against live. Stage 2 cannot start until the two remaining prerequisites in section 0 are built.
-**Rehearsed:** 4 Oct 2026 on `D:\BAYLO\backups\baylo-pg-20261004-221810.sql`, and on 5 Oct 2026 on `baylo-pg-20261005-080500.sql`. Both hold 34 tables, 1959 rows, ledger 1744 / 1804 / 60.
+**Status (5 Oct 2026):** all code is built and rehearsed, and nothing in this runbook has been run against live. What remains is the operator's run itself.
+**Rehearsed on:** `D:\BAYLO\backups\baylo-pg-20261004-221810.sql` and `baylo-pg-20261005-080500.sql`. Both hold 34 tables, 1959 rows, ledger 1744 / 1804 / 60.
 **Operator:** Jamaica. **Teammates:** Noor, John.
 **Design:** `docs/schema-v2.md`.
+
+**Branches** (API repo):
+
+| Branch | What it is | When |
+|---|---|---|
+| `feature/schema-v2` | v2 code, the cutover tool and these tests. Its app refuses `public`. | Before and during the cutover |
+| `feature/schema-v2-post-cutover` | `feature/schema-v2` plus one commit that lifts the "never `public`" guard. The app then refuses any **pre-v2** schema instead, and Prisma allows only `migrate status/deploy/diff/resolve` on `public`. **Not merged anywhere.** | Only after GO (section 7) |
+
 **Tools:**
-- `scripts/lib/migration-runner.ts` is the only way any script runs migration SQL or a dump;
-- `scripts/lib/api-role-lockdown.ts` holds the lockdown;
-- `scripts/schema-v2/cutover-rehearsal.ts` is the rehearsal driver.
 
-**Proofs:**
-- `scripts/schema-v2/test-migration-guard.ts`;
-- `scripts/schema-v2/test-pg-backup-target.ts <backup>`.
+| File | Role |
+|---|---|
+| `scripts/schema-v2/cutover-live.ts` | **The** live tool: `arm` / `run` / `verify` for `lockdown`, `migrate` and `rollback` |
+| `scripts/lib/migration-runner.ts` | The only way any script runs migration SQL or a dump. Holds the one-transaction cutover method |
+| `scripts/lib/api-role-lockdown.ts` | The anon/authenticated lockdown |
+| `scripts/schema-v2/cutover-rehearsal.ts` | Read-only inspection (`inspect-live`, `snapshot`, `state`, `counts`) and scratch copies (`restore-old`) |
 
-Live is one Supabase database: `aws-0-ap-southeast-1.pooler.supabase.com:5432`, database `postgres`, schema **`public`**. The scratch copies are other schemas in the same database. Every command below prints its target first. **Stop if the target is not the one the step names.**
+**Proofs** (each ends by showing live unchanged):
+- `test-migration-guard.ts`
+- `test-pg-backup-target.ts <backup>`
+- `test-cutover-live-e2e.ts <backup>`
+- `test-post-cutover-guards.ts <v2 copy> <pre-v2 copy>` (on the post-cutover branch)
+
+Live is one Supabase database: `aws-0-ap-southeast-1.pooler.supabase.com:5432`, database `postgres`, schema **`public`**. The scratch copies are other schemas in the same database. Every command prints its target first. **Stop if the target is not the one the step names.**
+
+All commands run from `D:\BAYLO\baylo` in PowerShell. Shorthands used below:
+```powershell
+$B = "D:\BAYLO\backups\<the backup from step 3>.sql"
+function cl { node_modules\.bin\tsx.cmd --env-file=.env scripts/schema-v2/cutover-live.ts @args }
+function cr { node_modules\.bin\tsx.cmd --env-file=.env scripts/schema-v2/cutover-rehearsal.ts @args }
+```
 
 ---
 
-## 0. Stage 2 prerequisites
+## 0. Prerequisites
 
-**Done (5 Oct 2026):**
-- **The migration runner.** One transaction. `search_path` is pinned at session level and re-checked before and after every batch. A plain inner `BEGIN;`/`COMMIT;` is stripped, and any other transaction control or path change is refused before it runs. Before COMMIT, a backstop checks that `public` has no row writes, no write locks and an unchanged catalog fingerprint, and rolls back if any of these fails. `build-scratch.ts`, `pg-backup.ts` (restore and drill) and `cutover-rehearsal.ts` all use it, and `test-migration-guard.ts` checks statically that every script reading migration SQL imports it.
-- **`pg-backup.ts` honours `?schema=`** for dump, counts, restore and drill. `restore` refuses `public` unless `--confirm-live-rollback` is passed **and** the operator types `ROLLBACK LIVE public <one-time code>` in a terminal. A pipe, CI or a pasted command cannot confirm. `restore --force` truncates and reloads in the same transaction, and `drill` builds the layout the backup was taken in.
-- **`verify-v2.ts` is actually read-only.** It sets `SET SESSION default_transaction_read_only = on`, runs one `REPEATABLE READ READ ONLY` transaction, and has Postgres refuse a write probe before any check runs. (The startup option it used before is dropped by the Supavisor pooler.)
-- **The cutover method** is `applyV2InTransaction()` (section 5), rehearsed on a fresh copy of live.
+All built on 5 Oct 2026:
+- the migration runner;
+- `pg-backup.ts` honouring `?schema=`;
+- `verify-v2.ts` proven read-only, now with `--new/--old/--post-cutover`;
+- the one-transaction method;
+- the live tool with its one-time arm token;
+- the post-cutover guard branch.
 
-**Still to build:**
-1. **The live applier**, `cutover-live.ts` (section 9). It is a thin wrapper that calls the same functions the rehearsal uses:
-   - `withGuardedTransaction(pg, { target: "public", live }, (g) => applyV2InTransaction(g))` for the migration;
-   - the `rollback` logic for rollback;
-   - `lockdownStatements("public", "postgres")` for section 4b.
-
-   `live` comes only from `confirmLiveWrite()`. The arm token, expiry and one-run consumption in section 9 are not built.
-2. **The guard-removal commit** on `feature/schema-v2`. This branch refuses `public` in `src/lib/db-schema.ts` `assertV2Schema` (app and scripts), in `prisma.config.ts` (`migrate`/`db`) and in `scripts/v2.mjs`. Until the first two flip, teammates cannot run this branch against live (step 7), and `prisma migrate status` cannot read live in step 6.
+The design is in section 9.
 
 ## 1. Go / no-go criteria
 
-**GO** only if every line holds at T-0, immediately before step 5:
+`cl arm` checks G1–G7, G9 and G11 itself and refuses to arm on any NO-GO.
 
-| # | Check | Expected | Source |
+| # | Check | Expected | Checked by |
 |---|---|---|---|
-| G1 | Backup from step 3 | `BACKUP VERIFIED`, trailer matches live exactly | `backup-baylo-pg.ps1` |
-| G2 | Ledger on live | all three checks hold (1744 / 1804 / 60 on 5 Oct) | `inspect-live` |
-| G3 | Hidden trades | **0**. `drop_trade_hidden` refuses otherwise | `inspect-live` |
-| G4 | CommentLike / ConversationHide rows | 0 / 0 | `inspect-live` |
-| G5 | Open DeferredContract | 0 | `inspect-live` |
-| G6 | Orgs without exactly one ACTIVE OWNER | 0 | `inspect-live` |
-| G7 | App connections | **none** (step 4.3) | `inspect-live` |
-| G8 | Fresh dry run on a copy of **this** backup | `SCHEMA V2 VERIFIED`, 0 FAIL | step 3 |
-| G9 | Live `_prisma_migrations` | 28 rows, 27 finished, 1 rolled back (`20260923000003_daily_quests`), 0 unfinished; only the six v2 migrations pending | `inspect-live` |
-| G10 | Guard tests on this commit | `MIGRATION GUARD TEST PASSED` and `PG-BACKUP TARGET TEST PASSED` | step 2.4 |
-| G11 | API-role lockdown (step 4b) | `public`: 0 tables reachable by anon/authenticated; no postgres default ACL granting them; every table owned by `postgres` | `inspect-live` |
+| G1 | Nothing written since the backup | 34/34 tables equal the backup trailer | `cl arm` |
+| G2 | Ledger | all three checks hold | `cl arm` |
+| G3 | Hidden trades | 0 | `cl arm` |
+| G4 | CommentLike / ConversationHide | 0 / 0 | `cl arm` |
+| G5 | Open DeferredContract | 0 | `cl arm` |
+| G6 | Orgs without exactly one ACTIVE OWNER | 0 | `cl arm` |
+| G7 | App connections | none (any `postgres` backend other than the tool and pg_net) | `cl arm`, and again by `cl run` |
+| G8 | Dress rehearsal on a copy of **this** backup | step 3: lockdown → migrate → verify all PASS | operator |
+| G9 | `_prisma_migrations` | no v2 row, nothing unfinished | `cl arm` |
+| G10 | Guard tests on this commit | all PASSED | step 2.4 |
+| G11 | Lockdown before migrate | 0 tables reachable by anon/authenticated; every table owned by `postgres` | `cl arm --purpose migrate` |
 
 **NO-GO**: any check fails, or a teammate has not confirmed that their server is stopped.
 
 ## 2. Pre-checks (T-60 min)
 
-1. Check that both repos are on the release commits: API `feature/schema-v2` with the section 0 commits, and mobile `feature/schema-v2`. `git status` must be clean.
-2. Read-only live inspection:
-   ```powershell
-   cd D:\BAYLO\baylo
-   node_modules\.bin\tsx.cmd --env-file=.env scripts/schema-v2/cutover-rehearsal.ts inspect-live
-   ```
-   It prints `session read-only: on (asserted)`. Record G2 to G6, G9 and the API-role exposure line.
-3. Run `ListAgents` and ask any other Claude session to stay out of both repos, the database and servers until the cutover is over.
-4. Run the guard tests (they write only to `schema_v2_cut_*` scratch schemas, and each proves at its end that live is unchanged). That gives G10.
+1. Both repos are on `feature/schema-v2` (API at or after `7cd8715`; mobile `feature/schema-v2`), and `git status` is clean.
+2. Run `cr inspect-live` (read-only; it prints `session read-only: on (asserted)`).
+3. Run `ListAgents` and ask any other Claude session to stay out of both repos, the database and servers.
+4. Run the guard tests (they write only to `schema_v2_cut_*` scratch schemas). That gives G10.
    ```powershell
    node_modules\.bin\tsx.cmd --env-file=.env scripts/schema-v2/test-migration-guard.ts
-   node_modules\.bin\tsx.cmd --env-file=.env scripts/schema-v2/test-pg-backup-target.ts D:\BAYLO\backups\<latest>.sql
+   node_modules\.bin\tsx.cmd --env-file=.env scripts/schema-v2/test-pg-backup-target.ts <latest backup>
    ```
 
-## 3. Backup and fresh dry run (T-30 min, about 2 min)
+## 3. Backup and dress rehearsal (T-30 min, about 2 min)
 
-1. Run the backup (read-only on live; about 10 to 13 s):
+1. Run the backup (read-only on live; 10–13 s). Set `$B` to the file it names. It must end `BACKUP VERIFIED` with `every table matches the live database exactly`.
    ```powershell
    powershell -ExecutionPolicy Bypass -File scripts\backup-baylo-pg.ps1 -UseFallback
    ```
-   Record the file name as `$B`. The output must end `BACKUP VERIFIED` with `every table matches the live database exactly`.
-2. Restore drill (scratch only, and rolled back, so nothing is left behind):
+2. Restore drill (scratch, rolled back; about 15 s). It must print `RESTORE DRILL PASSED`.
    ```powershell
    node_modules\.bin\tsx.cmd --env-file=.env scripts/pg-backup.ts drill $B
    ```
-   It must print `RESTORE DRILL PASSED`.
-3. Dry run with **the cutover method** on a fresh copy of `$B` that carries live's `_prisma_migrations` (about 12 s to restore, 5 s to apply, under a minute to verify):
+3. **Dress rehearsal: the whole tool, end to end, on a copy of `$B`.** It takes about 3 min, includes every refusal path, and must end `CUTOVER TOOL E2E PASSED` (G8). It leaves no token and no schema behind.
    ```powershell
-   node_modules\.bin\tsx.cmd --env-file=.env scripts/schema-v2/cutover-rehearsal.ts restore-old $B --schema schema_v2_cutgo --replace
-   node_modules\.bin\tsx.cmd --env-file=.env scripts/schema-v2/cutover-rehearsal.ts restore-old $B --schema schema_v2_cutgo_src --replace
-   node_modules\.bin\tsx.cmd --env-file=.env scripts/schema-v2/cutover-rehearsal.ts apply-single --schema schema_v2_cutgo
-   node_modules\.bin\tsx.cmd --env-file=.env scripts/schema-v2/cutover-rehearsal.ts state --schema schema_v2_cutgo   # FULLY NEW
-   npm run v2:tsx -- scripts/schema-v2/verify-v2.ts --schema schema_v2_cutgo                                          # SCHEMA V2 VERIFIED (G8)
+   node_modules\.bin\tsx.cmd --env-file=.env scripts/schema-v2/test-cutover-live-e2e.ts $B
+   ```
+4. Build the **old-side copy** for the post-cutover comparison (about 12 s):
+   ```powershell
+   cr restore-old $B --schema schema_v2_cutgo_src --replace
    ```
 
-> **Never use `prisma migrate deploy` for the cutover.** It runs the six files as six transactions. Killed mid-way on 4 Oct, it left a copy **half-migrated**: core and ledger committed, trade not, plus an unfinished `_prisma_migrations` row that blocks the next deploy with P3009.
+> **Never use `prisma migrate deploy` for the cutover.** It runs the six files as six transactions. Killed mid-way on 4 Oct, it left a copy **half-migrated**, plus a P3009 row blocking the next deploy.
 
 ## 4. Freeze (T-10 min)
 
-1. **Noor and John:** stop every `npm run dev`, `next start` and `tsx` script that uses the API's `.env`, using **Ctrl+C**. Never force-kill: a hard kill strands session-pooler connections in the Supabase pool. Each of you confirms "stopped" in the team chat.
+1. **Noor and John:** stop every `npm run dev`, `next start` and `tsx` script that uses the API's `.env`, using **Ctrl+C**. Never force-kill: a hard kill strands session-pooler connections. Each of you confirms "stopped" in the team chat.
 2. Jamaica stops her own servers the same way, including any `dev:v2`.
-3. **Confirm that no app is connected, right before migrating.** Run `inspect-live` and read the `pg_stat_activity` block.
-   - **Expected:** only Supabase's own sessions:
-     - `authenticator` / PostgREST;
-     - `pgbouncer` / Supavisor (auth_query);
-     - `postgres` / pg_net;
-     - `supabase_admin` (pg_cron, postgres_exporter, idle `show archive_mode`).
-   - **Plus exactly one** `postgres` / `Supavisor` row in state `active`: the inspection itself.
-   - App servers **also** appear as `postgres` / `Supavisor`, through either pooler, so the rule is by count: any second `postgres` row other than pg_net is an app connection. Find its owner and stop it gracefully. **No-go until it is gone.** (The migration's `LOCK … NOWAIT` is the hard backstop: it aborts with nothing changed if anything holds a table.)
-   - Rehearsal reading, 4 Oct 22:17: exactly the expected set.
-4. If anything could have written since step 3, compare live with `$B` (`cutover-rehearsal.ts counts --schema schema_v2_cutgo_src --backup $B` must show `differ from live: 0`). Otherwise take a new `$B`.
+3. **Confirm no app is connected, right before migrating.** Run `cr inspect-live` and read `pg_stat_activity`.
+   - **Expected:** only Supabase's own sessions (`authenticator`/PostgREST, `pgbouncer`/Supavisor auth_query, `postgres`/pg_net, `supabase_admin` pg_cron/exporter), plus the inspection's own `postgres`/`Supavisor` row.
+   - App servers also appear as `postgres`/`Supavisor`, so any **second** such row is an app connection. `cl arm` and `cl run` refuse on it (G7), and `LOCK … NOWAIT` inside the transaction is the final backstop.
 
-## 4b. API-role lockdown (T-2 min, about 1 s)
+## 4b. Lockdown (T-2 min; rehearsed 6.1 s in the transaction, about 12 s with arm)
 
-**Why.** On live, `anon` and `authenticated` hold every privilege on all 35 `public` tables, and RLS is off. Supabase's default ACLs give every new table the same grants. Anyone with the project's anon key could read and rewrite every row through PostgREST.
-
-**Nothing uses those roles** (checked 5 Oct 2026):
-- the API reaches Postgres only as `postgres` through Prisma (`pg` driver);
-- the API, the admin web (`src/app/admin`, same repo) and the mobile app have no `@supabase/*` package, no PostgREST or GraphQL URL, and no anon or service key;
-- the only Supabase value in any `.env` is the Postgres connection string.
-
-**When.** It runs **before** step 5, so the v2 tables are created without the grants and there is never a window in which they have them.
-
-**Run.** It runs through the live applier, with its own typed confirmation, in one transaction. The statements come from `lockdownStatements("public", "postgres")`:
-```sql
-REVOKE ALL PRIVILEGES ON ALL TABLES    IN SCHEMA "public" FROM anon, authenticated;
-REVOKE ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA "public" FROM anon, authenticated;
-REVOKE ALL PRIVILEGES ON ALL ROUTINES  IN SCHEMA "public" FROM anon, authenticated;
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA "public" REVOKE ALL ON TABLES    FROM anon, authenticated;
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA "public" REVOKE ALL ON SEQUENCES FROM anon, authenticated;
-ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA "public" REVOKE ALL ON FUNCTIONS FROM anon, authenticated;
+```powershell
+cl arm --purpose lockdown --backup $B                  # every line GO, then "ARMED lockdown on public until …"
+$env:BAYLO_CUTOVER_LIVE = "1"
+cl run --purpose lockdown --confirm-live-lockdown      # type:  LOCKDOWN LIVE public <code>
+Remove-Item Env:BAYLO_CUTOVER_LIVE
+cl verify --purpose lockdown --backup $B               # VERIFY LOCKDOWN PASSED: 0/35 exposed, still pre-v2, 34/34 = backup
 ```
+
+**What it does, in one transaction:** REVOKE ALL on every table, sequence and routine in `public` from `anon` and `authenticated`, and from `postgres`'s default privileges there. Before commit it asserts that 0 objects are reachable.
+
+**Why:** on 4 Oct, `anon` and `authenticated` held every privilege on all 35 `public` tables with RLS off. Anyone with the anon key could read and rewrite every row through PostgREST.
+
+**Nothing uses those roles** (checked 5 Oct):
+- the API reaches Postgres only as `postgres` through Prisma;
+- the API, the admin web and mobile have no supabase-js, PostgREST/GraphQL URL or anon key.
+
 `service_role` and `postgres` are untouched.
 
-**Verify (G11).** `inspect-live` must print `API-role exposure of public: tables 0/35 …` and `public table owners: postgres x35`, and no `postgres/… -> anon|authenticated` default ACL. After step 5 the line reads `0/26` (25 tables plus `_prisma_migrations`).
-
-**Rehearsed** 5 Oct on `schema_v2_cut4`, a copy in the v2 layout mirrored to live's exact grants:
-- before: 26/26 tables exposed;
-- after: 0/26 tables exposed and no granting default ACLs; a table created afterwards had anon SELECT false and authenticated INSERT false; service_role and postgres kept full access;
-- time: 741 ms.
-
 **Limits, stated rather than fixed:**
-- **`supabase_admin`'s default ACLs** in `public` still grant anon and authenticated, and this role **cannot** change them: `permission denied to change default privileges`, measured on the copy. A table created *by `supabase_admin`* (for example by the Supabase dashboard's table editor, if it runs as that role) would be exposed again. **Rule:** create tables only through migrations, which run as `postgres`. The G11 owner check catches a stray table. To remove those defaults, ask Supabase support or use the dashboard SQL editor as `supabase_admin`.
-- **Functions:** every new function gets EXECUTE through `PUBLIC` by the *global* built-in default, which a per-schema revoke cannot remove. `public` has no functions and no migration creates one. Changing this needs `ALTER DEFAULT PRIVILEGES FOR ROLE postgres REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC`, which is database-wide, so it is a separate decision.
-- **`storage` (7 tables) and `realtime` (1 table)** are Supabase-managed schemas that anon can read. They are out of scope; Baylo uses neither.
+- **`supabase_admin`'s default ACLs** in `public` still grant anon and authenticated, and our role **cannot** change them (`permission denied to change default privileges`). Create tables only through migrations, which run as `postgres`. `cl arm` and `cl verify` fail if any table is not owned by `postgres`. To clear those defaults, ask Supabase support or use the dashboard SQL editor as `supabase_admin`.
+- **Functions** get EXECUTE through `PUBLIC` by the global built-in default. `public` has none and no migration creates one; changing it is a database-wide decision.
+- **`storage`** (7 tables) and **`realtime`** (1 table) are Supabase-managed and out of scope.
 
-**Undo** (only if something unexpectedly depended on anon): `undoStatements("public")` in `api-role-lockdown.ts`, the same six statements with GRANT/TO.
+**Undo:** `undoStatements("public")` in `api-role-lockdown.ts`.
 
-## 5. Migrate (T-0)
+## 5. Migrate (T-0; rehearsed 8.5 s in the transaction, 9.4 s wall clock)
 
-**The method, and the only one:** `applyV2InTransaction()` inside `withGuardedTransaction()`, run by the live applier. **One transaction** holds:
-1. Prisma's own migrate advisory lock (`pg_advisory_xact_lock(72707369)`), so no concurrent `prisma migrate` can interleave;
-2. `LOCK TABLE` on every table `IN ACCESS EXCLUSIVE MODE NOWAIT`, with `lock_timeout 5s`. If any app is mid-work, this aborts with nothing changed;
-3. a refusal if any v2 migration is already recorded;
-4. the six v2 migrations in order. Each goes through the runner: validated, pinned, re-checked;
-5. **the six `_prisma_migrations` rows**, written in the same transaction exactly as `prisma migrate deploy` writes them: uuid, checksum, `started_at`, `finished_at`, `applied_steps_count = 1`;
-6. a check of 25 tables and all three ledger checks, still **inside** the transaction. A failure raises and rolls everything back;
-7. COMMIT. It is the only commit.
+```powershell
+cl arm --purpose migrate --backup $B                   # every line GO (G11 needs 4b first), "ARMED migrate …"
+$env:BAYLO_CUTOVER_LIVE = "1"
+cl run --purpose migrate --confirm-live-migrate        # type:  MIGRATE LIVE public <code>
+Remove-Item Env:BAYLO_CUTOVER_LIVE
+```
+**Expected:** `re-checked: counts and ledger as armed, no app connections`, then `locked 35 tables NOWAIT, migrate lock held`, six `applied …` lines, `25 tables; … holds; … holds; … holds`, and `MIGRATE COMMITTED on public in … ms (one transaction)`.
 
-The checksum is SHA-256 over LF line endings (what git stores). On 4 Oct it matched byte for byte the checksums Prisma's own `deploy` wrote, and it matches live's 27 pre-v2 rows. So it reads the same from a CRLF checkout on Windows.
+**One transaction** holds:
+1. Prisma's migrate advisory lock;
+2. `LOCK TABLE … ACCESS EXCLUSIVE NOWAIT` on every table;
+3. the six migrations, each validated and pinned by the runner;
+4. the six `_prisma_migrations` rows, written exactly as `prisma migrate deploy` writes them (LF checksums, identical to Prisma's);
+5. the 25-table count and all three ledger checks, still inside the transaction.
 
-**Expected:** six `applied …` lines, then `25 tables; … holds; … holds; … holds` and `DONE`. It takes about 4.7 s in the transaction, 5.6 s wall clock (5 Oct, on a fresh copy of live).
+Any failure rolls back **everything**, and live stays fully old.
 
-**Rehearsed on a fresh copy of live, 5 Oct** (`schema_v2_cut4`, from `baylo-pg-20261005-080500.sql`, carrying live's 28 `_prisma_migrations` rows):
-- **Killed** after migration 3 (`pg_terminate_backend`, mid-transaction): **FULLY OLD**. 34/34 tables equal the backup, 0 v2 rows, ledger intact.
-- **Run fully:** FULLY NEW, then `SCHEMA V2 VERIFIED` (0 FAIL), `prisma migrate status` → *Database schema is up to date!*, a follow-up `prisma migrate deploy` → *No pending migrations to apply*, and `migrate diff` → only the known Achievement drift.
+**Rehearsed on fresh copies of live** (`schema_v2_cut4`, `schema_v2_cut_e2e`, `schema_v2_cut_suite`):
+- **Killed** mid-run with `pg_terminate_backend`: FULLY OLD, 34/34 tables equal to the backup.
+- **Run fully:** VERIFY MIGRATE PASSED; `verify-v2 --new <copy> --old <src>` SCHEMA V2 VERIFIED (0 FAIL); `prisma migrate status` reports up to date, and a follow-up `prisma migrate deploy` reports "No pending migrations to apply".
 
-## 6. Verify (T+1 to T+15 min)
+## 6. Verify (T+1 to T+20 min)
 
-1. `cutover-rehearsal.ts state` against live (read-only; the live applier provides it) must say `FULLY NEW (25 tables, 6 v2 rows)`, and the three ledger checks must hold.
-2. `prisma migrate status` → `Database schema is up to date!` (after the guard-removal commit).
-3. `migrate diff` from live to `schema.prisma` must show **only** the Achievement drift: `updatedAt` DROP DEFAULT, and `Achievement_key` → `Achievement_key_key`.
-4. `inspect-live` → API-role exposure `0/26` (G11 still holds).
-5. Start **one** server on the release commit (`npm run dev`) and sign in from the phone. Check:
-   - home and marketplace load with photos (ItemImage);
-   - an item page shows its wanted categories;
-   - the trades list and an old chat with an embedded offer card (legacy offer id) render;
-   - the profile shows Leaves (the ledger).
-6. Run the verify suite against that server, one server per run. Run `verify-mobile-auth` first, then restart before `verify-email-verification` (the register limit is 3 per hour per server). Known failures that are not v2 regressions: email-verification 1, bracket-trading ≤ 13, trust-tier 2, org-trading-http 1, org-cloudinary 2, assistant-samples. **The suite has not been run against a v2 copy yet** (Stage 1 stopped before it).
+1. `cl verify --purpose migrate --backup $B` must print `VERIFY MIGRATE PASSED`. It checks:
+   - FULLY NEW (25 tables, 6 v2 rows);
+   - the ledger;
+   - 0/26 exposed;
+   - owners;
+   - the carried-over counts against the backup.
+2. Full data comparison: live against the pre-cutover backup in the old layout. Read-only, proven; under a minute. It must print `SCHEMA V2 VERIFIED`.
+   ```powershell
+   npm run v2:tsx -- scripts/schema-v2/verify-v2.ts --new public --old schema_v2_cutgo_src --post-cutover
+   ```
+3. Switch the operator's tree to the post-cutover branch. All servers are still stopped.
+   ```powershell
+   git fetch origin; git checkout feature/schema-v2-post-cutover
+   npx prisma generate
+   npx prisma migrate status    # "Database schema is up to date!"  (allowed on public on this branch)
+   npx prisma migrate diff --from-config-datasource --to-schema prisma/schema.prisma --script   # only the Achievement drift
+   ```
+4. Start **one** server: `Remove-Item -Recurse -Force .next\dev; npm run dev`.
+   - Its startup gate must print `[schema v2] database: schema "public" (v2 layout confirmed, …)`.
+   - On a pre-v2 `public` it refuses to boot. That was tested on 5 Oct against live as it is now.
+5. Smoke-test from the phone:
+   - home and marketplace show photos;
+   - an item page shows wanted categories;
+   - the trades list and an old chat's offer card render;
+   - Leaves show on the profile.
+6. Run the verify suite against that server:
+   - foreground batches, one suite at a time;
+   - `verify-mobile-auth` first;
+   - restart the server before `verify-email-verification` (the register limit is 3 per hour per server).
+
+   **Baseline** (measured on the v2 copy, 5 Oct; see section 10). Anything outside it is a regression:
+   - bracket-trading ≤ 13 failures (8 on 5 Oct);
+   - org-cloudinary 2;
+   - org-trading-http 1;
+   - trust-tier 2;
+   - assistant-samples failing;
+   - email-verification 1;
+   - org-settlement-http 1 (check 4d, **pre-existing**: it fails the same way on the pre-v2 code, see section 10);
+   - every other suite passes.
 
 ## 7. Post-cutover: teammates switch branch
 
-Only after GO at step 6, and only once the guard-removal commit is on `feature/schema-v2`.
+Only after GO at step 6. Teammates move to **`feature/schema-v2-post-cutover`**; the pre-cutover branch refuses `public` by design. Whether and when it is merged into `feature/schema-v2` or `main` is a separate decision; until then nobody merges it.
 
 ```powershell
 # API
-git fetch origin; git checkout feature/schema-v2; git pull
+git fetch origin; git checkout feature/schema-v2-post-cutover; git pull
 npm ci
 npx prisma generate                      # a running server keeps the old client
 Remove-Item -Recurse -Force .next\dev    # a stale dev cache gives HTML 404s on nested routes
-npm run dev
+npm run dev                              # must print "v2 layout confirmed"
 # Mobile
 git fetch origin; git checkout feature/schema-v2; git pull; npm ci
 ```
 
 Nobody runs the **old** branches against live again. Their code reads Offer, TradeRequest and TaskCompletion, which no longer exist.
 
-Jamaica then drops the `schema_v2_cut*` and `schema_v2_cutgo*` rehearsal schemas once they are no longer needed. `.env.v2` was restored to `schema_v2_wk1` on 5 Oct.
+Afterwards Jamaica drops `schema_v2_cutgo_src` once nothing needs it any more.
 
-## 8. Rollback
+## 8. Rollback (rehearsed 17.7 s in the transaction, 18.6 s wall clock)
 
 ### Triggers. Roll back if any of these happens:
-- the applier reports anything but `DONE`. It is atomic, so live is **fully old** and nothing needs undoing: confirm with `state` (`FULLY OLD`), fix the cause, and decide again;
-- `state` is not `FULLY NEW`, or any ledger check fails;
+- `cl run --purpose migrate` prints anything but COMMITTED. It is atomic, so live is **fully old**: check with `cl verify --purpose lockdown --backup $B`, fix the cause, and decide again. There is nothing to roll back;
+- `cl verify --purpose migrate` fails, or `verify-v2 --post-cutover` reports a FAIL;
 - `migrate status` is not up to date, or `migrate diff` shows more than the Achievement drift;
+- the post-cutover server refuses to boot on `public`;
 - a step 6.5 smoke check fails in a way that cannot be fixed forward within 30 minutes;
 - any money-moving flow fails: an offer with Leaves, accept, the bridge fee, or a confirm code.
 
-### Steps (rehearsed: 1.87 s for the transaction, 3.4 s wall clock)
-1. Freeze again (step 4): all servers stopped, no app connections.
-2. Run the live `rollback $B` through the live applier, with its own typed confirmation. **One guarded transaction** that:
-   - drops the 25 v2 tables and every enum type in `public` (the `public` schema itself, its grants and default ACLs, and `_prisma_migrations` stay);
-   - deletes the six v2 rows from `_prisma_migrations`;
-   - rebuilds the pre-v2 structure from the 27 old migrations through the runner, with `drop_removed_roles`' inner BEGIN/COMMIT stripped;
-   - restores `$B`.
+### Steps
+1. Freeze again (step 4): every server stopped with Ctrl+C, and the operator's tree back on `feature/schema-v2`. The post-cutover branch's server would refuse the rolled-back schema anyway.
+2. Run the rollback:
+   ```powershell
+   cl arm --purpose rollback --backup $B
+   $env:BAYLO_CUTOVER_LIVE = "1"
+   cl run --purpose rollback --confirm-live-rollback    # type:  ROLLBACK LIVE public <code>
+   Remove-Item Env:BAYLO_CUTOVER_LIVE
+   cl verify --purpose rollback --backup $B             # VERIFY ROLLBACK PASSED: FULLY OLD, 34/34 = backup, 0 v2 rows, still 0 exposed
+   ```
+   In one guarded transaction it:
+   - drops the 25 v2 tables and every enum;
+   - deletes the six v2 `_prisma_migrations` rows;
+   - rebuilds the pre-v2 structure through the runner (with `drop_removed_roles`' inner BEGIN/COMMIT stripped);
+   - restores `$B` and asserts the counts and the ledger before commit.
 
-   The lockdown from step 4b survives, because the default ACLs are kept and the rebuilt tables are created by `postgres`.
+   The `public` schema, its grants and default ACLs, `_prisma_migrations` and the lockdown all survive.
+3. Teammates stay on (or go back to) the pre-v2 branch, then `npx prisma generate`, delete `.next\dev`, and restart.
+4. **Data written between step 5 and the rollback is lost**, because the backup is from before the migration. The freeze keeps this window empty, so do not unfreeze until GO or rollback.
 
-   *`pg-backup.ts restore $B --force --confirm-live-rollback` is the other path. It needs the **old structure still in place**: it truncates and reloads rows, it does not rebuild tables. Use it only for "old layout, bad data", never after a successful migration.*
-3. Verify:
-   - `state` → `FULLY OLD (34 tables, no v2 bookkeeping)`;
-   - `counts` against `$B` → `differ from backup: 0`;
-   - ledger figures equal to `$B`'s trailer;
-   - `migrate status` (from the **old** branch) shows nothing pending.
-4. Teammates stay on (or go back to) the pre-v2 branch, then `npx prisma generate`, delete `.next\dev`, and restart.
-5. **Data written between step 5 and the rollback is lost**, because the backup is from before the migration. The freeze is what keeps this window empty, so do not unfreeze until GO or rollback.
+*`pg-backup.ts restore $B --force --confirm-live-rollback` is a different tool, for "old layout intact, data bad". It truncates and reloads rows; it does not rebuild tables. Never use it after a successful migration.*
 
-## 9. The one-time live-write override (design; the typed gate exists, the token does not)
+## 9. The one-time live-write override (built and tested 5 Oct)
 
-The override has to lift the guard for exactly one run, for one stated purpose, against one stated backup. It must not be possible to supply by accident, and it must close again whether the run succeeds or crashes. The existing guards (`v2.mjs`, `prisma.config.ts`, `assertV2Schema`, `live-guard.ts`, `migration-runner.ts`) stay as they are for everything else.
+- **Arm** (read-only): runs the go/no-go checks. Only if all pass does it write `D:\BAYLO\backups\.cutover-armed.json`, holding: purpose, target, host, database, backup path and SHA-256, the target's per-table counts and ledger, OS user, a one-time code, and a **15-minute** expiry. It refuses if a token is already armed. Nothing is written to the database.
+- **Run** requires:
+  - `BAYLO_CUTOVER_LIVE=1` in the shell;
+  - the token, **consumed first**: renamed to `.cutover-used-<ts>.json` before anything else, so a crash, kill, refusal or success all disarm it;
+  - that the token matches: same purpose, unexpired, same OS user, same database, unchanged backup hash;
+  - for `public`, `confirmLiveWrite()`: the `--confirm-live-<purpose>` flag, an interactive terminal, and the typed `<PURPOSE> LIVE public <code>`;
+  - and, on re-reading the target: counts and ledger exactly as armed, and no app connections.
 
-- **Built (5 Oct):** `confirmLiveWrite(purpose)` in `migration-runner.ts`. It needs the explicit `--confirm-live-<purpose>` flag and an interactive terminal, and the operator must type `<PURPOSE> LIVE public <one-time code>`. `withGuardedTransaction` accepts `target: "public"` only with the branded object it returns; a forged object is refused (tested). `pg-backup.ts restore` uses it.
-- **Not built:**
-  1. **Arm** (`cutover-live.ts arm --purpose lockdown|migrate|rollback --backup $B`):
-     - it runs every G check read-only and refuses on any failure;
-     - it writes `D:\BAYLO\backups\.cutover-armed.json`, holding the purpose, backup path, backup SHA-256, live per-table counts, ledger figures, OS user, `createdAt`, and `expiresAt = createdAt + 15 min`.
-  2. **Run** (`cutover-live.ts run`):
-     - it requires `BAYLO_CUTOVER_LIVE=1`, the token **and** `confirmLiveWrite()`;
-     - it **renames the token to `.cutover-used-<ts>.json` before connecting**, so a crash, a kill or a success all leave it disarmed;
-     - it refuses if the token has expired, its purpose does not match, the backup hash changed, or live's counts or ledger differ from the token;
-     - it then runs the section 4b, 5 or 8 transaction and logs to `D:\BAYLO\backups\cutover-<ts>.log`.
-  3. **Expire:** the token is single-use with a 15-minute life, and the env flag is per-shell. Nothing is written to the database to arm it.
+  It logs to `D:\BAYLO\backups\cutover-<ts>.log`.
+- **The existing guards stay** for everything else: `v2.mjs`, `prisma.config.ts`, `assertV2Schema`, `live-guard.ts` and the runner.
+- **Tested** by `test-cutover-live-e2e.ts`. Ten refusals: no token, no env flag, migrate before lockdown, a second arm, wrong purpose, expired, counts changed, backup changed, another OS user, wrong phrase. Plus the live path with no terminal and without the flag, refused before connecting.
 
 ## 10. Rehearsal record
 
 | Date | Step | Result | Time |
 |---|---|---|---|
-| 4 Oct | Backup `…20261004-221810.sql` | VERIFIED, 34 tables, 1959 rows, matches live | 13.4 s |
-| 4 Oct | Restore drill (`schema_v2_cut1_src`) | 34/34 tables equal live and backup | — |
-| 4 Oct | Dry run, build-scratch (`schema_v2_cut1`) | SCHEMA V2 VERIFIED, 0 FAIL | 0.82 s for six migrations |
-| 4 Oct | Real `prisma migrate deploy` on a live replica (`schema_v2_cut2`) | exit 0, up to date, VERIFIED; but six transactions | 10.0 s |
-| 4 Oct | Kill mid-trade, six transactions | **HALF** (26 tables, two v2 rows committed) | — |
-| 4 Oct | Rollback over a migrated copy | FULLY OLD, 34/34 equal to backup | 1.87 s |
-| 5 Oct | `test-migration-guard.ts` | PASSED: hazard reproduced with reads only; runner kept one txid; 5 dynamic escapes onto a decoy rolled back; live identical | — |
+| 4 Oct | Backup `…20261004-221810.sql` | VERIFIED, matches live | 13.4 s |
+| 4 Oct | `prisma migrate deploy` on a live replica | worked, but six transactions; killed mid-way → **HALF** | 10.0 s |
+| 4 Oct | Rollback over a migrated copy | FULLY OLD, 34/34 | 1.87 s |
 | 5 Oct | Backup `…20261005-080500.sql` | VERIFIED, matches live | 10.2 s |
-| 5 Oct | `test-pg-backup-target.ts` | PASSED: restore into `?schema=`, row-for-row equal to live; `--force` atomic; 4 ways at `public` refused; drill passes and leaves nothing; live identical | — |
-| 5 Oct | Cutover method, killed after migration 3 (`schema_v2_cut4`) | **FULLY OLD**, 34/34 equal to backup | — |
-| 5 Oct | Cutover method, full run | FULLY NEW; VERIFIED 0 FAIL; `migrate status` up to date; `deploy` no-op | 4.7 s (5.6 s wall clock) |
-| 5 Oct | API-role lockdown on the v2 copy | VERIFIED: 26/26 → 0/26, new tables unexposed, service_role and postgres intact | 0.74 s |
-| — | Verify suite (`verify-*.ts` via a `dev:v2` server) | **not yet run** | — |
+| 5 Oct | `test-migration-guard.ts` | PASSED | — |
+| 5 Oct | `test-pg-backup-target.ts` | PASSED | — |
+| 5 Oct | Cutover method killed mid-run (`cut4`) | **FULLY OLD**, 34/34 | — |
+| 5 Oct | Cutover method full run (`cut4`) | FULLY NEW, VERIFIED, migrate status up to date | 4.7 s |
+| 5 Oct | **`test-cutover-live-e2e.ts`**: the tool end to end on a copy of live (live's history and grants) | **PASSED**, 0 FAIL, live identical | about 3 min in total |
+| | — `cl` lockdown | arm 4.5 s, run 7.2 s wall (6.1 s in the transaction), verify 4.5 s | |
+| | — `cl` migrate | arm 4.7 s, run 9.4 s wall (8.5 s in the transaction), verify 3.5 s | |
+| | — `cl` rollback | arm 3.6 s, run 18.6 s wall (17.7 s in the transaction), verify 4.8 s | |
+| 5 Oct | Suite copy `schema_v2_cut_suite` built with `cl` lockdown + migrate | VERIFY LOCKDOWN / MIGRATE PASSED | 5.3 s + 8.0 s |
+| 5 Oct | **Verify suite** on `schema_v2_cut_suite` via `npm run dev:v2` (all 40; one restart before email-verification) | 34 pass. The 6 that fail are all baseline: bracket-trading 8, org-cloudinary 2, org-trading-http 1, trust-tier 2, assistant-samples, email-verification 1, and org-settlement-http 1 (pre-existing, below) | about 22 min |
+| 5 Oct | org-settlement-http on the **pre-v2 code** (`8c0277f`, temporary worktree, webpack) against an **old-layout** copy of the same backup, run twice | 4d fails identically in both runs (95 passed, 1 failed), so it is **pre-existing**; live fingerprint identical before and after (`4a5835f1…8906`) | 90 s + 70 s |
+| 5 Oct | `test-post-cutover-guards.ts` (post-cutover branch) | PASSED: v2 copy starts; pre-v2 copy and live `public` refuse; reset/dev/push refused before connecting | — |
+| 5 Oct | Dropped `schema_v2_cut1`–`cut4` and their `_src` twins | live fingerprint identical before and after (`4a5835f1…8906`) | — |
+
+**org-settlement-http 4d: pre-existing, in the baseline.** The check *"anything the person's review moved is a QUEST_REWARD"* sums every non-TRADE_REWARD ledger row the person received in the last **60 s of wall-clock time**, and compares that with how much their balance moved during the review. The trade completing a few seconds earlier writes a 20-Leaf TASK_REWARD (and sometimes a quest reward) inside that window, so the check fails whenever the suite runs at normal speed. Measured on 5 Oct:
+
+| Code / layout | Run | Balance during the review | Rows in the 60 s window |
+|---|---|---|---|
+| v2 (`schema_v2_cut_suite`) | 1 | 26 → 26 | TASK_REWARD 20 |
+| v2 | 2 | 29 → 31 | TASK_REWARD 20, QUEST_REWARD 5, QUEST_REWARD 2 |
+| pre-v2 `8c0277f` (`schema_v2_cut_old`) | 1 | 26 → 28 | TASK_REWARD 20, QUEST_REWARD 2 |
+| pre-v2 `8c0277f` | 2 | 26 → 26 | TASK_REWARD 20 |
+
+The old run was safe from the 23 Sep raw-SQL hazard: its `DATABASE_URL` carried `options=-c search_path="schema_v2_cut_old",extensions`, and a probe through the old code's own Prisma client showed raw SQL resolving to the copy. Live's fingerprint was unchanged.
+
+**Fix (not applied; needs approval):** scope the rows to `createdAt >` the moment the review request was sent, instead of `now - 60 s`.
