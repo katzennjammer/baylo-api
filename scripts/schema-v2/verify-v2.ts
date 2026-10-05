@@ -3,10 +3,17 @@
 //
 //   npx tsx --env-file=.env scripts/schema-v2/verify-v2.ts [--schema schema_v2_wk1]
 //
-// READ-ONLY. The session is opened with default_transaction_read_only, and
-// every table is named "<schema>"."<Table>" -- nothing resolves through the
-// search_path, so nothing can land in public by accident (see the 23 Sep 2026
-// incident in the project notes: unqualified raw SQL is how live data was lost).
+// READ-ONLY, enforced by Postgres and proven at start. Until 5 Oct 2026 this
+// asked for read-only with the startup option `-c default_transaction_read_only=on`,
+// which the Supavisor session pooler silently drops, so the session was NOT
+// read-only. (It only ever ran SELECTs, so nothing was harmed, but the claim
+// was false.) Now the session sets the default explicitly and asserts it, the
+// whole run is ONE `REPEATABLE READ READ ONLY` transaction (which also gives
+// one consistent snapshot of both schemas), and a write probe must be refused
+// before any check runs. Every table is also named "<schema>"."<Table>", so
+// nothing resolves through the search_path (see the 23 Sep 2026 incident:
+// unqualified raw SQL is how live data was lost). It never names `public`;
+// both schemas must be schema_v2_*.
 //
 // What it proves, in order:
 //   1  row counts per table and per merge, old vs new, with the EXPECTED
@@ -48,8 +55,20 @@ function dbUrl(): string {
 }
 
 async function main() {
-  const pg = new Client({ connectionString: dbUrl(), options: "-c default_transaction_read_only=on" })
+  const pg = new Client({ connectionString: dbUrl() })
   await pg.connect()
+  await pg.query(`SET SESSION default_transaction_read_only = on`)
+  await pg.query(`BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY`)
+  {
+    const ro = (await pg.query(`SELECT current_setting('transaction_read_only') AS t, current_setting('default_transaction_read_only') AS d`)).rows[0]
+    if (ro.t !== "on" || ro.d !== "on") { console.error(`  REFUSING: the session is not read-only (transaction ${ro.t}, default ${ro.d})`); process.exit(1) }
+    await pg.query(`SAVEPOINT ro_probe`)
+    let refused = false
+    try { await pg.query(`CREATE TEMP TABLE _verify_v2_ro_probe (x int)`) } catch (e) { refused = /read-only transaction/.test((e as Error).message) }
+    await pg.query(`ROLLBACK TO SAVEPOINT ro_probe`)
+    if (!refused) { console.error("  REFUSING: a write probe was NOT refused; this session is not read-only"); process.exit(1) }
+    console.log(`  read-only: proven (a write probe was refused by Postgres)`)
+  }
   const one = async (sql: string, params: unknown[] = []) => Number(Object.values((await pg.query(sql, params)).rows[0])[0])
   const rows = async (sql: string, params: unknown[] = []) => (await pg.query(sql, params)).rows
 
@@ -418,6 +437,7 @@ async function main() {
   }
   check(okUsers === userIds.length, `${okUsers}/${userIds.length} users identical (every column; tokens, progress, ledger sum, task completions, deals, likes, cases)`)
 
+  await pg.query("ROLLBACK") // read-only: nothing to keep
   await pg.end()
   console.log(failures ? `\n  VERIFICATION FAILED: ${failures} check(s)\n` : `\n  SCHEMA V2 VERIFIED on "${NEW}"\n`)
   process.exitCode = failures ? 1 : 0
