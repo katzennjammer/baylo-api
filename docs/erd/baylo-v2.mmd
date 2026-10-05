@@ -1,0 +1,223 @@
+%% Baylo database, schema v2 (final). Generated from prisma/schema.prisma (feature/schema-v2).
+%% 25 tables, 49 foreign keys. Key columns only: primary keys, foreign keys, unique
+%% columns, and enum-typed columns. The full column list is in baylo-v2.dbml.
+erDiagram
+    %% ---- Identity & auth ----
+    User {
+        string id PK
+        string email UK
+        Role role
+    }
+    AuthToken {
+        string id PK
+        AuthTokenType type
+        string userId FK
+        string tokenHash UK
+    }
+    IdVerification {
+        string id PK
+        string userId FK
+        IdType idType
+        IdVerificationStatus status
+        IdRejectionReason rejectionReason "nullable"
+        string reviewedById FK "nullable"
+    }
+    %% ---- Listings ----
+    Item {
+        string id PK
+        Category category
+        Condition condition
+        ItemStatus status
+        ValueRejectionReason valueRejectionReason "nullable"
+        string userId FK
+        QuantityUnit quantityUnit "nullable"
+    }
+    ItemImage {
+        string itemId PK, FK
+        int position PK
+    }
+    ItemWantedCategory {
+        string itemId PK, FK
+        Category category PK
+    }
+    %% ---- Trading ----
+    Trade {
+        string id PK
+        string legacyOfferId UK "nullable"
+        string senderId FK
+        string receiverId FK
+        string requestedItemId FK
+        string offeredItemId FK "nullable"
+        OfferStatus offerStatus "nullable"
+        TradeStatus status "nullable"
+        string safeZoneHubId FK "nullable"
+        string meetupHubId FK "nullable"
+    }
+    SwapCode {
+        string id PK
+        string tradeId FK
+        string userId FK
+    }
+    Message {
+        string id PK
+        string systemEventKey UK "nullable"
+        string senderId FK
+        string receiverId FK
+        string tradeId FK "nullable"
+    }
+    Review {
+        string id PK
+        string reviewerId FK
+        string revieweeId FK
+        string tradeId FK
+    }
+    %% ---- Social ----
+    Follow {
+        string id PK
+        FollowStatus status
+        string followerId FK
+        string followeeId FK
+    }
+    Like {
+        string id PK
+        string postId FK
+        string userId FK
+    }
+    Comment {
+        string id PK
+        string postId FK
+        string userId FK
+        string parentId FK "nullable"
+    }
+    Notification {
+        string id PK
+        NotificationType type
+        string userId FK
+        string actorId FK "nullable"
+    }
+    Story {
+        string id PK
+        string userId FK
+        StoryType type
+        string itemId FK "nullable"
+    }
+    StoryView {
+        string id PK
+        string storyId FK
+        string viewerId FK
+    }
+    %% ---- Leaves ----
+    LeafTransaction {
+        string id PK
+        string userId FK
+        LeafTxType type
+        TaskKind task "nullable"
+    }
+    %% ---- Moderation ----
+    ModerationCase {
+        string id PK
+        ModerationCaseType type
+        string filedById FK
+        ModerationCaseStatus status
+        ReportTargetType targetType "nullable"
+        ReportCategory category "nullable"
+        string itemId FK "nullable"
+        ListingAppealKind appealKind "nullable"
+        string actionId FK, UK "nullable"
+        string decidedById FK "nullable"
+    }
+    AdminAction {
+        string id PK
+        string actorId FK
+        AdminActionKind action
+        AdminTargetType targetType
+        string caseId FK "nullable"
+    }
+    Block {
+        string id PK
+        string blockerId FK
+        string blockedId FK
+    }
+    %% ---- Organizations ----
+    Organization {
+        string id PK
+        string orgUserId FK, UK
+        BusinessCategory businessCategory
+        OrgVerificationStatus verificationStatus
+        OrgRejectionReason rejectionReason "nullable"
+        string reviewedById FK "nullable"
+        string ownerId FK
+    }
+    %% ---- Gamification ----
+    Achievement {
+        string id PK
+        string key UK
+        AchievementCriterion criterion
+    }
+    UserProgress {
+        string id PK
+        string userId FK
+        ProgressType type
+        QuestTier tier "nullable"
+        QuestKind quest "nullable"
+        string achievementId FK "nullable"
+    }
+    %% ---- Safe hubs ----
+    SafeZoneHub {
+        string id PK
+        SafeZoneType type
+    }
+    ItemSafeZone {
+        string itemId PK, FK
+        string hubId PK, FK
+    }
+    %% ---- Relationships (49) ----
+    User ||--o{ Follow : "followerId"
+    User ||--o{ Follow : "followeeId"
+    User ||--o{ AuthToken : "userId"
+    User ||--o{ Item : "userId"
+    Item ||--o{ ItemImage : "itemId"
+    Item ||--o{ ItemWantedCategory : "itemId"
+    User ||--o{ Trade : "senderId"
+    User ||--o{ Trade : "receiverId"
+    Item ||--o{ Trade : "requestedItemId"
+    Item |o--o{ Trade : "offeredItemId"
+    SafeZoneHub |o--o{ Trade : "safeZoneHubId"
+    SafeZoneHub |o--o{ Trade : "meetupHubId"
+    User ||--o{ Message : "senderId"
+    User ||--o{ Message : "receiverId"
+    Trade |o--o{ Message : "tradeId"
+    User ||--o{ Notification : "userId"
+    User |o--o{ Notification : "actorId"
+    User ||--o{ Review : "reviewerId"
+    User ||--o{ Review : "revieweeId"
+    Trade ||--o{ Review : "tradeId"
+    Trade ||--o{ SwapCode : "tradeId"
+    User ||--o{ SwapCode : "userId"
+    Item ||--o{ Like : "postId"
+    User ||--o{ Like : "userId"
+    Item ||--o{ Comment : "postId"
+    User ||--o{ Comment : "userId"
+    Comment |o--o{ Comment : "parentId"
+    User ||--o{ LeafTransaction : "userId"
+    User ||--o{ ModerationCase : "filedById"
+    Item |o--o{ ModerationCase : "itemId"
+    AdminAction |o--o| ModerationCase : "actionId"
+    User |o--o{ ModerationCase : "decidedById"
+    User ||--o{ Block : "blockerId"
+    User ||--o{ Block : "blockedId"
+    User ||--o{ IdVerification : "userId"
+    User |o--o{ IdVerification : "reviewedById"
+    User ||--o{ AdminAction : "actorId"
+    ModerationCase |o--o{ AdminAction : "caseId"
+    Item ||--o{ ItemSafeZone : "itemId"
+    SafeZoneHub ||--o{ ItemSafeZone : "hubId"
+    User ||--o{ UserProgress : "userId"
+    Achievement |o--o{ UserProgress : "achievementId"
+    User ||--o| Organization : "orgUserId"
+    User |o--o{ Organization : "reviewedById"
+    User ||--o{ Organization : "ownerId"
+    User ||--o{ Story : "userId"
+    Item |o--o{ Story : "itemId"
+    Story ||--o{ StoryView : "storyId"
+    User ||--o{ StoryView : "viewerId"

@@ -1,0 +1,1009 @@
+// Baylo database, schema v2 (final). Generated from prisma/schema.prisma on
+// feature/schema-v2. Paste into https://dbdiagram.io. 25 tables, 49 foreign keys.
+// Prisma model names are the Postgres table names (no @@map). _prisma_migrations is omitted.
+// "cuid()" ids and @updatedAt timestamps are set by the Prisma client, not by a DB default.
+
+Project baylo {
+  database_type: 'PostgreSQL'
+  Note: 'Baylo peer-to-peer barter app. Schema v2: 34 tables consolidated to 25. See docs/schema-v2.md.'
+}
+
+// ===================== Identity & auth =====================
+
+Table "User" {
+  "id" text [pk, note: 'cuid(), set by Prisma']
+  "name" text [not null]
+  "email" text [unique, not null]
+  "password" text [note: 'bcrypt hash; NULL when the account has no password (e.g. OAuth sign-in, org backing rows)']
+  "isVerified" boolean [not null, default: false]
+  "signupGrantClaimed" boolean [not null, default: false]
+  "dateOfBirth" date
+  "avatar" text
+  "bio" text
+  "location" text
+  "rating" "double precision" [not null, default: 0]
+  "totalTrades" integer [not null, default: 0]
+  "createdAt" timestamp(3) [not null, default: `now()`]
+  "updatedAt" timestamp(3) [not null, note: '@updatedAt, set by Prisma on every write']
+  "deletedAt" timestamp(3)
+  "premiumUntil" timestamp(3)
+  "vipUntil" timestamp(3)
+  "leaves" integer [not null, default: 0, note: 'Current Leaves balance. SUM(User.leaves) = SUM(LeafTransaction.amount)']
+  "lifetimeLeaves" integer [not null, default: 0, note: 'Leaves ever earned; drives rank. Not derivable from the ledger']
+  "role" "Role" [not null, default: 'USER']
+  "suspendedAt" timestamp(3)
+  "suspendedUntil" timestamp(3)
+  "isOrgAccount" boolean [not null, default: false, note: 'TRUE on an Organization\'s backing row (never logs in)']
+  "idVerifiedGrandfatheredAt" timestamp(3)
+
+  indexes {
+    "isOrgAccount"
+    "deletedAt"
+    "suspendedAt"
+  }
+
+  Note: '''Every account: people, staff (role ADMIN) and the backing rows of organizations (isOrgAccount). Holds the Leaves balance, premium/VIP windows, suspension and soft-delete state.'''
+}
+
+Table "AuthToken" {
+  "id" text [pk, note: 'cuid(), set by Prisma']
+  "type" "AuthTokenType" [not null]
+  "userId" text [not null]
+  "tokenHash" text [unique, not null]
+  "familyId" text [note: 'REFRESH only: groups every token minted from one login so a replay revokes the family. A group id, not a reference']
+  "usedAt" timestamp(3)
+  "revokedAt" timestamp(3)
+  "expiresAt" timestamp(3) [not null]
+  "createdAt" timestamp(3) [not null, default: `now()`]
+
+  indexes {
+    ("userId", "type")
+    "familyId"
+  }
+
+  Note: '''Hashed one-time and session tokens: REFRESH (mobile token rotation, grouped by familyId), PASSWORD_RESET and EMAIL_VERIFICATION. v2 merges three former token tables.'''
+}
+
+Table "IdVerification" {
+  "id" text [pk, note: 'cuid(), set by Prisma']
+  "userId" text [not null]
+  "idType" "IdType" [not null]
+  "idNumberHash" varchar(64) [not null, note: 'SHA-256 of the normalised ID number; never the number']
+  "claimKey" varchar(64) [note: 'Copy of idNumberHash while PENDING/APPROVED, NULL once REJECTED: one live claim per ID']
+  "status" "IdVerificationStatus" [not null, default: 'PENDING']
+  "rejectionReason" "IdRejectionReason"
+  "reviewedById" text
+  "reviewedAt" timestamp(3)
+  "submittedAt" timestamp(3) [not null, default: `now()`]
+  "attemptCount" integer [not null]
+  "imageUrl" text [note: 'Nulled in the decision transaction']
+  "imagePublicId" varchar(255) [note: 'Cloudinary delete key; nulled once the destroy is confirmed']
+  "imageDeletedAt" timestamp(3)
+  "imageDeleteFailedAt" timestamp(3)
+  "createdAt" timestamp(3) [not null, default: `now()`]
+
+  indexes {
+    "claimKey" [unique]
+    ("userId", "submittedAt")
+    ("status", "submittedAt")
+    ("status", "imagePublicId")
+    "reviewedById"
+  }
+
+  Note: '''One submitted government ID and its decision. Stores only a SHA-256 of the ID number; the image exists only until a decision is made (RA 10173).'''
+}
+
+// ===================== Listings =====================
+
+Table "Item" {
+  "id" text [pk, note: 'cuid(), set by Prisma']
+  "title" text [not null]
+  "description" text [not null]
+  "category" "Category" [not null]
+  "condition" "Condition" [not null]
+  "valueLeaves" integer
+  "bracket" integer [note: 'database-generated. STORED GENERATED from valueLeaves (brackets 1..8+). Never written by the app']
+  "valueSetByUser" boolean [not null, default: false]
+  "suggestedLeaves" integer
+  "valuationSource" varchar(32)
+  "revaluationCount" integer [not null, default: 0]
+  "status" "ItemStatus" [not null, default: 'AVAILABLE']
+  "wantedItems" text [note: 'Free-text wish list (categories are in ItemWantedCategory)']
+  "pickupLat" "double precision"
+  "pickupLng" "double precision"
+  "pickupAddress" text
+  "moderationHiddenAt" timestamp(3)
+  "valueRejectionReason" "ValueRejectionReason"
+  "createdAt" timestamp(3) [not null, default: `now()`]
+  "updatedAt" timestamp(3) [not null, note: '@updatedAt, set by Prisma on every write']
+  "userId" text [not null]
+  "isPerishable" boolean [not null, default: false]
+  "quantity" "double precision"
+  "quantityUnit" "QuantityUnit"
+  "tradeWithinHours" integer
+
+  indexes {
+    ("isPerishable", "status", "createdAt")
+    ("status", "bracket")
+    ("status", "moderationHiddenAt")
+    ("valuationSource", "category")
+    "userId"
+  }
+
+  Note: '''A listing: what is offered, its Leaves value and generated bracket, status, pickup location, perishable details, and moderation state (hidden / value rejection).'''
+}
+
+Table "ItemImage" {
+  "itemId" text [not null]
+  "position" integer [not null]
+  "url" text [not null]
+  "hash" varchar(64) [note: 'dHash of the photo for the duplicate-photo check; NULL if never hashed']
+
+  indexes {
+    ("itemId", "position") [pk]
+  }
+
+  Note: '''Ordered photos of a listing (composite PK itemId + position). v2 folds in the former ItemImageHash table.'''
+}
+
+Table "ItemWantedCategory" {
+  "itemId" text [not null]
+  "category" "Category" [not null]
+
+  indexes {
+    ("itemId", "category") [pk]
+    "category"
+  }
+
+  Note: '''Categories the owner wants in exchange for a listing (drives CATEGORY_MATCH notifications).'''
+}
+
+// ===================== Trading =====================
+
+Table "Trade" {
+  "id" text [pk, note: 'cuid(), set by Prisma']
+  "legacyOfferId" text [unique, note: 'Id of the pre-v2 Offer row this deal came from. Soft reference, no FK (the Offer table was dropped)']
+  "senderId" text [not null]
+  "receiverId" text [not null]
+  "requestedItemId" text [not null]
+  "offeredItemId" text
+  "offerStatus" "OfferStatus" [note: 'Offer phase. NULL for a row that only ever existed as a trade']
+  "status" "TradeStatus" [note: 'Trade phase. NULL while the row is still only an offer']
+  "message" text
+  "createdAt" timestamp(3) [not null, default: `now()`]
+  "tradeCreatedAt" timestamp(3)
+  "updatedAt" timestamp(3) [not null, note: '@updatedAt, set by Prisma on every write']
+  "completedAt" timestamp(3)
+  "safeZoneHubId" text [note: 'Meetup CLAIM: the hub where the swap actually happened (pays the safe-zone reward)']
+  "meetupHubId" text [note: 'Meetup PLAN: the hub the two parties agreed to meet at']
+  "meetupAt" timestamp(3)
+  "meetupNote" varchar(200)
+  "meetupProposedBySender" boolean
+  "meetupAgreedAt" timestamp(3)
+  "offeredLeaves" integer
+  "bridgeFeeLeaves" integer
+  "bridgeFeePaidBySender" boolean [note: 'Which side paid the bridge fee; NULL when there is no fee']
+  "offeredBracket" integer
+  "targetBracket" integer
+  "consentAt" timestamp(3)
+  "policyVersion" varchar(32)
+
+  indexes {
+    "senderId"
+    "receiverId"
+    "offeredItemId"
+    "requestedItemId"
+    "safeZoneHubId"
+    "meetupHubId"
+    ("offerStatus", "createdAt")
+    "status"
+  }
+
+  Note: '''One deal from offer to completion (v2 merges Offer + TradeRequest). offerStatus covers the offer phase, status the trade phase. Carries offered Leaves, the bridge fee and who paid it, the meetup plan and claim, and consent/policy stamps.
+
+Soft reference (not an FK): legacyOfferId = the id of the dropped Offer row.'''
+}
+
+Table "SwapCode" {
+  "id" text [pk, note: 'cuid(), set by Prisma']
+  "tradeId" text [not null]
+  "userId" text [not null]
+  "codeHash" text [not null, note: 'Hash of the one-time confirmation code; what verification checks']
+  "used" boolean [not null, default: false]
+  "codeSealed" text [note: 'AES-256-GCM sealed copy shown only to its owner']
+  "attempts" integer [not null, default: 0]
+  "expiresAt" timestamp(3) [not null]
+  "createdAt" timestamp(3) [not null, default: `now()`]
+
+  indexes {
+    ("tradeId", "userId") [unique]
+    "userId"
+  }
+
+  Note: '''Per-party one-time code exchanged in person to confirm a swap. Hash for verification, sealed copy for display, attempt counter and expiry.'''
+}
+
+Table "Message" {
+  "id" text [pk, note: 'cuid(), set by Prisma']
+  "content" text [not null]
+  "systemEventKey" text [unique]
+  "read" boolean [not null, default: false]
+  "createdAt" timestamp(3) [not null, default: `now()`]
+  "senderId" text [not null]
+  "receiverId" text [not null]
+  "tradeId" text
+
+  indexes {
+    "senderId"
+    "receiverId"
+    "tradeId"
+  }
+
+  Note: '''Direct messages between two users, optionally attached to a trade. systemEventKey makes system-generated trade messages idempotent.'''
+}
+
+Table "Review" {
+  "id" text [pk, note: 'cuid(), set by Prisma']
+  "rating" integer [not null]
+  "comment" text
+  "createdAt" timestamp(3) [not null, default: `now()`]
+  "reviewerId" text [not null]
+  "revieweeId" text [not null]
+  "tradeId" text [not null]
+
+  indexes {
+    ("tradeId", "reviewerId") [unique]
+    "reviewerId"
+    "revieweeId"
+  }
+
+  Note: '''A rating and comment one party leaves the other after a trade; one per reviewer per trade.'''
+}
+
+// ===================== Social =====================
+
+Table "Follow" {
+  "id" text [pk, note: 'cuid(), set by Prisma']
+  "status" "FollowStatus" [not null, default: 'PENDING']
+  "createdAt" timestamp(3) [not null, default: `now()`]
+  "updatedAt" timestamp(3) [not null, note: '@updatedAt, set by Prisma on every write']
+  "followerId" text [not null]
+  "followeeId" text [not null]
+
+  indexes {
+    ("followerId", "followeeId") [unique]
+    "followeeId"
+  }
+
+  Note: '''Follower -> followee edge. status PENDING is a follow request, ACCEPTED an active follow.'''
+}
+
+Table "Like" {
+  "id" text [pk, note: 'cuid(), set by Prisma']
+  "postId" text [not null]
+  "userId" text [not null]
+  "createdAt" timestamp(3) [not null, default: `now()`]
+
+  indexes {
+    ("postId", "userId") [unique]
+    "userId"
+  }
+
+  Note: '''A user liking a listing (postId -> Item).'''
+}
+
+Table "Comment" {
+  "id" text [pk, note: 'cuid(), set by Prisma']
+  "postId" text [not null]
+  "userId" text [not null]
+  "content" text [not null]
+  "parentId" text
+  "createdAt" timestamp(3) [not null, default: `now()`]
+
+  indexes {
+    "postId"
+    "userId"
+    "parentId"
+  }
+
+  Note: '''A comment on a listing, with replies threaded through parentId (self-reference).'''
+}
+
+Table "Notification" {
+  "id" text [pk, note: 'cuid(), set by Prisma']
+  "type" "NotificationType" [not null]
+  "message" text [not null]
+  "read" boolean [not null, default: false]
+  "link" text
+  "createdAt" timestamp(3) [not null, default: `now()`]
+  "entityType" text [note: 'Polymorphic target type (trade, meetup, item, listing_review, conversation, org_invite, ...)']
+  "entityId" text [note: 'Polymorphic target id; no FK']
+  "userId" text [not null]
+  "actorId" text
+
+  indexes {
+    "userId"
+    "actorId"
+  }
+
+  Note: '''In-app notification for a recipient, optionally naming the actor who caused it.
+
+Polymorphic reference (not an FK): entityType + entityId point at the row the tap opens (trade, meetup, item, listing_review, conversation, org_invite, ...). link is a kept 3NF redundancy (web URL).'''
+}
+
+Table "Story" {
+  "id" text [pk, note: 'cuid(), set by Prisma']
+  "userId" text [not null]
+  "type" "StoryType" [not null, default: 'LISTING']
+  "itemId" text
+  "caption" varchar(200)
+  "createdAt" timestamp(3) [not null, default: `now()`]
+  "expiresAt" timestamp(3) [not null]
+  "deletedAt" timestamp(3)
+
+  indexes {
+    ("userId", "createdAt")
+    "expiresAt"
+    "itemId"
+  }
+
+  Note: '''A 24-hour story: a person sharing one of their own listings (type LISTING). Live while expiresAt > now(), deletedAt is NULL and the listing is still available; expired rows are kept as the trail for STORY reports.'''
+}
+
+Table "StoryView" {
+  "id" text [pk, note: 'cuid(), set by Prisma']
+  "storyId" text [not null]
+  "viewerId" text [not null]
+  "seenAt" timestamp(3) [not null, default: `now()`]
+
+  indexes {
+    ("storyId", "viewerId") [unique]
+    "viewerId"
+  }
+
+  Note: '''Who has seen which story; one row per viewer per story.'''
+}
+
+// ===================== Leaves =====================
+
+Table "LeafTransaction" {
+  "id" text [pk, note: 'cuid(), set by Prisma']
+  "userId" text [not null]
+  "type" "LeafTxType" [not null]
+  "amount" integer [not null]
+  "description" text [not null]
+  "tradeId" text [note: 'Soft reference to Trade.id; no FK (the ledger must outlive what it records)']
+  "contractId" text [note: 'Frozen legacy column: points at the dropped DeferredContract table (2 rows). No FK']
+  "task" "TaskKind"
+  "taskRefId" text [note: 'Which instance of the task paid: the tradeId for repeatable tasks, empty string for one-time tasks. No FK']
+  "createdAt" timestamp(3) [not null, default: `now()`]
+  "eventAt" timestamp(3) [not null]
+
+  indexes {
+    ("userId", "task", "taskRefId") [unique]
+    ("userId", "createdAt")
+    ("userId", "eventAt")
+  }
+
+  Note: '''The Leaves ledger. Every balance change is one signed row; SUM(amount) per user equals User.leaves. v2 merges TaskCompletion in (task + taskRefId on TASK_REWARD rows).
+
+Soft references (not FKs): tradeId -> Trade.id (the ledger outlives what it records); contractId -> the dropped DeferredContract table (2 frozen legacy rows); taskRefId = the task instance that paid (a tradeId, or '' for one-time tasks).'''
+}
+
+// ===================== Moderation =====================
+
+Table "ModerationCase" {
+  "id" text [pk, note: 'cuid(), set by Prisma']
+  "type" "ModerationCaseType" [not null]
+  "filedById" text [not null]
+  "status" "ModerationCaseStatus" [not null, default: 'OPEN']
+  "targetType" "ReportTargetType" [note: 'REPORT only: what is reported (LISTING, USER, MESSAGE, STORY)']
+  "targetId" text [note: 'REPORT only: id of the reported row. Polymorphic, no FK, so a report survives its target']
+  "category" "ReportCategory"
+  "notes" text
+  "openKey" varchar(4) [note: '\'live\' while a report is OPEN/REVIEWING, else NULL; enforces one live report per reporter per target']
+  "itemId" text
+  "appealKind" "ListingAppealKind"
+  "message" varchar(300)
+  "actionId" text [unique, note: 'LISTING_APPEAL only: the AdminAction being appealed. UNIQUE = one appeal per decision']
+  "decidedById" text
+  "decidedAt" timestamp(3)
+  "decisionNote" text
+  "createdAt" timestamp(3) [not null, default: `now()`]
+
+  indexes {
+    ("filedById", "targetType", "targetId", "openKey") [unique]
+    ("type", "status", "createdAt")
+    ("targetType", "targetId")
+    "itemId"
+    "decidedById"
+  }
+
+  Note: '''The moderation queue (v2 merges Report + ListingAppeal). type REPORT: a user reporting a listing, user, message or story. type LISTING_APPEAL: an owner appealing a takedown or value rejection on their own listing (itemId + actionId are real FKs). CHECK constraints null out the other type's columns.
+
+Polymorphic reference (not an FK): targetType + targetId, the reported row. Deliberately no FK so a report survives its target's deletion.'''
+}
+
+Table "AdminAction" {
+  "id" text [pk, note: 'cuid(), set by Prisma']
+  "actorId" text [not null]
+  "action" "AdminActionKind" [not null]
+  "targetType" "AdminTargetType" [not null, note: 'What was acted on (REPORT, LISTING, USER, HUB, ID_VERIFICATION, TRADE, LISTING_APPEAL, ACHIEVEMENT, ORGANIZATION)']
+  "targetId" text [not null, note: 'Polymorphic id of the row acted on; no FK']
+  "caseId" text
+  "reason" text [not null]
+  "detail" text [note: 'JSON snapshot of what changed']
+  "createdAt" timestamp(3) [not null, default: `now()`]
+
+  indexes {
+    ("actorId", "createdAt")
+    ("targetType", "targetId")
+    "createdAt"
+    "caseId"
+  }
+
+  Note: '''The audit trail: which staff member did what, to what, when and why (reason is required). Never deleted; actorId is RESTRICT so a staff account with history cannot be removed.
+
+Polymorphic reference (not an FK): targetType + targetId, the row acted on (report, listing, user, hub, ID verification, trade, appeal, achievement, organization).'''
+}
+
+Table "Block" {
+  "id" text [pk, note: 'cuid(), set by Prisma']
+  "blockerId" text [not null]
+  "blockedId" text [not null]
+  "createdAt" timestamp(3) [not null, default: `now()`]
+
+  indexes {
+    ("blockerId", "blockedId") [unique]
+    "blockedId"
+  }
+
+  Note: '''A one-way block: blocker stops seeing and being reachable by blocked. Enforced in both directions at query time. One row per pair.'''
+}
+
+// ===================== Organizations =====================
+
+Table "Organization" {
+  "id" text [pk, note: 'cuid(), set by Prisma']
+  "orgUserId" text [unique, not null, note: 'The User row this organization IS (1-1)']
+  "name" text [not null]
+  "logoUrl" text
+  "bannerUrl" text
+  "description" varchar(500)
+  "dtiRegistrationNumber" varchar(64)
+  "businessCategory" "BusinessCategory" [not null]
+  "verificationStatus" "OrgVerificationStatus" [not null, default: 'PENDING']
+  "businessDocUrl" text [note: 'Nulled in the decision transaction (RA 10173 retention rule)']
+  "businessDocPublicId" varchar(255)
+  "docDeletedAt" timestamp(3)
+  "docDeleteFailedAt" timestamp(3)
+  "rejectionReason" "OrgRejectionReason"
+  "reviewedById" text
+  "reviewedAt" timestamp(3)
+  "ownerId" text [not null, note: 'The one human who may act as this organization']
+  "ownerJoinedAt" timestamp(3) [not null]
+  "createdAt" timestamp(3) [not null, default: `now()`]
+  "updatedAt" timestamp(3) [not null, note: '@updatedAt, set by Prisma on every write']
+
+  indexes {
+    ("verificationStatus", "createdAt")
+    ("verificationStatus", "businessDocPublicId")
+    "reviewedById"
+    "ownerId"
+  }
+
+  Note: '''A verified shop/MSME. It IS a User row (orgUserId, 1-1) so it can own listings, hold Leaves and be followed. One human owner acts as it (ownerId; v2 replaced OrganizationMember). Holds storefront fields and the business-document review state.'''
+}
+
+// ===================== Gamification =====================
+
+Table "Achievement" {
+  "id" text [pk, note: 'cuid(), set by Prisma']
+  "key" text [unique, not null]
+  "name" text [not null]
+  "description" text [not null]
+  "icon" text [not null, default: '🏆']
+  "imageUrl" text
+  "criterion" "AchievementCriterion" [not null]
+  "threshold" integer [not null, default: 1]
+  "sortOrder" integer [not null, default: 0]
+  "points" integer [not null, default: 0]
+  "isActive" boolean [not null, default: true]
+  "createdAt" timestamp(3) [not null, default: `now()`]
+  "updatedAt" timestamp(3) [not null, note: '@updatedAt, set by Prisma on every write']
+
+  indexes {
+    ("isActive", "sortOrder")
+  }
+
+  Note: '''Admin-defined badge: key, display fields, the criterion and threshold that unlock it, and points.'''
+}
+
+Table "UserProgress" {
+  "id" text [pk, note: 'cuid(), set by Prisma']
+  "userId" text [not null]
+  "type" "ProgressType" [not null, note: 'QUEST or ACHIEVEMENT; the other type\'s columns are NULL (CHECK constraints)']
+  "periodStart" timestamp(3)
+  "tier" "QuestTier"
+  "quest" "QuestKind"
+  "rewardLeaves" integer
+  "completedAt" timestamp(3)
+  "achievementId" text
+  "unlockedAt" timestamp(3)
+  "displayOrder" integer
+  "homeDisplayOrder" integer
+  "createdAt" timestamp(3) [not null, default: `now()`]
+
+  indexes {
+    ("userId", "periodStart", "quest") [unique]
+    ("userId", "achievementId") [unique]
+    ("userId", "type", "periodStart")
+    ("userId", "displayOrder")
+    "achievementId"
+  }
+
+  Note: '''A user's progress (v2 merges QuestAssignment + UserAchievement). type QUEST: one daily quest (periodStart, tier, quest, rewardLeaves snapshot, completedAt). type ACHIEVEMENT: an unlocked badge and its profile/home display slot. CHECK constraints null out the other type's columns.'''
+}
+
+// ===================== Safe hubs =====================
+
+Table "SafeZoneHub" {
+  "id" text [pk, note: 'cuid(), set by Prisma']
+  "name" varchar(120) [not null]
+  "type" "SafeZoneType" [not null]
+  "address" varchar(300) [not null]
+  "latitude" "double precision" [not null]
+  "longitude" "double precision" [not null]
+  "city" varchar(80) [not null]
+  "landmark" varchar(200) [not null]
+  "isActive" boolean [not null, default: true]
+  "createdAt" timestamp(3) [not null, default: `now()`]
+
+  indexes {
+    ("isActive", "city")
+  }
+
+  Note: '''Admin-curated public meetup places (malls, barangay halls, police stations...). Referenced by listings and by a trade's meetup plan and claim.'''
+}
+
+Table "ItemSafeZone" {
+  "itemId" text [not null]
+  "hubId" text [not null]
+  "createdAt" timestamp(3) [not null, default: `now()`]
+
+  indexes {
+    ("itemId", "hubId") [pk]
+    "hubId"
+  }
+
+  Note: '''Which safe hubs a listing's owner is willing to meet at (many-to-many Item <-> SafeZoneHub).'''
+}
+
+// ===================== Foreign keys (49) =====================
+// ">" = many-to-one, "-" = one-to-one. Delete actions as declared (or Prisma's default:
+// Restrict for a required relation, SetNull for an optional one). All updates cascade.
+
+Ref "Follow_follower": "Follow"."followerId" > "User"."id" [delete: cascade, update: cascade]
+Ref "Follow_followee": "Follow"."followeeId" > "User"."id" [delete: cascade, update: cascade]
+Ref "AuthToken_user": "AuthToken"."userId" > "User"."id" [delete: cascade, update: cascade]
+Ref "Item_user": "Item"."userId" > "User"."id" [delete: cascade, update: cascade]
+Ref "ItemImage_item": "ItemImage"."itemId" > "Item"."id" [delete: cascade, update: cascade]
+Ref "ItemWantedCategory_item": "ItemWantedCategory"."itemId" > "Item"."id" [delete: cascade, update: cascade]
+Ref "Trade_sender": "Trade"."senderId" > "User"."id" [delete: restrict, update: cascade]
+Ref "Trade_receiver": "Trade"."receiverId" > "User"."id" [delete: restrict, update: cascade]
+Ref "Trade_requestedItem": "Trade"."requestedItemId" > "Item"."id" [delete: restrict, update: cascade]
+Ref "Trade_offeredItem": "Trade"."offeredItemId" > "Item"."id" [delete: restrict, update: cascade]
+Ref "Trade_safeZoneHub": "Trade"."safeZoneHubId" > "SafeZoneHub"."id" [delete: restrict, update: cascade]
+Ref "Trade_meetupHub": "Trade"."meetupHubId" > "SafeZoneHub"."id" [delete: restrict, update: cascade]
+Ref "Message_sender": "Message"."senderId" > "User"."id" [delete: restrict, update: cascade]
+Ref "Message_receiver": "Message"."receiverId" > "User"."id" [delete: restrict, update: cascade]
+Ref "Message_trade": "Message"."tradeId" > "Trade"."id" [delete: set null, update: cascade]
+Ref "Notification_user": "Notification"."userId" > "User"."id" [delete: cascade, update: cascade]
+Ref "Notification_actor": "Notification"."actorId" > "User"."id" [delete: set null, update: cascade]
+Ref "Review_reviewer": "Review"."reviewerId" > "User"."id" [delete: restrict, update: cascade]
+Ref "Review_reviewee": "Review"."revieweeId" > "User"."id" [delete: restrict, update: cascade]
+Ref "Review_trade": "Review"."tradeId" > "Trade"."id" [delete: restrict, update: cascade]
+Ref "SwapCode_trade": "SwapCode"."tradeId" > "Trade"."id" [delete: cascade, update: cascade]
+Ref "SwapCode_user": "SwapCode"."userId" > "User"."id" [delete: cascade, update: cascade]
+Ref "Like_post": "Like"."postId" > "Item"."id" [delete: cascade, update: cascade]
+Ref "Like_user": "Like"."userId" > "User"."id" [delete: cascade, update: cascade]
+Ref "Comment_post": "Comment"."postId" > "Item"."id" [delete: cascade, update: cascade]
+Ref "Comment_user": "Comment"."userId" > "User"."id" [delete: cascade, update: cascade]
+Ref "Comment_parent": "Comment"."parentId" > "Comment"."id" [delete: set null, update: cascade]
+Ref "LeafTransaction_user": "LeafTransaction"."userId" > "User"."id" [delete: cascade, update: cascade]
+Ref "ModerationCase_filedBy": "ModerationCase"."filedById" > "User"."id" [delete: cascade, update: cascade]
+Ref "ModerationCase_item": "ModerationCase"."itemId" > "Item"."id" [delete: cascade, update: cascade]
+Ref "ModerationCase_action": "ModerationCase"."actionId" - "AdminAction"."id" [delete: restrict, update: cascade]
+Ref "ModerationCase_decidedBy": "ModerationCase"."decidedById" > "User"."id" [delete: set null, update: cascade]
+Ref "Block_blocker": "Block"."blockerId" > "User"."id" [delete: cascade, update: cascade]
+Ref "Block_blocked": "Block"."blockedId" > "User"."id" [delete: cascade, update: cascade]
+Ref "IdVerification_user": "IdVerification"."userId" > "User"."id" [delete: cascade, update: cascade]
+Ref "IdVerification_reviewedBy": "IdVerification"."reviewedById" > "User"."id" [delete: set null, update: cascade]
+Ref "AdminAction_actor": "AdminAction"."actorId" > "User"."id" [delete: restrict, update: cascade]
+Ref "AdminAction_case": "AdminAction"."caseId" > "ModerationCase"."id" [delete: set null, update: cascade]
+Ref "ItemSafeZone_item": "ItemSafeZone"."itemId" > "Item"."id" [delete: cascade, update: cascade]
+Ref "ItemSafeZone_hub": "ItemSafeZone"."hubId" > "SafeZoneHub"."id" [delete: restrict, update: cascade]
+Ref "UserProgress_user": "UserProgress"."userId" > "User"."id" [delete: cascade, update: cascade]
+Ref "UserProgress_achievement": "UserProgress"."achievementId" > "Achievement"."id" [delete: cascade, update: cascade]
+Ref "Organization_orgUser": "Organization"."orgUserId" - "User"."id" [delete: cascade, update: cascade]
+Ref "Organization_reviewedBy": "Organization"."reviewedById" > "User"."id" [delete: set null, update: cascade]
+Ref "Organization_owner": "Organization"."ownerId" > "User"."id" [delete: restrict, update: cascade]
+Ref "Story_user": "Story"."userId" > "User"."id" [delete: cascade, update: cascade]
+Ref "Story_item": "Story"."itemId" > "Item"."id" [delete: cascade, update: cascade]
+Ref "StoryView_story": "StoryView"."storyId" > "Story"."id" [delete: cascade, update: cascade]
+Ref "StoryView_viewer": "StoryView"."viewerId" > "User"."id" [delete: cascade, update: cascade]
+
+// ===================== Enums (32) =====================
+
+Enum "AuthTokenType" {
+  "REFRESH"
+  "PASSWORD_RESET"
+  "EMAIL_VERIFICATION"
+}
+
+Enum "TaskKind" {
+  "VERIFY_ACCOUNT"
+  "COMPLETE_PROFILE"
+  "FIRST_LISTING"
+  "VERIFIED_SWAP"
+  "SAFEZONE_MEETUP"
+  "FIRST_TRADE"
+}
+
+Enum "QuestTier" {
+  "EASY"
+  "MEDIUM"
+  "HARD"
+}
+
+Enum "QuestKind" {
+  "SEND_OFFER"
+  "FOLLOW_TRADER"
+  "LEAVE_REVIEW"
+  "LIST_ITEM"
+  "RECEIVE_OFFER"
+  "SEND_BRIDGE_OFFER"
+  "COMPLETE_TRADE"
+  "COMPLETE_BRIDGE_TRADE"
+  "COMPLETE_SAFEZONE_TRADE"
+}
+
+Enum "Category" {
+  "ELECTRONICS"
+  "CLOTHING"
+  "BAGS"
+  "BEAUTY"
+  "ACCESSORIES"
+  "FURNITURE"
+  "BOOKS"
+  "GAMING"
+  "SPORTS"
+  "BIKES"
+  "TOYS"
+  "TOOLS"
+  "MUSIC"
+  "ART"
+  "COLLECTIBLES"
+  "PETS"
+  "PLANTS"
+  "FOOD"
+  "SERVICES"
+  "OTHER"
+}
+
+Enum "Condition" {
+  "NEW"
+  "LIKE_NEW"
+  "GOOD"
+  "FAIR"
+  "POOR"
+}
+
+Enum "ItemStatus" {
+  "AVAILABLE"
+  "IN_TRADE"
+  "TRADED"
+  "OWNED"
+  "REMOVED"
+  "PENDING_REVIEW"
+  "VALUE_REJECTED"
+  "EXPIRED"
+}
+
+Enum "ValueRejectionReason" {
+  "OVERVALUED_FOR_CONDITION"
+  "ABOVE_MARKET"
+  "WRONG_CATEGORY"
+  "PHOTOS_DO_NOT_SUPPORT_VALUE"
+  "OTHER"
+}
+
+Enum "TradeStatus" {
+  "PENDING"
+  "ACCEPTED"
+  "CONFIRMING"
+  "REJECTED"
+  "COMPLETED"
+  "CANCELLED"
+}
+
+Enum "NotificationType" {
+  "TRADE_REQUEST"
+  "TRADE_ACCEPTED"
+  "TRADE_REJECTED"
+  "TRADE_COMPLETED"
+  "TRADE_CANCELLED"
+  "NEW_MESSAGE"
+  "NEW_REVIEW"
+  "FOLLOW_REQUEST"
+  "FOLLOW_ACCEPTED"
+  "REPORT_RESOLVED"
+  "ID_VERIFICATION_APPROVED"
+  "ID_VERIFICATION_REJECTED"
+  "OFFER_EXPIRED"
+  "MEETUP_PROPOSED"
+  "MEETUP_AGREED"
+  "LISTING_VALUE_APPROVED"
+  "LISTING_VALUE_REJECTED"
+  "LISTING_HIDDEN"
+  "LISTING_APPEAL_UPHELD"
+  "LISTING_APPEAL_OVERTURNED"
+  "CATEGORY_MATCH"
+  "ORG_INVITE"
+  "LISTING_EXPIRED"
+}
+
+Enum "FollowStatus" {
+  "PENDING"
+  "ACCEPTED"
+}
+
+Enum "OfferStatus" {
+  "PENDING"
+  "ACCEPTED"
+  "DECLINED"
+  "WITHDRAWN"
+  "EXPIRED"
+}
+
+Enum "LeafTxType" {
+  "TRADE_SPEND"
+  "TRADE_RECEIVE"
+  "TASK_REWARD"
+  "SIGNUP_GRANT"
+  "CONTRACT_PAY"
+  "CONTRACT_COLLECT"
+  "BRIDGE_FEE_HOLD"
+  "BRIDGE_FEE_RELEASE"
+  "BRIDGE_FEE_PAID"
+  "TRADE_REWARD"
+  "TRADE_REWARD_REVERSAL"
+  "TIER_DAILY_GRANT"
+  "QUEST_REWARD"
+  "FEATURE_BOOST"
+}
+
+Enum "Role" {
+  "USER"
+  "ADMIN"
+}
+
+Enum "ReportTargetType" {
+  "LISTING"
+  "USER"
+  "MESSAGE"
+  "STORY"
+}
+
+Enum "ReportCategory" {
+  "SPAM"
+  "PROHIBITED_ITEM"
+  "SCAM_OR_FRAUD"
+  "HARASSMENT"
+  "COUNTERFEIT"
+  "OTHER"
+}
+
+Enum "ModerationCaseType" {
+  "REPORT"
+  "LISTING_APPEAL"
+}
+
+Enum "ModerationCaseStatus" {
+  "OPEN"
+  "REVIEWING"
+  "ACTIONED"
+  "DISMISSED"
+  "UPHELD"
+  "OVERTURNED"
+  "WITHDRAWN"
+}
+
+Enum "IdType" {
+  "NATIONAL_ID"
+  "DRIVERS_LICENCE"
+  "PASSPORT"
+  "UMID"
+  "PHILHEALTH"
+  "POSTAL_ID"
+  "VOTERS_ID"
+}
+
+Enum "IdVerificationStatus" {
+  "PENDING"
+  "APPROVED"
+  "REJECTED"
+}
+
+Enum "IdRejectionReason" {
+  "BLURRY_PHOTO"
+  "NAME_MISMATCH"
+  "EXPIRED_ID"
+  "WRONG_DOCUMENT_TYPE"
+  "NOT_GOVERNMENT_ID"
+}
+
+Enum "AdminActionKind" {
+  "REPORT_REVIEWING"
+  "REPORT_DISMISSED"
+  "REPORT_ACTIONED"
+  "LISTING_HIDDEN"
+  "LISTING_UNHIDDEN"
+  "USER_SUSPENDED"
+  "USER_UNSUSPENDED"
+  "HUB_CREATED"
+  "HUB_UPDATED"
+  "HUB_DEACTIVATED"
+  "HUB_REACTIVATED"
+  "ID_VERIFICATION_APPROVED"
+  "ID_VERIFICATION_REJECTED"
+  "ROLE_CHANGED"
+  "OFFER_EXPIRED"
+  "LISTING_VALUE_APPROVED"
+  "LISTING_VALUE_REJECTED"
+  "TRADE_REWARD_REVERSED"
+  "TRADE_CANCELLED"
+  "LISTING_APPEAL_UPHELD"
+  "LISTING_APPEAL_OVERTURNED"
+  "ACHIEVEMENT_CREATED"
+  "ACHIEVEMENT_UPDATED"
+  "ACHIEVEMENT_DEACTIVATED"
+  "ACHIEVEMENT_REACTIVATED"
+  "ORGANIZATION_VERIFIED"
+  "ORGANIZATION_REJECTED"
+}
+
+Enum "AdminTargetType" {
+  "REPORT"
+  "LISTING"
+  "USER"
+  "HUB"
+  "ID_VERIFICATION"
+  "TRADE"
+  "LISTING_APPEAL"
+  "ACHIEVEMENT"
+  "ORGANIZATION"
+}
+
+Enum "ListingAppealKind" {
+  "VALUE_REJECTION"
+  "MODERATION_HIDE"
+}
+
+Enum "SafeZoneType" {
+  "MALL"
+  "BARANGAY_HALL"
+  "POLICE_STATION"
+  "PUBLIC_PLAZA"
+  "TRANSPORT_HUB"
+}
+
+Enum "AchievementCriterion" {
+  "VERIFIED_ACCOUNT"
+  "ID_VERIFIED"
+  "FIRST_LISTING"
+  "COMPLETED_TRADES"
+  "PROFILE_COMPLETE"
+  "LIFETIME_LEAVES"
+  "SAFEZONE_MEETUPS"
+  "REPORTS_FILED"
+  "BRIDGE_COMPLETED"
+  "PREMIUM_SUBSCRIBER"
+}
+
+Enum "ProgressType" {
+  "QUEST"
+  "ACHIEVEMENT"
+}
+
+Enum "BusinessCategory" {
+  "SARI_SARI"
+  "FOOD_AND_BEVERAGE"
+  "AGRICULTURE"
+  "HANDICRAFT"
+  "APPAREL"
+  "ELECTRONICS_REPAIR"
+  "SERVICES"
+  "RETAIL"
+  "COOPERATIVE"
+  "NONPROFIT"
+  "OTHER"
+}
+
+Enum "OrgVerificationStatus" {
+  "PENDING"
+  "VERIFIED"
+  "REJECTED"
+}
+
+Enum "OrgRejectionReason" {
+  "BLURRY_DOCUMENT"
+  "NAME_MISMATCH"
+  "EXPIRED_REGISTRATION"
+  "WRONG_DOCUMENT_TYPE"
+  "NOT_A_BUSINESS_DOCUMENT"
+}
+
+Enum "QuantityUnit" {
+  "KG"
+  "PCS"
+  "LITERS"
+}
+
+Enum "StoryType" {
+  "LISTING"
+}
+
+// ===================== Table groups =====================
+
+TableGroup "Identity & auth" {
+  "User"
+  "AuthToken"
+  "IdVerification"
+}
+
+TableGroup "Listings" {
+  "Item"
+  "ItemImage"
+  "ItemWantedCategory"
+}
+
+TableGroup "Trading" {
+  "Trade"
+  "SwapCode"
+  "Message"
+  "Review"
+}
+
+TableGroup "Social" {
+  "Follow"
+  "Like"
+  "Comment"
+  "Notification"
+  "Story"
+  "StoryView"
+}
+
+TableGroup "Leaves" {
+  "LeafTransaction"
+}
+
+TableGroup "Moderation" {
+  "ModerationCase"
+  "AdminAction"
+  "Block"
+}
+
+TableGroup "Organizations" {
+  "Organization"
+}
+
+TableGroup "Gamification" {
+  "Achievement"
+  "UserProgress"
+}
+
+TableGroup "Safe hubs" {
+  "SafeZoneHub"
+  "ItemSafeZone"
+}
