@@ -4,6 +4,7 @@
  *   npx tsx --tsconfig tsconfig.json --env-file=.env scripts/refresh-demo-perishables.ts --dry-run
  *   npx tsx --tsconfig tsconfig.json --env-file=.env scripts/refresh-demo-perishables.ts --apply [--live]
  *   ... add --clear-expiry-notices to either to also delete the stale expiry notices
+ *   ... add --demo-only to either to select ONLY @baylo-demo.test owners (not @baylo.test)
  *
  * Neither flag -> usage and exit. --dry-run reads only. --apply writes, and on
  * the live schema it ALSO needs --live (scripts/lib/live-guard.ts). Take a
@@ -49,7 +50,9 @@ import prisma from "../src/lib/prisma"
 import { requireScratchSchema, targetSchema } from "./lib/live-guard"
 import { ledgerInvariant } from "./lib/ledger-invariant"
 
-const SEED_DOMAINS = ["@baylo.test", "@baylo-demo.test"]
+// --demo-only narrows the owners to the demo population and leaves the
+// @baylo.test seed/tester accounts alone.
+const SEED_DOMAINS = process.argv.includes("--demo-only") ? ["@baylo-demo.test"] : ["@baylo.test", "@baylo-demo.test"]
 const H = 3_600_000
 
 /**
@@ -107,11 +110,11 @@ async function main() {
   const apply = process.argv.includes("--apply")
   const clearNotices = process.argv.includes("--clear-expiry-notices")
   if (dryRun === apply) {
-    console.error("  usage: refresh-demo-perishables.ts --dry-run | --apply [--live]  [--clear-expiry-notices]")
+    console.error("  usage: refresh-demo-perishables.ts --dry-run | --apply [--live]  [--clear-expiry-notices] [--demo-only]")
     process.exit(1)
   }
   if (apply) requireScratchSchema("scripts/refresh-demo-perishables.ts --apply")
-  console.log(`  mode: ${dryRun ? "DRY RUN (no writes)" : "APPLY"}   schema: ${targetSchema()}   clear expiry notices: ${clearNotices}\n`)
+  console.log(`  mode: ${dryRun ? "DRY RUN (no writes)" : "APPLY"}   schema: ${targetSchema()}   clear expiry notices: ${clearNotices}   owner domains: ${SEED_DOMAINS.join(", ")}\n`)
 
   const now = new Date()
   const items = await prisma.item.findMany({
