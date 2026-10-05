@@ -5,41 +5,47 @@
 //   target                                  print where DATABASE_URL points; touch nothing
 //   inspect-live                            READ-ONLY report on live `public` (see below)
 //   counts --schema S [--backup F]          per-table counts in S vs live public (and vs F's trailer)
+//   build-old --schema S [--replace]        S := the PRE-v2 structure only (empty tables), for restore tests
 //   restore-old F --schema S [--replace]    S := backup F in the PRE-v2 structure, plus
 //                                           _prisma_migrations copied from live (read)
 //   apply-single --schema S [--sleep-after N --sleep-secs K]
-//                                           all six v2 migrations AND their _prisma_migrations
-//                                           rows in ONE transaction (the proposed cutover shape)
+//                                           THE CUTOVER METHOD: all six v2 migrations AND their
+//                                           _prisma_migrations rows in ONE transaction
+//                                           (migration-runner.ts applyV2InTransaction)
 //   apply-perfile --schema S [--sleep-after N --sleep-secs K]
 //                                           the six as six transactions, the way
-//                                           `prisma migrate deploy` runs them
+//                                           `prisma migrate deploy` runs them (shows the half state)
 //   kill --schema S --after-secs K          terminate the backend running in S after K s
 //   state --schema S                        which layout S is in: old / new / HALF
 //   rollback F --schema S                   restore backup F OVER S (whatever layout it is in),
 //                                           in one transaction, timed
+//   lockdown --schema S                     rehearse the API-role lockdown on S: mirror live's
+//                                           anon/authenticated grants, revoke, prove
 //   drop --schema S                         drop a schema_v2_cut* rehearsal schema
 //
 // SAFETY. Every write command refuses a schema that is not schema_v2_cut*,
-// so it can never name `public` or the week-2 copy schema_v2_wk1. Every
-// statement it runs is unqualified and goes through an explicit
-// `SET search_path TO "<S>"`, the build-scratch.ts mechanism. inspect-live and
-// counts open their session with default_transaction_read_only=on, so Postgres
-// itself refuses a write there. Each command prints its target first.
+// so it can never name `public` or the week-2 copy schema_v2_wk1. Every write
+// goes through scripts/lib/migration-runner.ts withGuardedTransaction(): one
+// transaction, search_path pinned at session level and re-checked around
+// every batch, transaction control in a migration stripped or refused, and a
+// backstop that rolls back if `public` was touched. Read-only sessions use SET
+// SESSION default_transaction_read_only (asserted). Each command prints its
+// target first.
 import { Client, types } from "pg"
-import { createHash, randomUUID } from "node:crypto"
+import { randomUUID } from "node:crypto"
 import { existsSync } from "node:fs"
 import { readFile, readdir } from "node:fs/promises"
 import { LEDGER_INVARIANT_SQL, figuresFromRow, judge } from "../lib/ledger-invariant"
+import {
+  V2_MIGRATIONS, applyV2InTransaction, prepareBatch, preV2Chain, prismaChecksum, v2Chain, withGuardedTransaction, type Batch,
+} from "../lib/migration-runner"
+import { describe, exposure, lockdownStatements } from "../lib/api-role-lockdown"
 
 for (const oid of [1082, 1114, 1083, 1184]) types.setTypeParser(oid, (v) => v)
 types.setTypeParser(20, (v) => v)
 types.setTypeParser(1700, (v) => v)
 
-const V2 = [
-  "20261003000000_schema_v2_core", "20261003000001_schema_v2_ledger", "20261003000002_schema_v2_trade",
-  "20261004000000_schema_v2_audit_fixes", "20261004000001_schema_v2_trade_completed_backfill",
-  "20261004000002_schema_v2_drop_trade_hidden",
-]
+const V2 = V2_MIGRATIONS as readonly string[]
 const TRAILER = "-- Baylo data dump complete"
 const MIG = new URL("../../prisma/migrations/", import.meta.url)
 
@@ -79,6 +85,9 @@ async function connect(readOnly: boolean): Promise<Client> {
   // 4 Oct 2026; it does forward search_path). A SET after connect is honoured,
   // and is asserted rather than assumed.
   const c = new Client({ connectionString: baseUrl().toString() })
+  // A terminated backend (kill tests, pooler drop) surfaces as the failed
+  // query's own error; without a listener pg also throws an uncaught one.
+  c.on("error", (e) => console.error(`  connection lost: ${e.message}`))
   await c.connect()
   if (readOnly) {
     await c.query(`SET SESSION default_transaction_read_only = on`)
@@ -89,64 +98,15 @@ async function connect(readOnly: boolean): Promise<Client> {
 }
 
 // ── SQL sources ─────────────────────────────────────────────────────────────
+// All migration SQL comes from scripts/lib/migration-runner.ts (preV2Chain,
+// v2Chain), already validated: inner BEGIN/COMMIT stripped, and anything else
+// that could change the transaction or the path refused.
 
-function scopeCatalogChecks(ddl: string): string {
-  const scoped = ddl
-    .replace(/(FROM\s+pg_type\s+WHERE\s+typname\s*=\s*'[^']+')/gi, "$1 AND typnamespace = current_schema()::regnamespace")
-    .replace(/(FROM\s+pg_constraint\s+WHERE\s+conname\s*=\s*'[^']+')/gi, "$1 AND connamespace = current_schema()::regnamespace")
-    .replace(/(FROM\s+information_schema\.table_constraints\s+WHERE\s+constraint_name\s*=\s*'[^']+')/gi, "$1 AND constraint_schema = current_schema()")
-  const lookups = scoped.match(/FROM\s+(pg_type|pg_constraint|pg_class|pg_enum|pg_namespace|information_schema\.\w+)\b[^;]*/gi) ?? []
-  const unscoped = lookups.filter((l) => !/current_schema\(\)/.test(l))
-  if (unscoped.length) { for (const l of unscoped) console.error(`  unscoped catalog lookup: ${l.slice(0, 140)}`); process.exit(1) }
-  return scoped
-}
-
-async function oldChain(): Promise<{ names: string[]; ddl: string }> {
-  const names = (await readdir(MIG, { withFileTypes: true }))
-    .filter((d) => d.isDirectory() && !V2.includes(d.name)).map((d) => d.name).sort()
-  let ddl = ""
-  for (const d of names) {
-    const body = await readFile(new URL(`${d}/migration.sql`, MIG), "utf8")
-    ddl += body.replace(/^\s*CREATE SCHEMA IF NOT EXISTS "public";\s*$/gim, "") + "\n"
-  }
-  // 20260925000003_drop_removed_roles carries its own BEGIN; ... COMMIT;. Run
-  // inside an outer transaction, that COMMIT ends the outer one early, and on
-  // 4 Oct 2026 it also ended a SET LOCAL search_path, so the rest of the chain
-  // resolved to public (LIVE). It failed harmlessly on its first statement. The
-  // pair is redundant inside our own transaction, so it is stripped, and any
-  // transaction control still left stops the run.
-  ddl = ddl.replace(/^\s*(BEGIN|COMMIT);\s*$/gim, "")
-  if (/^\s*(BEGIN|COMMIT|ROLLBACK|END|START\s+TRANSACTION|SAVEPOINT|RELEASE)\b[^;]*;/im.test(ddl.replace(/\$\$[\s\S]*?\$\$/g, ""))) {
-    console.error("  the pre-v2 chain still contains transaction control after stripping; refusing"); process.exit(1)
-  }
-  return { names, ddl: scopeCatalogChecks(ddl) }
-}
-
-/** Session-level (never SET LOCAL: a COMMIT would end it) and asserted. */
-async function pinSchema(pg: Client, s: string) {
-  await pg.query(`SET search_path TO "${s}"`)
-  await assertPinned(pg, s)
-}
-async function assertPinned(pg: Client, s: string) {
-  const sp = (await pg.query(`SELECT current_setting('search_path') sp`)).rows[0].sp
-  if (sp !== `"${s}"` && sp !== s) throw new Error(`search_path is ${sp}, not ${s}; stopping`)
-}
-
-async function v2File(name: string): Promise<{ sql: string; checksum: string }> {
-  const buf = await readFile(new URL(`${name}/migration.sql`, MIG))
-  const sql = buf.toString("utf8")
-  const code = sql.replace(/--.*$/gm, "")
-  if (/\bpublic\s*\./i.test(code) || /search_path/i.test(code)) { console.error(`${name} names public; refusing`); process.exit(1) }
-  // Prisma's checksum: SHA-256 hex of the file bytes as read (validated
-  // against live's recorded checksums by `restore-old`).
-  return { sql, checksum: createHash("sha256").update(buf).digest("hex") }
-}
-
-async function readBackup(file: string): Promise<string> {
+async function readBackup(file: string): Promise<{ sql: string; batch: Batch }> {
   if (!existsSync(file)) { console.error(`no such file: ${file}`); process.exit(2) }
-  const dump = await readFile(file, "utf8")
-  if (!dump.includes(TRAILER)) { console.error("backup has no trailer; it is truncated"); process.exit(1) }
-  return dump
+  const sql = await readFile(file, "utf8")
+  if (!sql.includes(TRAILER)) { console.error("backup has no trailer; it is truncated"); process.exit(1) }
+  return { sql, batch: prepareBatch(file, "data", sql) }
 }
 
 const PRISMA_MIGRATIONS_DDL = `CREATE TABLE "_prisma_migrations" (
@@ -241,6 +201,15 @@ async function inspectLive() {
     console.log(`  PostgREST role grants on public tables: ${grants.map((r) => `${r.grantee} ${r.p} on ${r.n} tables`).join("; ") || "none"}`)
     const defacl = await q(`SELECT pg_get_userbyid(defaclrole) owner, defaclobjtype t, defaclacl::text acl FROM pg_default_acl WHERE defaclnamespace = 'public'::regnamespace`)
     console.log(`  default ACLs in public (grants new tables get): ${defacl.map((r) => `${r.owner}/${r.t}: ${r.acl}`).join(" | ") || "none"}`)
+    console.log(`  API-role exposure of public: ${describe(await exposure(pg, "public"))}`)
+    const owners = await q(`SELECT tableowner, count(*)::int n FROM pg_tables WHERE schemaname = 'public' GROUP BY 1`)
+    console.log(`  public table owners: ${owners.map((r) => `${r.tableowner} x${r.n}`).join(", ")}`)
+    const elsewhere = await q(`SELECT n.nspname s, count(*)::int n FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+      WHERE c.relkind = 'r' AND n.nspname <> 'public' AND n.nspname !~ '^(pg_|information_schema)'
+        AND (has_table_privilege('anon', c.oid, 'SELECT') OR has_table_privilege('authenticated', c.oid, 'SELECT')) GROUP BY 1 ORDER BY 1`)
+    console.log(`  other schemas with tables anon/authenticated can SELECT: ${elsewhere.map((r) => `${r.s} x${r.n}`).join(", ") || "none"}`)
+    const fnDefault = await q(`SELECT count(*)::int n FROM pg_default_acl WHERE defaclnamespace = 0 AND defaclobjtype = 'f'`)
+    console.log(`  global default ACL rows for functions: ${fnDefault[0].n} (0 = built-in default, EXECUTE to PUBLIC)`)
     const scratch = await q(`SELECT schema_name FROM information_schema.schemata WHERE schema_name ~ '^(schema_v2_|scratch_|restore_drill)' ORDER BY 1`)
     console.log(`  scratch schemas on this server: ${scratch.map((r) => r.schema_name).join(", ") || "none"}`)
 
@@ -255,11 +224,10 @@ async function inspectLive() {
     console.log(`  in this branch but NOT applied on live (what deploy would run): ${pending.join(", ") || "none"}`)
     let mism = 0
     for (const m of migs.filter((x) => x.done && local.includes(x.migration_name))) {
-      const buf = await readFile(new URL(`${m.migration_name}/migration.sql`, MIG))
-      const sum = createHash("sha256").update(buf).digest("hex")
+      const sum = prismaChecksum(await readFile(new URL(`${m.migration_name}/migration.sql`, MIG)))
       if (sum !== m.checksum) { mism++; console.log(`  CHECKSUM DIFFERS: ${m.migration_name} live=${m.checksum.slice(0, 12)} file=${sum.slice(0, 12)}`) }
     }
-    console.log(`  checksum of each applied migration vs this branch's file: ${mism} differ`)
+    console.log(`  checksum of each applied migration vs this branch's file (LF-normalised, as git stores it): ${mism} differ`)
     for (const m of migs.filter((x) => !x.done || x.rb)) console.log(`  non-clean row: ${m.migration_name} done=${m.done} rolledBack=${m.rb}`)
   } finally { await pg.end() }
 }
@@ -273,7 +241,7 @@ async function counts() {
     const a = await tableCounts(pg, s), live = await tableCounts(pg, "public")
     let claimed: Record<string, number> | undefined
     const f = opt("--backup")
-    if (f) claimed = Object.fromEntries(((/-- rowcounts: (.*)/.exec(await readBackup(f)))?.[1] ?? "").split(/\s+/).filter(Boolean).map((p) => { const [t, n] = p.split("="); return [t, Number(n)] }))
+    if (f) claimed = Object.fromEntries(((/-- rowcounts: (.*)/.exec((await readBackup(f)).sql))?.[1] ?? "").split(/\s+/).filter(Boolean).map((p) => { const [t, n] = p.split("="); return [t, Number(n)] }))
     const all = [...new Set([...Object.keys(live), ...Object.keys(a)])].sort()
     let liveDiff = 0, fileDiff = 0
     console.log(`  ${"table".padEnd(24)} ${"live".padStart(6)} ${s.padStart(20)}${claimed ? "   backup" : ""}`)
@@ -297,63 +265,68 @@ async function liveMigrationRows(): Promise<Record<string, unknown>[]> {
   } finally { await ro.end() }
 }
 
+async function buildOld() {
+  const s = writableSchema()
+  const chain = await preV2Chain()
+  const pg = await connect(false)
+  try {
+    const t0 = Date.now()
+    await withGuardedTransaction(pg, { target: s, create: flag("--replace") ? "replace" : "fresh" }, async (g) => {
+      for (const m of chain) await g.run(m.batch)
+    })
+    console.log(`  "${s}": pre-v2 structure from ${chain.length} migrations, no data (${Date.now() - t0} ms)`)
+  } finally { await pg.end() }
+}
+
 async function restoreOld() {
   const s = writableSchema()
-  const file = positional ?? ""
-  const dump = await readBackup(file)
-  const { names, ddl } = await oldChain()
+  const { batch } = await readBackup(positional ?? "")
+  const chain = await preV2Chain()
   const rows = await liveMigrationRows() // READ from live, written only into s
   const pg = await connect(false)
   try {
-    const exists = (await pg.query(`SELECT 1 FROM information_schema.schemata WHERE schema_name = $1`, [s])).rowCount
-    if (exists && !flag("--replace")) { console.error(`schema "${s}" exists; pass --replace`); process.exit(1) }
     const t0 = Date.now()
-    await pg.query("BEGIN")
-    if (exists) await pg.query(`DROP SCHEMA "${s}" CASCADE`)
-    await pg.query(`CREATE SCHEMA "${s}"`)
-    await pinSchema(pg, s)
-    await pg.query(ddl)
-    await assertPinned(pg, s)
-    await pg.query(dump.replace(/^\s*(BEGIN|COMMIT);\s*$/gim, "")) // already inside our transaction
-    await assertPinned(pg, s)
-    await pg.query(PRISMA_MIGRATIONS_DDL)
-    for (const r of rows) {
-      const cols = Object.keys(r)
-      await pg.query(`INSERT INTO "_prisma_migrations" (${cols.map((c) => `"${c}"`).join(",")}) VALUES (${cols.map((_, i) => `$${i + 1}`).join(",")})`, cols.map((c) => r[c]))
-    }
-    await pg.query("COMMIT")
+    await withGuardedTransaction(pg, { target: s, create: flag("--replace") ? "replace" : "fresh" }, async (g) => {
+      for (const m of chain) await g.run(m.batch)
+      await g.run(batch)
+      await g.query(PRISMA_MIGRATIONS_DDL)
+      for (const r of rows) {
+        const cols = Object.keys(r)
+        await g.query(`INSERT INTO "_prisma_migrations" (${cols.map((c) => `"${c}"`).join(",")}) VALUES (${cols.map((_, i) => `$${i + 1}`).join(",")})`, cols.map((c) => r[c]))
+      }
+    })
     const n = (await pg.query(`SELECT count(*)::int n FROM pg_tables WHERE schemaname = $1`, [s])).rows[0].n
-    console.log(`  "${s}": pre-v2 structure from ${names.length} migrations, backup restored, ${rows.length} live _prisma_migrations rows copied; ${n} tables incl. _prisma_migrations (${Date.now() - t0} ms)`)
-  } catch (e) { await pg.query("ROLLBACK").catch(() => {}); throw e } finally { await pg.end() }
+    console.log(`  "${s}": pre-v2 structure from ${chain.length} migrations, backup restored, ${rows.length} live _prisma_migrations rows copied; ${n} tables incl. _prisma_migrations (${Date.now() - t0} ms)`)
+  } finally { await pg.end() }
 }
 
 async function apply(single: boolean) {
   const s = writableSchema()
-  const sleepAfter = opt("--sleep-after"), sleepSecs = Number(opt("--sleep-secs") ?? 0)
-  const files = await Promise.all(V2.map(v2File))
+  const sleepAfter = opt("--sleep-after") ? Number(opt("--sleep-after")) : undefined
+  const sleepSecs = Number(opt("--sleep-secs") ?? 30)
   const pg = await connect(false)
   const pid = (await pg.query(`SELECT pg_backend_pid() p`)).rows[0].p
-  console.log(`  backend pid ${pid}; mode ${single ? "ONE transaction for all six + bookkeeping" : "six transactions (migrate deploy shape)"}`)
+  console.log(`  backend pid ${pid}; mode ${single ? "ONE transaction for all six + bookkeeping (the cutover method)" : "six transactions (migrate deploy shape)"}`)
   const t0 = Date.now()
   try {
-    await pinSchema(pg, s)
-    if (single) await pg.query("BEGIN")
-    for (let i = 0; i < V2.length; i++) {
-      const t = Date.now()
-      const id = randomUUID()
-      if (!single) await pg.query(`INSERT INTO "_prisma_migrations" (id, checksum, migration_name, started_at, applied_steps_count) VALUES ($1, $2, $3, now(), 0)`, [id, files[i].checksum, V2[i]])
-      const killHere = sleepAfter === V2[i] || sleepAfter === String(i + 1)
-      // The kill window sits INSIDE this migration's own transaction (appended
-      // to the same multi-statement string), so a kill lands mid-migration.
-      if (killHere) console.log(`  ${V2[i]}: running with a ${sleepSecs}s sleep after its last statement (kill window)`)
-      await pg.query(files[i].sql + (killHere ? `
-;SELECT pg_sleep(${sleepSecs});` : "")) // implicit transaction when not inside BEGIN
-      if (single) await pg.query(`INSERT INTO "_prisma_migrations" (id, checksum, migration_name, started_at, finished_at, applied_steps_count) VALUES ($1, $2, $3, now(), clock_timestamp(), 1)`, [id, files[i].checksum, V2[i]])
-      else await pg.query(`UPDATE "_prisma_migrations" SET finished_at = now(), applied_steps_count = 1 WHERE id = $1`, [id])
-      await assertPinned(pg, s)
-      console.log(`  applied ${V2[i]} (${Date.now() - t} ms)`)
+    if (single) {
+      await withGuardedTransaction(pg, { target: s, lockTimeout: "5s" }, (g) => applyV2InTransaction(g, { sleepAfter, sleepSecs }))
+    } else {
+      // Rehearsal only: what `prisma migrate deploy` does -- a started row,
+      // the migration in its own transaction, then the finished stamp.
+      const files = await v2Chain()
+      for (let i = 0; i < files.length; i++) {
+        const f = files[i], id = randomUUID(), t = Date.now()
+        await withGuardedTransaction(pg, { target: s }, (g) => g.query(
+          `INSERT INTO "_prisma_migrations" (id, checksum, migration_name, started_at, applied_steps_count) VALUES ($1, $2, $3, now(), 0)`, [id, f.checksum, f.name]))
+        await withGuardedTransaction(pg, { target: s }, async (g) => {
+          await g.run(f.batch)
+          if (sleepAfter === i + 1) { console.log(`  ${f.name}: sleeping ${sleepSecs}s inside its own transaction (kill window)`); await g.query(`SELECT pg_sleep($1)`, [sleepSecs]) }
+          await g.query(`UPDATE "_prisma_migrations" SET finished_at = now(), applied_steps_count = 1 WHERE id = $1`, [id])
+        })
+        console.log(`  applied ${f.name} (${Date.now() - t} ms)`)
+      }
     }
-    if (single) await pg.query("COMMIT")
     console.log(`  DONE in ${Date.now() - t0} ms`)
   } catch (e) {
     console.log(`  ABORTED after ${Date.now() - t0} ms: ${(e as Error).message}`)
@@ -422,34 +395,88 @@ async function state() {
 async function rollback() {
   const s = writableSchema()
   const file = positional ?? ""
-  const dump = await readBackup(file)
-  const { ddl } = await oldChain()
+  const { batch } = await readBackup(file)
+  const chain = await preV2Chain()
   const pg = await connect(false)
   try {
     const t0 = Date.now()
-    await pg.query("BEGIN")
-    await pinSchema(pg, s)
-    // Drop every application object in s but keep _prisma_migrations: on live,
-    // public itself (its grants, default ACLs, extensions' references) must
-    // survive, so the rollback empties the schema rather than dropping it.
-    const tables = (await pg.query(`SELECT tablename FROM pg_tables WHERE schemaname = $1 AND tablename <> '_prisma_migrations'`, [s])).rows.map((r) => r.tablename)
-    if (tables.length) await pg.query(`DROP TABLE ${tables.map((x) => `"${x}"`).join(", ")} CASCADE`)
-    const enums = (await pg.query(`SELECT typname FROM pg_type WHERE typnamespace = $1::regnamespace AND typtype = 'e'`, [s])).rows.map((r) => r.typname)
-    if (enums.length) await pg.query(`DROP TYPE ${enums.map((x) => `"${x}"`).join(", ")} CASCADE`)
-    const leftovers = (await pg.query(`SELECT count(*)::int n FROM pg_class WHERE relnamespace = $1::regnamespace AND relname <> '_prisma_migrations' AND relname <> '_prisma_migrations_pkey'`, [s])).rows[0].n
-    if (leftovers) throw new Error(`${leftovers} objects left in ${s} after the drop; refusing to rebuild over them`)
-    const removed = (await pg.query(`DELETE FROM "_prisma_migrations" WHERE migration_name = ANY($1)`, [V2])).rowCount
-    const tDrop = Date.now() - t0
-    await pg.query(ddl)
-    await assertPinned(pg, s)
-    const tDdl = Date.now() - t0 - tDrop
-    await pg.query(dump.replace(/^\s*(BEGIN|COMMIT);\s*$/gim, ""))
-    await pg.query("COMMIT")
+    let tDrop = 0, tDdl = 0, dropped = "", removed = 0
+    await withGuardedTransaction(pg, { target: s, lockTimeout: "5s" }, async (g) => {
+      // Drop every application object in s but keep _prisma_migrations: on
+      // live, public itself (its grants, default ACLs, extensions' references)
+      // must survive, so the rollback empties the schema rather than dropping it.
+      const tables = (await g.query(`SELECT tablename FROM pg_tables WHERE schemaname = $1 AND tablename <> '_prisma_migrations'`, [s])).rows.map((r) => String(r.tablename))
+      if (tables.length) await g.query(`DROP TABLE ${tables.map((x) => `"${x}"`).join(", ")} CASCADE`)
+      const enums = (await g.query(`SELECT typname FROM pg_type WHERE typnamespace = $1::regnamespace AND typtype = 'e'`, [s])).rows.map((r) => String(r.typname))
+      if (enums.length) await g.query(`DROP TYPE ${enums.map((x) => `"${x}"`).join(", ")} CASCADE`)
+      const leftovers = Number((await g.query(`SELECT count(*) n FROM pg_class WHERE relnamespace = $1::regnamespace AND relname NOT IN ('_prisma_migrations', '_prisma_migrations_pkey')`, [s])).rows[0].n)
+      if (leftovers) throw new Error(`${leftovers} objects left in ${s} after the drop; refusing to rebuild over them`)
+      removed = (await g.query(`DELETE FROM "_prisma_migrations" WHERE migration_name = ANY($1)`, [[...V2_MIGRATIONS]])).rowCount ?? 0
+      dropped = `${tables.length} tables + ${enums.length} enums`
+      tDrop = Date.now() - t0
+      for (const m of chain) await g.run(m.batch)
+      tDdl = Date.now() - t0 - tDrop
+      await g.run(batch)
+    })
     const total = Date.now() - t0
-    console.log(`  dropped ${tables.length} tables + ${enums.length} enums, removed ${removed} v2 _prisma_migrations rows (${tDrop} ms)`)
+    console.log(`  dropped ${dropped}, removed ${removed} v2 _prisma_migrations rows (${tDrop} ms)`)
     console.log(`  rebuilt pre-v2 structure (${tDdl} ms), restored ${file} (${total - tDrop - tDdl} ms)`)
     console.log(`  ROLLBACK COMPLETE in ${total} ms (one transaction)`)
-  } catch (e) { await pg.query("ROLLBACK").catch(() => {}); throw e } finally { await pg.end() }
+  } finally { await pg.end() }
+}
+
+async function lockdown() {
+  const s = writableSchema()
+  const pg = await connect(false)
+  try {
+    // Live's shape first, read-only, so the copy is made to look like it.
+    const ro = await connect(true)
+    const live = await exposure(ro, "public")
+    await ro.end()
+    console.log(`  live public (read-only): ${describe(live)}`)
+    await withGuardedTransaction(pg, { target: s }, async (g) => {
+      const q = (sql: string, params?: unknown[]) => g.query(sql, params)
+      const roles = "anon, authenticated, service_role"
+      for (const sql of [
+        `GRANT USAGE ON SCHEMA "${s}" TO ${roles}`,
+        `GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA "${s}" TO ${roles}`,
+        `GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA "${s}" TO ${roles}`,
+        `GRANT ALL PRIVILEGES ON ALL ROUTINES IN SCHEMA "${s}" TO ${roles}`,
+        `ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA "${s}" GRANT ALL ON TABLES TO ${roles}`,
+        `ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA "${s}" GRANT ALL ON SEQUENCES TO ${roles}`,
+        `ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA "${s}" GRANT ALL ON FUNCTIONS TO ${roles}`,
+      ]) await q(sql)
+      const before = await exposure(q, s)
+      console.log(`  copy, mirrored to live's shape: ${describe(before)}`)
+      if (before.tablesExposed !== before.tables || !before.defaultAclExposed.length) throw new Error("the mirror does not reproduce live's exposure; the rehearsal would prove nothing")
+
+      const t0 = Date.now()
+      for (const sql of lockdownStatements(s, "postgres")) await q(sql)
+      console.log(`  lockdown applied: ${lockdownStatements(s, "postgres").length} statements (${Date.now() - t0} ms)`)
+      // supabase_admin's per-schema defaults: is this role allowed to change them?
+      await q("SAVEPOINT sa")
+      try {
+        for (const sql of lockdownStatements(s, "supabase_admin")) await q(sql)
+        await q("RELEASE SAVEPOINT sa")
+        console.log(`  supabase_admin default ACLs: this role CAN change them`)
+      } catch (e) {
+        await q("ROLLBACK TO SAVEPOINT sa")
+        console.log(`  supabase_admin default ACLs: this role can NOT change them (${(e as Error).message})`)
+      }
+      const after = await exposure(q, s)
+      console.log(`  after lockdown: ${describe(after)}`)
+      await q(`CREATE TABLE "_lockdown_probe" (x int)`)
+      const probe = (await q(`SELECT has_table_privilege('anon', '"_lockdown_probe"', 'SELECT') a, has_table_privilege('authenticated', '"_lockdown_probe"', 'INSERT') u, has_table_privilege('service_role', '"_lockdown_probe"', 'SELECT') sr, has_table_privilege('postgres', '"_lockdown_probe"', 'INSERT') pg`)).rows[0]
+      console.log(`  a table created AFTER the lockdown: anon SELECT ${probe.a}, authenticated INSERT ${probe.u}, service_role SELECT ${probe.sr}, postgres INSERT ${probe.pg}`)
+      await q(`DROP TABLE "_lockdown_probe"`)
+      const ok = after.tablesExposed === 0 && after.sequencesExposed === 0 && after.routinesExposed === 0
+        && !after.defaultAclExposed.some((e) => e.startsWith("postgres/"))
+        && probe.a === false && probe.u === false && probe.sr === true && probe.pg === true
+        && after.serviceRoleTables === before.serviceRoleTables && after.postgresTables === before.postgresTables
+      console.log(`  LOCKDOWN ${ok ? "VERIFIED" : "FAILED"} on "${s}"`)
+      if (!ok) throw new Error("lockdown did not verify; rolled back")
+    })
+  } finally { await pg.end() }
 }
 
 async function drop() {
@@ -462,7 +489,7 @@ const run: Record<string, () => Promise<void>> = {
   target: async () => printTarget(opt("--schema") ?? "(none given = public = LIVE)", "READ-ONLY"),
   "inspect-live": inspectLive, counts, "restore-old": restoreOld,
   "apply-single": () => apply(true), "apply-perfile": () => apply(false),
-  kill, state, rollback, drop,
+  kill, state, rollback, drop, "build-old": buildOld, lockdown,
 }
 if (!run[cmd]) { console.error(`usage: see header (got "${cmd}")`); process.exit(2) }
 run[cmd]().catch((e) => { console.error(e); process.exit(1) })
