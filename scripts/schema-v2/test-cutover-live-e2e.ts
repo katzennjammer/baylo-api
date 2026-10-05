@@ -67,7 +67,7 @@ async function main() {
   console.log(`  target  host=${u.hostname}:${u.port}  database=${u.pathname.slice(1)}  writes ONLY to ${S}, ${SRC}; public is read`)
   if (existsSync(TOKEN)) { console.error(`  a token is already armed at ${TOKEN}; refusing to start`); process.exit(1) }
   const before = await liveSnapshot()
-  console.log(`  live before: ${before.summary}\n`)
+  console.log(`  live before: ${before.summary}\n  grants:      ${before.grants}\n`)
 
   console.log("1. A scratch copy of live, as live is: old layout, live's migration history, live's API-role grants")
   const r1 = sh("restore-old (target)", tsx, ["--env-file=.env", "scripts/schema-v2/cutover-rehearsal.ts", "restore-old", backup, "--schema", S, "--replace", "--mirror-grants"])
@@ -131,8 +131,8 @@ async function main() {
   }
   ok(!existsSync(TOKEN), "no token left armed")
   const after = await liveSnapshot()
-  console.log(`  live after:  ${after.summary}`)
-  ok(after.text === before.text, "live public is identical before and after (counts, ledger, catalog fingerprint, _prisma_migrations)")
+  console.log(`  live after:  ${after.summary}\n  grants:      ${after.grants}`)
+  ok(after.full === before.full, "live public is identical before and after (counts, ledger, catalog fingerprint, _prisma_migrations, grants and default ACLs)")
 
   console.log(`\n  timings:\n${timings.map((t) => `    ${t}`).join("\n")}`)
   console.log(failures ? `\n  CUTOVER TOOL E2E FAILED: ${failures}\n` : `\n  CUTOVER TOOL E2E PASSED\n`)

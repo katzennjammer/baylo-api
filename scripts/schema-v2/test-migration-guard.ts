@@ -18,14 +18,16 @@
 //      on `public` (shown with a read)
 //   3  the runner, given the same SQL, stays in ONE transaction on the
 //      scratch schema
-//   4  refusals happen before anything runs (target public, non-scratch)
+//   4  refusals happen before anything runs (target public, non-scratch),
+//      and each one for the RIGHT reason (asserted by message); the live
+//      stand-in refuses public; confirmLiveWrite's gates fire in order
 //   5  backstop and pin re-check, tripped on the decoy: dynamic SQL that
 //      writes rows, changes the catalog, takes a write lock, or moves the
 //      search_path is rolled back, and the decoy is unchanged
 //   6  live `public` is byte-for-byte the same before and after
 import { Client } from "pg"
 import { readFile, readdir } from "node:fs/promises"
-import { GuardError, prepareBatch, preV2Chain, v2Chain, withGuardedTransaction } from "../lib/migration-runner"
+import { GuardError, confirmLiveWrite, prepareBatch, preV2Chain, v2Chain, withGuardedTransaction } from "../lib/migration-runner"
 import { liveSnapshot, liveUrl } from "../lib/live-snapshot"
 
 const T = "schema_v2_cut_guardtest", DECOY = "schema_v2_cut_decoy"
@@ -51,7 +53,7 @@ async function main() {
   const u = new URL(liveUrl())
   console.log(`  target  host=${u.hostname}:${u.port}  database=${u.pathname.slice(1)}  writes ONLY to ${T}, ${DECOY}; public is read`)
   const before = await liveSnapshot()
-  console.log(`  live before: ${before.summary}\n`)
+  console.log(`  live before: ${before.summary}\n  grants:      ${before.grants}\n`)
 
   // ── 0 ──
   console.log("0. Every script that runs migration SQL goes through the runner")
@@ -120,12 +122,42 @@ async function main() {
     const where = (await pg.query(`SELECT to_regclass('"${T}"."guard_a"') IS NOT NULL a, to_regclass('"${T}"."guard_b"') IS NOT NULL b, to_regclass('public."guard_a"') IS NOT NULL pa, to_regclass('public."guard_b"') IS NOT NULL pb`)).rows[0]
     ok(where.a && where.b && !where.pa && !where.pb, `guard_a and guard_b landed in ${T}; public has neither`)
 
-    // ── 4 ── refusals before anything runs
-    console.log("\n4. Refused targets (before BEGIN)")
-    ok(!!(await rejectsGuard(withGuardedTransaction(pg, { target: "public" }, async () => {}))), "target public without a live authorization")
-    ok(!!(await rejectsGuard(withGuardedTransaction(pg, { target: "public", live: { purpose: "x" } as never }, async () => {}))), "target public with a forged authorization object")
-    for (const t of ["extensions", "auth", "storage", "Public"]) ok(!!(await rejectsGuard(withGuardedTransaction(pg, { target: t }, async () => {}))), `target "${t}"`)
-    ok(!!(await rejectsGuard(withGuardedTransaction(pg, { target: T, protect: T }, async () => {}))), "target equal to the protected schema")
+    // ── 4 ── refusals before anything runs, each for the RIGHT reason. On
+    // 5 Oct the live lockdown was refused by the protected-schema check, and
+    // these used to assert only "refused", which any guard satisfies.
+    console.log("\n4. Refused targets (before BEGIN), each for the right reason")
+    const why = async (o: Parameters<typeof withGuardedTransaction>[1]) => (await rejectsGuard(withGuardedTransaction(pg, o, async () => {}))) || ""
+    const because = (msg: string, re: RegExp, label: string) =>
+      ok(re.test(msg), `${label}: ${msg ? msg.replace(/^\[migration guard\] /, "").slice(0, 110) : "NOT REFUSED"}`)
+    const noAuth = /without a confirmed live authorization/
+    because(await why({ target: "public" }), noAuth, "target public, no authorization")
+    because(await why({ target: "public", live: { purpose: "lockdown", target: "public" } as never, purpose: "lockdown" }), noAuth, "target public, forged authorization object")
+    for (const t of ["extensions", "auth", "storage", "Public"]) because(await why({ target: t }), /only schema_v2_\*, scratch_\* or restore_drill/, `target "${t}"`)
+    because(await why({ target: T, protect: T }), /is the protected schema/, "scratch target equal to the protected schema")
+    ok(!/protected schema/.test(await why({ target: "public" })), "public is never refused as 'the protected schema' (the 5 Oct bug)")
+
+    console.log("\n4b. The live stand-in (BAYLO_LIVE_STANDIN), in-process")
+    process.env.BAYLO_LIVE_STANDIN = T
+    because(await why({ target: "public" }), /STAND-IN \(not live\) rehearsal/, "stand-in set: target public")
+    because(await why({ target: T }), /refusing to write "schema_v2_cut_guardtest" \(STAND-IN \(not live\)\) without a confirmed live authorization/, "stand-in set: the stand-in itself, no authorization")
+    because((await rejectsGuard(confirmLiveWrite("lockdown", "host", "public"))) || "", /STAND-IN \(not live\) rehearsal/, "stand-in set: confirmLiveWrite for public")
+    process.env.BAYLO_LIVE_STANDIN = "schema_v2_wk1"
+    because(await why({ target: T }), /is not a schema_v2_cut\* scratch schema/, "a stand-in that is not a schema_v2_cut* copy")
+    delete process.env.BAYLO_LIVE_STANDIN
+
+    console.log("\n4c. confirmLiveWrite's gates, in order")
+    const envBefore = process.env.BAYLO_CUTOVER_LIVE
+    delete process.env.BAYLO_CUTOVER_LIVE
+    because((await rejectsGuard(confirmLiveWrite("lockdown", "host"))) || "", /BAYLO_CUTOVER_LIVE=1 is not set/, "no BAYLO_CUTOVER_LIVE=1")
+    process.env.BAYLO_CUTOVER_LIVE = "1"
+    because((await rejectsGuard(confirmLiveWrite("lockdown", "host"))) || "", /pass --confirm-live-lockdown/, "no --confirm-live-lockdown flag")
+    because((await rejectsGuard(confirmLiveWrite("lockdown", "host", "schema_v2_wk1"))) || "", /is not a live target/, "a target that is neither public nor the stand-in")
+    if (!process.stdin.isTTY || !process.stdout.isTTY) {
+      process.argv.push("--confirm-live-lockdown")
+      because((await rejectsGuard(confirmLiveWrite("lockdown", "host"))) || "", /needs an interactive terminal/, "flag but no terminal")
+      process.argv.pop()
+    } else console.log("  skip  flag-but-no-terminal (this run HAS a terminal; the e2e test covers it from a pipe)")
+    if (envBefore === undefined) delete process.env.BAYLO_CUTOVER_LIVE; else process.env.BAYLO_CUTOVER_LIVE = envBefore
 
     // ── 5 ── backstop and pin, on the decoy
     console.log(`\n5. Backstop and pin re-check, tripped on the decoy "${DECOY}" (standing in for public)`)
@@ -136,11 +168,13 @@ async function main() {
       ["zero-row UPDATE (write lock only)", `DO $$ BEGIN EXECUTE 'UPDATE ' || ${dq} || '."d" SET x = 1 WHERE false'; END $$;`],
       ["dynamic CREATE TABLE in the decoy", `DO $$ BEGIN EXECUTE 'CREATE TABLE ' || ${dq} || '."sneak" (x int)'; END $$;`],
       ["dynamic path move (search_ + path)", `DO $$ BEGIN EXECUTE 'SET search_' || 'path TO ' || ${dq}; END $$;`],
+      ["dynamic GRANT to anon (grants)", `DO $$ BEGIN EXECUTE 'GRANT SELECT ON ' || ${dq} || '."d" TO anon'; END $$;`],
+      ["dynamic default privileges (default ACLs)", `DO $$ BEGIN EXECUTE 'ALTER DEFAULT PRIVILEGES IN SCHEMA ' || ${dq} || ' GRANT SELECT ON TABLES TO authenticated'; END $$;`],
     ]
     for (const [what, sql] of sneaky) {
       const b = prepareBatch(what, "migration", `CREATE TABLE "victim_${what.replace(/\W+/g, "_")}" (x int);\n${sql}`)
       const msg = await rejectsGuard(withGuardedTransaction(pg, { target: T, protect: DECOY }, (g) => g.run(b)))
-      ok(!!msg, `${what}: rolled back${msg ? ` (${msg.replace(/^\[migration guard\] /, "").slice(0, 90)})` : " -- NOT CAUGHT"}`)
+      ok(!!msg, `${what}: rolled back${msg ? ` (${msg.replace(/^\[migration guard\] /, "").slice(0, 240)})` : " -- NOT CAUGHT"}`)
       const kept = (await pg.query(`SELECT to_regclass('"${T}"."victim_${what.replace(/\W+/g, "_")}"') IS NOT NULL v`)).rows[0].v
       ok(!kept, `${what}: the batch's own scratch work was rolled back too`)
     }
@@ -159,8 +193,8 @@ async function main() {
   // ── 6 ──
   console.log("\n6. Live untouched")
   const after = await liveSnapshot()
-  console.log(`  live after:  ${after.summary}`)
-  ok(after.text === before.text, "live public is identical before and after (counts, ledger, catalog fingerprint, _prisma_migrations)")
+  console.log(`  live after:  ${after.summary}\n  grants:      ${after.grants}`)
+  ok(after.full === before.full, "live public is identical before and after (counts, ledger, catalog fingerprint, _prisma_migrations, grants and default ACLs)")
 
   console.log(failures ? `\n  MIGRATION GUARD TEST FAILED: ${failures}\n` : `\n  MIGRATION GUARD TEST PASSED\n`)
   process.exitCode = failures ? 1 : 0

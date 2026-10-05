@@ -14,6 +14,13 @@
 // runner's backstop also protects `public`), and the confirmation is passed as
 // `--confirm "<phrase>"` because no human types into a test.
 //
+// The LIVE path itself (authorization, typed phrase, one use) is rehearsed on
+// a stand-in: with BAYLO_LIVE_STANDIN=<schema_v2_cut*>, that schema takes the
+// public path exactly, the banner and the phrase say "STAND-IN (not live)",
+// and `public` is refused (scripts/schema-v2/test-cutover-live-path.ts). That
+// test exists because the first live lockdown (5 Oct) was refused by a guard
+// that no scratch rehearsal could reach.
+//
 // ── ARM (read-only on the target) ───────────────────────────────────────────
 //   Runs the go/no-go checks for the purpose. If they all pass, it writes ONE
 //   token, D:\BAYLO\backups\.cutover-armed.json, holding: purpose, target,
@@ -55,8 +62,8 @@ import { appendFileSync, existsSync, readFileSync, renameSync, writeFileSync } f
 import { userInfo } from "node:os"
 import { LEDGER_INVARIANT_SQL, figuresFromRow, judge, type LedgerJudgement } from "../lib/ledger-invariant"
 import {
-  GuardError, V2_MIGRATIONS, applyV2InTransaction, confirmLiveWrite, isScratchTarget, prepareBatch, preV2Chain,
-  withGuardedTransaction, type Guarded, type LiveWriteAuthorization,
+  GuardError, V2_MIGRATIONS, applyV2InTransaction, confirmLiveWrite, isLiveTarget, isScratchTarget, liveLabel, prepareBatch, preV2Chain,
+  refusePublicUnderStandIn, withGuardedTransaction, type Guarded, type LiveWriteAuthorization,
 } from "../lib/migration-runner"
 import { describe, exposure, lockdownStatements } from "../lib/api-role-lockdown"
 
@@ -92,6 +99,7 @@ function purposeArg(): Purpose {
 }
 function targetArg(): string {
   const t = opt("--target") ?? "public"
+  try { refusePublicUnderStandIn(t) } catch (e) { die((e as Error).message) }
   if (t !== "public" && !/^schema_v2_cut[a-z0-9_]*$/.test(t)) die(`--target must be public or a schema_v2_cut* rehearsal copy (got "${t}")`)
   return t
 }
@@ -104,7 +112,7 @@ function url(): URL {
 }
 function printTarget(target: string, mode: string) {
   const u = url()
-  log(`  target  host=${u.hostname}:${u.port || 5432}  database=${u.pathname.slice(1)}  schema=${target}${target === "public" ? " (LIVE)" : " (scratch copy of live)"}  mode=${mode}`)
+  log(`  target  host=${u.hostname}:${u.port || 5432}  database=${u.pathname.slice(1)}  schema=${target} (${isLiveTarget(target) ? liveLabel(target) : "scratch copy of live"})  mode=${mode}`)
 }
 async function connect(readOnly: boolean): Promise<Client> {
   const c = new Client({ connectionString: url().toString() })
@@ -216,7 +224,7 @@ async function arm() {
   }
   writeFileSync(TOKEN, JSON.stringify(token, null, 2), { flag: "wx" }) // wx: never overwrite a token
   log(`\n  ARMED ${purpose} on ${target} until ${token.expiresAt} (${TTL_MIN} min, one run)`)
-  if (target !== "public") log(`  scratch confirmation: --confirm "${purpose.toUpperCase()} SCRATCH ${target} ${token.code}"`)
+  if (!isLiveTarget(target)) log(`  scratch confirmation: --confirm "${purpose.toUpperCase()} SCRATCH ${target} ${token.code}"`)
   log(`  log: ${LOG}`)
 }
 
@@ -241,9 +249,9 @@ async function run() {
   const { sql: dumpSql, claimed } = readBackup(token.backup)
 
   let live: LiveWriteAuthorization | undefined
-  if (token.target === "public") {
-    // --confirm-live-<purpose>, an interactive terminal, and the typed phrase.
-    try { live = await confirmLiveWrite(purpose, u.hostname) } catch (e) { die((e as Error).message) }
+  if (isLiveTarget(token.target)) {
+    // BAYLO_CUTOVER_LIVE=1, --confirm-live-<purpose>, an interactive terminal, and the typed phrase.
+    try { live = await confirmLiveWrite(purpose, u.hostname, token.target) } catch (e) { die((e as Error).message) }
   } else {
     const want = `${purpose.toUpperCase()} SCRATCH ${token.target} ${token.code}`
     if (opt("--confirm") !== want) die(`scratch confirmation must be exactly: --confirm "${want}"`)
@@ -263,7 +271,7 @@ async function run() {
     if (f.apps.length) die(`${f.apps.length} app connection(s) open: ${f.apps.map((a) => a.pid).join(", ")}`)
     log(`  re-checked: counts and ledger as armed, no app connections`)
 
-    await withGuardedTransaction(pg, { target: token.target, live, lockTimeout: "5s" }, async (g) => {
+    await withGuardedTransaction(pg, { target: token.target, live, purpose, lockTimeout: "5s" }, async (g) => {
       if (purpose === "lockdown") await lockdownIn(g)
       else if (purpose === "migrate") await applyV2InTransaction(g, { log })
       else await rollbackIn(g, dumpSql, claimed)

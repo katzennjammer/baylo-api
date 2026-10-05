@@ -356,7 +356,7 @@ Both depend on the trade migration. `build-scratch.ts --skip trade` skips them t
 - **Counts:** every carried table is equal. AuthToken 429 = 410 + 17 + 2. ItemImage 231 = photos, 52 hashed = ItemImageHash. ItemWantedCategory 239. Trade 65 = 36 + 61 − 32 paired (32 offer+trade, 29 offer only, 4 trade only). ModerationCase 2 = 0 + 2. UserProgress 105 = 75 + 30. LeafTransaction 116 = 112 + 4 denied. Notification 243 = 244 − 1 invite.
 - **Rebuilt and re-verified** from `baylo-pg-20261003-095000.sql` after the decision to keep `Notification.link`. All results below hold; Notification is now carried with all 10 columns.
 - **Row for row:** 19 carried tables compared on every shared column, EXCEPT ALL both ways: 0 differences.
-- **FKs:** 48 foreign keys, all validated, 0 orphans. Soft references resolve: ledger tradeId → Trade, notification trade/meetup → Trade, audit TRADE / LISTING_APPEAL targets, appeal actionId → AdminAction. The only by-design dangling reference is `contractId` on the 2 DPA rows.
+- **FKs:** 49 foreign keys, all validated, 0 orphans. Soft references resolve: ledger tradeId → Trade, notification trade/meetup → Trade, audit TRADE / LISTING_APPEAL targets, appeal actionId → AdminAction. The only by-design dangling reference is `contractId` on the 2 DPA rows.
 - **Ledger:** 1744 = 1744, 1804 = 1804, 60 = 60, identical to the old copy.
 - **Bracket:** equals `bracketOf(valueLeaves)` on all 223 items, and is a STORED GENERATED column.
 - **Samples, field by field:** 10/10 items (with photos and hashes in order, wanted categories, bracket), 10/10 trades (4 offer+trade, 3 offer only, 3 trade only), 10/10 users (every column plus tokens, progress, ledger sum, task completions, deals, likes, cases).

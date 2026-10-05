@@ -40,10 +40,28 @@
  *         constraints, functions, default ACLs: oid + xmin) is unchanged.
  *     Rules 1 to 3 are meant to make the backstop unreachable. It exists in
  *     case they are wrong in some way nobody has thought of yet.
+ *       Since 5 Oct (second fix) it also compares the CONTENTS of every ACL
+ *       there (schema, relations, routines, default ACLs), so a GRANT or
+ *       REVOKE to anon/authenticated is caught by name, not only via xmin.
  *  5  SCRATCH TARGETS ONLY: schema_v2_*, scratch_* or restore_drill. A
  *     write to `public` needs a LiveWriteAuthorization, and only
- *     confirmLiveWrite() can make one: an explicit flag, an interactive
- *     terminal, and a typed phrase with a one-time code.
+ *     confirmLiveWrite() can make one: BAYLO_CUTOVER_LIVE=1, an explicit
+ *     flag, an interactive terminal, and a typed phrase with a one-time code.
+ *     An authorization names its target and purpose and is good for ONE
+ *     guarded transaction.
+ *
+ * ── THE LIVE STAND-IN (5 Oct 2026) ──────────────────────────────────────────
+ *
+ * The first live lockdown refused with `target "public" is the protected
+ * schema`: the protected-schema check also ran for an authorized write to
+ * `public`, so lockdown, migrate and rollback could never work on live. No
+ * test reached that path, because an authorization needs a human at a
+ * terminal and every rehearsal targeted a scratch schema. BAYLO_LIVE_STANDIN
+ * names ONE schema_v2_cut* copy that takes the live path exactly as `public`
+ * does (authorization, typed phrase, one use), while real `public` stays
+ * protected by the backstop. While it is set, `public` is refused outright,
+ * so the stand-in can only make a process stricter.
+ * scripts/schema-v2/test-cutover-live-path.ts drives it.
  */
 import type { Client } from "pg"
 import { createHash, randomBytes, randomUUID } from "node:crypto"
@@ -72,28 +90,54 @@ export class GuardError extends Error {
 // ── Live authorization (rule 5) ─────────────────────────────────────────────
 
 const LIVE_BRAND = Symbol("live-write-authorization")
-export interface LiveWriteAuthorization { readonly [LIVE_BRAND]: true; readonly purpose: string; readonly at: string }
+export interface LiveWriteAuthorization { readonly [LIVE_BRAND]: true; readonly purpose: string; readonly target: string; readonly at: string }
+export type LivePurpose = "lockdown" | "migrate" | "rollback"
+const USED_AUTHORIZATIONS = new WeakSet<object>()
+
+const STANDIN_ENV = "BAYLO_LIVE_STANDIN"
+export const STANDIN_LABEL = "STAND-IN (not live)"
+
+/** The schema_v2_cut* copy named by BAYLO_LIVE_STANDIN, if any (see the header). */
+export function liveStandIn(): string | undefined {
+  const s = process.env[STANDIN_ENV]
+  if (!s) return undefined
+  if (!/^schema_v2_cut[a-z0-9_]*$/.test(s)) throw new GuardError(`${STANDIN_ENV}="${s}" is not a schema_v2_cut* scratch schema`)
+  return s
+}
+/** `public`, or the stand-in: the targets that take the live path. */
+export const isLiveTarget = (target: string) => target === "public" || target === liveStandIn()
+export const liveLabel = (target: string) => (target === "public" ? "LIVE" : STANDIN_LABEL)
+/** While a stand-in is named, `public` is refused by every tool. */
+export function refusePublicUnderStandIn(target: string) {
+  const s = liveStandIn()
+  if (s && target === "public") throw new GuardError(`refusing "public": ${STANDIN_ENV}=${s} is set, so this process is a ${STANDIN_LABEL} rehearsal`)
+}
 
 /**
- * The ONLY way to obtain permission to write `public`. It needs the explicit
- * `--confirm-live-<purpose>` flag on the command line and an interactive
- * terminal, and the operator must type the phrase back, including a one-time
- * code. No environment variable can supply it, and neither can a pipe, CI or
- * a pasted command, since the code is new on every run.
+ * The ONLY way to obtain permission to write `public` (or the stand-in). It
+ * needs BAYLO_CUTOVER_LIVE=1, the explicit `--confirm-live-<purpose>` flag on
+ * the command line and an interactive terminal, and the operator must type
+ * the phrase back, including a one-time code. A pipe, CI or a pasted command
+ * cannot supply it, since the code is new on every run. The authorization
+ * names its target and purpose, and withGuardedTransaction() accepts it once.
  */
-export async function confirmLiveWrite(purpose: "rollback" | "cutover" | "lockdown" | "migrate", target: string): Promise<LiveWriteAuthorization> {
+export async function confirmLiveWrite(purpose: LivePurpose, host: string, target = "public"): Promise<LiveWriteAuthorization> {
+  refusePublicUnderStandIn(target)
+  if (!isLiveTarget(target)) throw new GuardError(`"${target}" is not a live target`)
+  const label = liveLabel(target)
   const flag = `--confirm-live-${purpose}`
-  if (!process.argv.includes(flag)) throw new GuardError(`refusing to write "public" (LIVE): pass ${flag} and type the confirmation`)
-  if (!process.stdin.isTTY || !process.stdout.isTTY) throw new GuardError(`refusing to write "public" (LIVE): ${flag} needs an interactive terminal to type the confirmation`)
+  if (process.env.BAYLO_CUTOVER_LIVE !== "1") throw new GuardError(`refusing to write "${target}" (${label}): BAYLO_CUTOVER_LIVE=1 is not set in this shell`)
+  if (!process.argv.includes(flag)) throw new GuardError(`refusing to write "${target}" (${label}): pass ${flag} and type the confirmation`)
+  if (!process.stdin.isTTY || !process.stdout.isTTY) throw new GuardError(`refusing to write "${target}" (${label}): ${flag} needs an interactive terminal to type the confirmation`)
   const code = randomBytes(3).toString("hex").toUpperCase()
-  const phrase = `${purpose.toUpperCase()} LIVE public ${code}`
-  console.log(`\n  !! LIVE WRITE: ${purpose} against ${target}, schema "public"`)
+  const phrase = `${purpose.toUpperCase()} ${label} ${target} ${code}`
+  console.log(`\n  !! ${label} WRITE: ${purpose} against ${host}, schema "${target}"`)
   console.log(`  !! type exactly:  ${phrase}`)
   const rl = createInterface({ input: process.stdin, output: process.stdout })
   const typed = (await rl.question("  > ")).trim()
   rl.close()
   if (typed !== phrase) throw new GuardError("confirmation did not match; nothing was done")
-  return Object.freeze({ [LIVE_BRAND]: true as const, purpose, at: new Date().toISOString() })
+  return Object.freeze({ [LIVE_BRAND]: true as const, purpose, target, at: new Date().toISOString() })
 }
 
 // ── Lexing: mask strings, identifiers, comments and dollar bodies ───────────
@@ -227,7 +271,26 @@ export async function catalogFingerprint(pg: Client, schema: string): Promise<st
     ) s(x)`, [schema])).rows[0].fp
 }
 
-async function protectedTouched(pg: Client, schema: string, fp0: string): Promise<string[]> {
+/**
+ * The CONTENTS of every ACL in `schema`: the schema's own, every relation's
+ * and sequence's, every routine's, and every default ACL. Names, not oids, so
+ * two reads of the same database compare. A GRANT or REVOKE to anon or
+ * authenticated changes it.
+ */
+export async function aclFingerprint(pg: Client, schema: string): Promise<string> {
+  return (await pg.query(`
+    WITH ns AS (SELECT oid FROM pg_namespace WHERE nspname = $1)
+    SELECT md5(coalesce(string_agg(x, E'\\n' ORDER BY x), '')) AS fp FROM (
+      SELECT 'n:' || coalesce(n.nspacl::text, '-') FROM pg_namespace n, ns WHERE n.oid = ns.oid
+      UNION ALL SELECT 'c:' || c.relname || ':' || c.relkind::text || ':' || coalesce(c.relacl::text, '-') FROM pg_class c, ns
+        WHERE c.relnamespace = ns.oid AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')
+      UNION ALL SELECT 'p:' || p.oid::regprocedure::text || ':' || coalesce(p.proacl::text, '-') FROM pg_proc p, ns WHERE p.pronamespace = ns.oid
+      UNION ALL SELECT 'd:' || pg_get_userbyid(d.defaclrole) || ':' || d.defaclobjtype::text || ':' || coalesce(d.defaclacl::text, '-') FROM pg_default_acl d, ns
+        WHERE d.defaclnamespace = ns.oid
+    ) s(x)`, [schema])).rows[0].fp
+}
+
+async function protectedTouched(pg: Client, schema: string, fp0: string, acl0: string): Promise<string[]> {
   const why: string[] = []
   const w = Number((await pg.query(
     `SELECT coalesce(sum(n_tup_ins + n_tup_upd + n_tup_del), 0) AS n FROM pg_stat_xact_user_tables WHERE schemaname = $1`, [schema])).rows[0].n)
@@ -237,6 +300,7 @@ async function protectedTouched(pg: Client, schema: string, fp0: string): Promis
       WHERE l.pid = pg_backend_pid() AND c.relnamespace = (SELECT oid FROM pg_namespace WHERE nspname = $1) AND l.mode <> 'AccessShareLock'`, [schema])).rows
   if (locks.length) why.push(`write locks in "${schema}": ${locks.map((r) => `${r.relname}/${r.mode}`).join(", ")}`)
   if ((await catalogFingerprint(pg, schema)) !== fp0) why.push(`the catalog of "${schema}" changed`)
+  if ((await aclFingerprint(pg, schema)) !== acl0) why.push(`grants or default ACLs in "${schema}" changed`)
   return why
 }
 
@@ -251,8 +315,10 @@ export interface GuardOptions {
   protect?: string
   /** Roll back instead of committing (drills). The guards still run. */
   commit?: boolean
-  /** Required, and only accepted, when target is "public". */
+  /** Required, and only accepted, when target is "public" (or the stand-in). Good for one call. */
   live?: LiveWriteAuthorization
+  /** With `live`: must equal the purpose the authorization was confirmed for. */
+  purpose?: LivePurpose
   lockTimeout?: string
 }
 
@@ -267,18 +333,29 @@ export interface Guarded {
 export async function withGuardedTransaction<T>(pg: Client, o: GuardOptions, fn: (g: Guarded) => Promise<T>): Promise<T> {
   const target = o.target
   const protect = o.protect ?? "public"
-  if (target === "public") {
-    if (!o.live || (o.live as LiveWriteAuthorization)[LIVE_BRAND] !== true) throw new GuardError(`refusing to write "public" (LIVE) without a confirmed live authorization`)
+  refusePublicUnderStandIn(target)
+  if (isLiveTarget(target)) {
+    // The authorization IS the gate here. The protected-schema check below
+    // must not run for it: on 5 Oct it refused the authorized live lockdown.
+    const a = o.live as LiveWriteAuthorization | undefined
+    if (!a || a[LIVE_BRAND] !== true) throw new GuardError(`refusing to write "${target}" (${liveLabel(target)}) without a confirmed live authorization`)
+    if (a.target !== target || a.purpose !== o.purpose) throw new GuardError(`the live authorization was confirmed for ${a.purpose} on "${a.target}", not ${o.purpose ?? "(no purpose)"} on "${target}"`)
+    if (USED_AUTHORIZATIONS.has(a)) throw new GuardError("this live authorization was already used; arm and confirm again")
+    USED_AUTHORIZATIONS.add(a) // one run only, spent before BEGIN
   } else if (!isScratchTarget(target)) {
     throw new GuardError(`refusing target schema "${target}": only schema_v2_*, scratch_* or restore_drill`)
+  } else if (target === protect) {
+    throw new GuardError(`target "${target}" is the protected schema`)
   }
-  if (target === protect) throw new GuardError(`target "${target}" is the protected schema`)
-  const guardProtected = target !== "public" // with a live authorization there is no other schema to protect
+  // Writing `public` itself leaves no other schema to protect. A stand-in run
+  // keeps the backstop on real `public`.
+  const guardProtected = target !== protect
 
   await pg.query("BEGIN")
   try {
     if (o.lockTimeout) await pg.query(`SET LOCAL lock_timeout = '${o.lockTimeout.replace(/[^0-9a-z]/gi, "")}'`)
     const fp0 = guardProtected ? await catalogFingerprint(pg, protect) : ""
+    const acl0 = guardProtected ? await aclFingerprint(pg, protect) : ""
     const exists = (await pg.query(`SELECT 1 FROM pg_namespace WHERE nspname = $1`, [target])).rowCount
     const create = o.create ?? "existing"
     if (create === "existing" && !exists) throw new GuardError(`schema "${target}" does not exist`)
@@ -307,7 +384,7 @@ export async function withGuardedTransaction<T>(pg: Client, o: GuardOptions, fn:
 
     await assertPinned(pg, target, "before commit")
     if (guardProtected) {
-      const why = await protectedTouched(pg, protect, fp0)
+      const why = await protectedTouched(pg, protect, fp0, acl0)
       if (why.length) throw new GuardError(`the protected schema "${protect}" was touched (${why.join("; ")}); rolling back`)
     }
     await pg.query(o.commit === false ? "ROLLBACK" : "COMMIT")

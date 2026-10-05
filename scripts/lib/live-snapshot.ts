@@ -4,10 +4,16 @@
  * fingerprint (classes, types, enum labels, columns, constraints, functions,
  * default ACLs: oid + xmin) and the _prisma_migrations rows. Take one before
  * and one after; any difference is a failure.
+ *
+ * `text` is the original fingerprint, unchanged, so its SHA-256 still compares
+ * with the one recorded before 5 Oct (4a5835f1...). `acl` adds the CONTENTS of
+ * every ACL in `public` (aclFingerprint) plus the anon/authenticated exposure.
+ * `full` is both; tests compare `full`.
  */
 import { Client } from "pg"
 import { LEDGER_INVARIANT_SQL, figuresFromRow } from "./ledger-invariant"
-import { catalogFingerprint } from "./migration-runner"
+import { aclFingerprint, catalogFingerprint } from "./migration-runner"
+import { describe, exposure } from "./api-role-lockdown"
 
 export function liveUrl(): string {
   const u = new URL(process.env.DATABASE_URL ?? "")
@@ -15,7 +21,7 @@ export function liveUrl(): string {
   return u.toString()
 }
 
-export async function liveSnapshot(): Promise<{ text: string; summary: string }> {
+export async function liveSnapshot(): Promise<{ text: string; acl: string; full: string; summary: string; grants: string }> {
   const pg = new Client({ connectionString: liveUrl() })
   await pg.connect()
   try {
@@ -28,11 +34,16 @@ export async function liveSnapshot(): Promise<{ text: string; summary: string }>
     const v2 = (await pg.query(`SELECT to_regclass('public."Trade"') IS NOT NULL AS v2`)).rows[0].v2
     const f = figuresFromRow((await pg.query(LEDGER_INVARIANT_SQL("public", v2 ? "v2" : "v1"))).rows[0])
     const fp = await catalogFingerprint(pg, "public")
+    const aclFp = await aclFingerprint(pg, "public")
+    const exp = await exposure(pg, "public")
     const migs = (await pg.query(`SELECT md5(string_agg(id || migration_name || checksum || coalesce(finished_at::text,'') || coalesce(rolled_back_at::text,''), ',' ORDER BY id)) m, count(*) n FROM public."_prisma_migrations"`)).rows[0]
     await pg.query("ROLLBACK")
     const total = counts.reduce((a, c) => a + Number(c.split("=")[1]), 0)
+    const text = JSON.stringify({ counts, ledger: f, fp, migs })
+    const acl = JSON.stringify({ aclFp, exp })
     return {
-      text: JSON.stringify({ counts, ledger: f, fp, migs }),
+      text, acl, full: `${text}\n${acl}`,
+      grants: `acl ${aclFp.slice(0, 10)}; ${describe(exp)}`,
       summary: `${tables.length} tables, ${total} rows, ledger ${f.userLeaves}/${f.userLeaves + f.escrow}/${f.escrow}, catalog ${fp.slice(0, 10)}, ${migs.n} migration rows`,
     }
   } finally { await pg.end() }

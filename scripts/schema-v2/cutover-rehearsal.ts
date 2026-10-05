@@ -501,12 +501,15 @@ const run: Record<string, () => Promise<void>> = {
   "inspect-live": inspectLive, counts, "restore-old": restoreOld,
   "apply-single": () => apply(true), "apply-perfile": () => apply(false),
   kill, state, rollback, drop, "build-old": buildOld, lockdown,
-  // READ-ONLY: the live fingerprint the tests compare (counts, ledger, catalog, _prisma_migrations).
+  // READ-ONLY: the live fingerprint the tests compare (counts, ledger, catalog, _prisma_migrations),
+  // unchanged since 4 Oct, plus the grants/default-ACL fingerprint added 5 Oct.
   snapshot: async () => {
     printTarget("public (LIVE)", "READ-ONLY")
     const s = await liveSnapshot()
     console.log(`  live: ${s.summary}
-  fingerprint: ${createHash("sha256").update(s.text).digest("hex")}`)
+  grants: ${s.grants}
+  fingerprint: ${createHash("sha256").update(s.text).digest("hex")}
+  acl fingerprint: ${createHash("sha256").update(s.acl).digest("hex")}`)
   },
 }
 if (!run[cmd]) { console.error(`usage: see header (got "${cmd}")`); process.exit(2) }

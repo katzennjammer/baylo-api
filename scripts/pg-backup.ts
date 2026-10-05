@@ -63,23 +63,26 @@
 //   - restore and drill run through scripts/lib/migration-runner.ts: one
 //     guarded transaction, search_path pinned and re-checked around every
 //     batch, and a backstop that rolls back if `public` was touched;
-//   - restore into `public` refuses unless `--confirm-live-rollback` is given
-//     AND the operator types the one-time confirmation in a terminal. That is
-//     the cutover runbook's rollback path and nothing else;
+//   - restore into `public` is REFUSED, always (since 5 Oct, second fix).
+//     The one live rollback path is scripts/schema-v2/cutover-live.ts
+//     `--purpose rollback` (armed token, BAYLO_CUTOVER_LIVE=1, typed phrase);
+//     see docs/cutover-runbook.md section 8. Before this, restore took
+//     `--confirm-live-rollback` and could never have worked on live anyway:
+//     the runner refused every authorized write to `public` until 5 Oct;
+//   - while BAYLO_LIVE_STANDIN is set, every command refuses `public`;
 //   - drill builds the structure the BACKUP was taken in (the migrations its
 //     header lists), so it restores an old-layout and a v2-layout dump alike.
 //   (scripts/schema-v2/test-pg-backup-target.ts proves all three.)
 //
 // Usage:
 //   npx tsx --env-file=.env scripts/pg-backup.ts dump <out-file>
-//   npx tsx --env-file=.env scripts/pg-backup.ts restore <in-file> [--force] [--confirm-live-rollback]
+//   npx tsx --env-file=.env scripts/pg-backup.ts restore <in-file> [--force]     (scratch schemas only)
 //   npx tsx --env-file=.env scripts/pg-backup.ts drill <in-file>   (rehearse a restore safely)
 //   npx tsx --env-file=.env scripts/pg-backup.ts counts            (counts, for verification)
 import { Client, types } from "pg"
 import { LEDGER_INVARIANT_SQL, figuresFromRow, judge } from "./lib/ledger-invariant"
 import {
-  GuardError, confirmLiveWrite, isScratchTarget, loadMigration, localMigrationNames, prepareBatch, withGuardedTransaction,
-  type LiveWriteAuthorization,
+  GuardError, isScratchTarget, loadMigration, localMigrationNames, prepareBatch, refusePublicUnderStandIn, withGuardedTransaction,
 } from "./lib/migration-runner"
 import { createWriteStream, existsSync } from "node:fs"
 import { readFile } from "node:fs/promises"
@@ -106,6 +109,7 @@ function rawUrl(): URL {
 function targetSchema(): string {
   const s = rawUrl().searchParams.get("schema") ?? "public"
   if (s !== "public" && !/^[a-z_][a-z0-9_]*$/.test(s)) { console.error(`refusing schema name "${s}"`); process.exit(2) }
+  try { refusePublicUnderStandIn(s) } catch (e) { console.error(`  REFUSING: ${(e as Error).message}`); process.exit(1) }
   return s
 }
 
@@ -303,22 +307,22 @@ async function dump(outPath: string) {
 
 async function restore(inPath: string, force: boolean) {
   const schema = targetSchema()
-  // Decide BEFORE connecting: public needs the typed live confirmation; any
-  // other schema must be a scratch schema.
-  let live: LiveWriteAuthorization | undefined
+  // Decide BEFORE connecting. `public` is never a restore target: the one
+  // live rollback is cutover-live.ts --purpose rollback.
   if (schema === "public") {
-    printTarget(schema, "WRITE (LIVE ROLLBACK)")
-    try { live = await confirmLiveWrite("rollback", rawUrl().hostname) } catch (e) { console.error(`\n  ${(e as Error).message}\n`); process.exit(1) }
-  } else {
-    if (!isScratchTarget(schema)) { console.error(`  REFUSING: restore only targets scratch schemas (schema_v2_*, scratch_*) or, with --confirm-live-rollback, public; got "${schema}"`); process.exit(1) }
-    printTarget(schema, "WRITE")
+    printTarget(schema, "REFUSED")
+    console.error(`\n  REFUSING: pg-backup.ts restore never writes "public" (LIVE). The only live rollback is\n` +
+      `    scripts/schema-v2/cutover-live.ts arm|run|verify --purpose rollback   (docs/cutover-runbook.md section 8)\n`)
+    process.exit(1)
   }
+  if (!isScratchTarget(schema)) { console.error(`  REFUSING: restore only targets scratch schemas (schema_v2_*, scratch_*); got "${schema}"`); process.exit(1) }
+  printTarget(schema, "WRITE")
   const sql = await readDump(inPath)
   const batch = prepareBatch(inPath, "data", sql)
 
   const pg = await connect()
   try {
-    await withGuardedTransaction(pg, { target: schema, live, lockTimeout: "10s" }, async (g) => {
+    await withGuardedTransaction(pg, { target: schema, lockTimeout: "10s" }, async (g) => {
       const { tables } = await plan(pg, schema)
       if (!tables.length) throw new GuardError(`"${schema}" has no tables: build its structure first (prisma migrate deploy)`)
       const occupied: string[] = []
@@ -455,5 +459,5 @@ const run =
   : cmd === "restore" && arg ? restore(arg, force)
   : cmd === "drill" && arg ? drill(arg)
   : cmd === "counts" ? counts()
-  : (console.error("usage: pg-backup.ts dump <file> | restore <file> [--force] [--confirm-live-rollback] | drill <file> | counts"), process.exit(2))
+  : (console.error("usage: pg-backup.ts dump <file> | restore <file> [--force] (scratch only) | drill <file> | counts"), process.exit(2))
 void (run as Promise<void>).catch((e) => { console.error(e); process.exit(1) })
