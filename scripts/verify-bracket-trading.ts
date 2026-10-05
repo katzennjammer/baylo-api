@@ -30,6 +30,18 @@
 //   9  UI BYPASS, one per rule: every refusal above is produced by a
 //      hand-written request body, not by a screen
 //  10  the ledger reconciliation holds after every single step
+//
+// FOLLOW-UP (5 Oct 2026, run on scratch_http): 72 passed, 12 KNOWN FAILURES,
+// all harness drift and none a route regression. Fix them so the count is 0:
+//   - 11 exact balance checks (`balance(x) === 180` and the like) predate the
+//     event-driven quests: POST /api/offers now pays QUEST_REWARD to the sender
+//     (SEND_OFFER, SEND_BRIDGE_OFFER) and the receiver (RECEIVE_OFFER), e.g.
+//     160 expected, 185 read. Subtract the subject's QUEST_REWARD rows, as
+//     verify-org-bridge-release-http.ts section 6 already does.
+//   - 1 "a legitimate bridge still charges the quoted fee" (section 5) reuses
+//     an item still in a PENDING offer and is refused
+//     OFFERED_ITEM_ALREADY_PENDING by the one-pending-offer-per-item rule. Give
+//     it its own item, or close the earlier offer first.
 
 import prisma from "../src/lib/prisma"
 import { requireScratchSchema } from "./lib/live-guard"

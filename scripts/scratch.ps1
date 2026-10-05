@@ -92,6 +92,13 @@ try {
   }
 
   if ($Dev) {
+    # -Dev alone does not create the schema. Serving one that is not there gets
+    # the startup gate's "not in the v2 layout (missing AuthToken, ... Trade)",
+    # which reads as a wrong-layout problem; say what is actually wrong.
+    $env:DATABASE_URL = $base
+    $exists = npx tsx scripts/scratch-schema-exists.ts $Name | Select-Object -Last 1
+    if ($LASTEXITCODE -ne 0) { throw "could not check whether schema $Name exists" }
+    if ($exists -ne "yes") { throw "schema $Name does not exist. Run -Push first: .\scripts\scratch.ps1 -Push -Name $Name" }
     $env:DATABASE_URL = $url
     Write-Host "  next dev on port $Port, schema $Name  (Ctrl+C to stop; schema is kept -- drop it with -Drop -Name $Name)`n"
     npx next dev -p $Port

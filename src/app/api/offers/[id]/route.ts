@@ -401,9 +401,14 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
     }
     tradeRecord = outcome.trade
 
-    const offeredItemForCard = tradeRecord
+    // On a decline too: the card names what was offered either way. This used to
+    // run only when a trade was created, so every DECLINED update carried
+    // `offeredItemTitle: "Item"` and no image. Null only on a Leaves-only offer,
+    // which is named by its amount below (such an offer can only be declined:
+    // accepting one is refused with OFFER_LEGACY_SHAPE above).
+    const offeredItemForCard = offeredItemId
       ? await prisma.item.findUnique({
-          where: { id: offeredItemId as string },
+          where: { id: offeredItemId },
           select: { title: true, images: ITEM_IMAGES },
         })
       : null
@@ -448,7 +453,12 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       accepterId: offer.receiverId,
       proposerName: offer.sender?.name ?? "They",
       accepterName: actorName,
-      offeredItemTitle: offeredItemForCard?.title ?? tradeRecord?.offeredItemTitle ?? "Item",
+      offeredItemTitle:
+        offeredItemForCard?.title ??
+        tradeRecord?.offeredItemTitle ??
+        ((offer.offeredLeaves ?? 0) > 0
+          ? `${offer.offeredLeaves} ${offer.offeredLeaves === 1 ? "Leaf" : "Leaves"}`
+          : "Item"),
       requestedItemTitle: offer.requestedItem.title,
       offeredItemImage: firstImage(offeredItemForCard?.images),
       requestedItemImage: firstImage(offer.requestedItem.images),
