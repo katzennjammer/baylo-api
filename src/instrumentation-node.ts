@@ -1,7 +1,10 @@
 // Node-runtime half of src/instrumentation.ts (the schema-v2 startup guard).
 // A separate file because Next also bundles instrumentation.ts for the Edge
 // runtime, where process.exit does not exist; this is imported only on Node.
-const V2_CORE_TABLES = ["AuthToken", "ItemImage", "ItemWantedCategory", "ModerationCase", "UserProgress", "SwapCode", "Like", "Comment"]
+//
+// POST-CUTOVER FORM: this is the gate that keeps v2 code off a pre-v2 schema,
+// `public` included. The server refuses to start unless every v2-only table is
+// present AND every pre-v2-only table is gone (layoutVerdict in @/lib/db-schema).
 
 // ── THE POOL CHECK ───────────────────────────────────────────────────────────
 //
@@ -32,7 +35,7 @@ export async function checkV2Database() {
     // Checked BEFORE importing @/lib/prisma, whose import constructs a client:
     // a throw from inside that import reaches here only as Turbopack's
     // "Failed to load chunk", with the reason gone.
-    const { databaseSchema, assertV2Schema } = await import("@/lib/db-schema")
+    const { databaseSchema, assertV2Schema, layoutVerdict, V2_ONLY_TABLES, PRE_V2_ONLY_TABLES } = await import("@/lib/db-schema")
     const schema = databaseSchema()
     assertV2Schema(schema)
     const { default: prisma } = await import("@/lib/prisma")
@@ -42,7 +45,7 @@ export async function checkV2Database() {
     try {
       rows = await prisma.$queryRaw<{ t: string; present: boolean }[]>`
         SELECT t, to_regclass(format('%I.%I', ${schema}::text, t)) IS NOT NULL AS present
-          FROM unnest(${V2_CORE_TABLES}::text[]) AS t`
+          FROM unnest(${[...V2_ONLY_TABLES, ...PRE_V2_ONLY_TABLES]}::text[]) AS t`
     } catch (e) {
       if (isPoolBusy(e)) {
         throw new Error(`[schema v2] REFUSING to start: no database connection after ${Date.now() - t0} ms. ${POOL_BUSY_HINT}`)
@@ -51,11 +54,14 @@ export async function checkV2Database() {
     }
     const elapsed = Date.now() - t0
 
-    const missing = rows.filter((r) => !r.present).map((r) => r.t)
-    if (missing.length) {
-      throw new Error(`[schema v2] REFUSING to start: schema "${schema}" has no ${missing.join(", ")} -- it is not a migrated v2 copy.`)
+    const verdict = layoutVerdict(new Set(rows.filter((r) => r.present).map((r) => r.t)))
+    if (!verdict.ok) {
+      throw new Error(`[schema v2] REFUSING to start: schema "${schema}" is not in the v2 layout` +
+        (verdict.missing.length ? ` (missing ${verdict.missing.join(", ")})` : "") +
+        (verdict.leftover.length ? ` (still has pre-v2 ${verdict.leftover.join(", ")})` : "") +
+        (schema === "public" ? " -- live has not been migrated; see docs/cutover-runbook.md." : "."))
     }
-    console.log(`  [schema v2] database: schema "${schema}" (v2 core tables present, first connection ${elapsed} ms)`)
+    console.log(`  [schema v2] database: schema "${schema}" (v2 layout confirmed, first connection ${elapsed} ms)`)
     // Slow but answered: start anyway, and say why requests may time out.
     if (elapsed > SLOW_MS) {
       console.warn(`  [schema v2] WARNING: the first database connection took ${elapsed} ms. ${POOL_BUSY_HINT}`)

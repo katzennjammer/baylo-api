@@ -2,30 +2,21 @@
 // npm install --save-dev prisma dotenv
 import "dotenv/config";
 import { defineConfig } from "prisma/config";
+import { refusal } from "./prisma/command-guard";
 
-// ── SCHEMA V2 GUARD (feature/schema-v2 only) ────────────────────────────────
-// On this branch the migration folder holds the schema-v2 migrations, which
-// DROP and MERGE live tables. No Prisma command that touches a database may run
-// against `public` (live) from here: migrate deploy/dev/reset/resolve, db
-// push/pull/execute, migrate diff from the datasource. They run only on a
-// schema_v2_* copy, via `npm run v2:prisma -- <command>` (which reads .env.v2).
-// `prisma generate`, `validate` and `format` need no database and are allowed.
-// The week-3 cutover lifts this deliberately; it is never bypassed by accident.
-const DB_COMMANDS = new Set(["migrate", "db", "studio", "introspect"]);
-const touchesDb = process.argv.slice(2).some((a) => DB_COMMANDS.has(a));
-if (touchesDb) {
-  let schema = "public";
-  try {
-    schema = new URL(process.env["DATABASE_URL"] ?? "").searchParams.get("schema") ?? "public";
-  } catch {}
-  if (!/^schema_v2_[a-z0-9_]+$/.test(schema)) {
-    console.error(
-      `\n  [schema v2] REFUSING: \`prisma ${process.argv.slice(2).join(" ")}\` would run against schema "${schema}"` +
-        (schema === "public" ? " (LIVE)" : "") +
-        ".\n  Use `npm run v2:prisma -- <command>`, which targets the schema_v2_* copy in .env.v2.\n",
-    );
-    process.exit(1);
-  }
+// ── SCHEMA V2 GUARD, POST-CUTOVER FORM (feature/schema-v2-post-cutover) ─────
+// Before the cutover no Prisma command that touches a database could run
+// against `public`. After it, live must still be migratable, so on `public`
+// (and any non-scratch schema) only `migrate status | deploy | diff | resolve`
+// may run. `migrate reset`, `migrate dev`, `db push` and every other
+// database command stay refused there. On a schema_v2_* or scratch_* copy
+// everything runs. The rules live in prisma/command-guard.ts, which is tested
+// by scripts/schema-v2/test-post-cutover-guards.ts.
+// DO NOT MERGE THIS BRANCH until live has been migrated (docs/cutover-runbook.md §7).
+const refused = refusal(process.argv.slice(2), process.env["DATABASE_URL"]);
+if (refused) {
+  console.error(refused);
+  process.exit(1);
 }
 
 export default defineConfig({

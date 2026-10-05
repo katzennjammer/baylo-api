@@ -54,7 +54,8 @@ import { assertV2Schema, databaseSchema } from "@/lib/db-schema"
 // No parameter means `public`, which is the live database.
 function createPrismaClient() {
   const schema = databaseSchema()
-  // SCHEMA V2 GUARD: refuses any schema but a schema_v2_* copy. See @/lib/db-schema.
+  // SCHEMA V2 GUARD (post-cutover form): refuses names that cannot be an app
+  // schema; the startup layout check refuses any pre-v2 schema. See @/lib/db-schema.
   assertV2Schema(schema)
   const raw = (schema === "public" && process.env.DATABASE_POOL_URL) || process.env.DATABASE_URL!
   // The live URL is passed through UNTOUCHED. Only a scratch URL is
