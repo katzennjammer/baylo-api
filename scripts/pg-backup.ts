@@ -44,6 +44,9 @@
 // from pg_constraint rather than hand-listed, and the one self-referencing
 // table (PostComment.parentId) is written parent-first, so a restore never
 // needs to defer constraints — which the Supabase role could not do anyway.
+// Tables that reference each other (schema v2: AdminAction <-> ModerationCase)
+// are written as one group with their rows interleaved in reference order;
+// see plan().
 //
 // ── THE TRAILER IS A CHECK, NOT A DECORATION ────────────────────────────────
 //
@@ -129,7 +132,24 @@ async function connect(): Promise<Client> {
 
 const q = (schema: string, table: string) => `"${schema}"."${table}"`
 
-/** Tables in foreign-key dependency order, plus any self-referencing column. */
+interface Fk { child: string; parent: string; child_cols: string; parent_cols: string }
+/** One step of the dump: a table on its own, or tables that reference each other (a cycle), written as one group. */
+type Step = { table: string } | { group: string[] }
+
+/**
+ * Tables in foreign-key dependency order, plus any self-referencing column.
+ *
+ * ── CYCLES (schema v2, 5 Oct 2026) ──────────────────────────────────────────
+ * AdminAction.caseId -> ModerationCase (the case an action answers) and
+ * ModerationCase.actionId -> AdminAction (the decision an appeal contests)
+ * make the two TABLES a cycle, so no table order works. Their ROWS are not a
+ * cycle in any flow: a report case has no actionId, an action points at the
+ * case it answers, an appeal points at an earlier action, and an appeal
+ * decision has no caseId. So tables in a cycle are written as one group, their
+ * rows interleaved in row-level reference order (rowOrder). The restore stays
+ * plain INSERTs in file order, which a role that cannot defer constraints can
+ * run. Two rows that truly reference each other fail the dump, naming both.
+ */
 async function plan(pg: Client, schema: string) {
   const tables: string[] = (await pg.query(
     `SELECT tablename FROM pg_tables WHERE schemaname = $1 ORDER BY tablename`, [schema]))
@@ -139,12 +159,14 @@ async function plan(pg: Client, schema: string) {
     SELECT ct.relname AS child, pt.relname AS parent,
            (SELECT string_agg(a.attname, ',' ORDER BY k.ord)
               FROM unnest(c.conkey) WITH ORDINALITY k(attnum, ord)
-              JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum) AS child_cols
+              JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum) AS child_cols,
+           (SELECT string_agg(a.attname, ',' ORDER BY k.ord)
+              FROM unnest(c.confkey) WITH ORDINALITY k(attnum, ord)
+              JOIN pg_attribute a ON a.attrelid = c.confrelid AND a.attnum = k.attnum) AS parent_cols
     FROM pg_constraint c
     JOIN pg_class ct ON ct.oid = c.conrelid
     JOIN pg_class pt ON pt.oid = c.confrelid
-    WHERE c.contype = 'f' AND c.connamespace = (SELECT oid FROM pg_namespace WHERE nspname = $1)`, [schema])).rows as
-    { child: string; parent: string; child_cols: string }[]
+    WHERE c.contype = 'f' AND c.connamespace = (SELECT oid FROM pg_namespace WHERE nspname = $1)`, [schema])).rows as Fk[]
 
   const deps = new Map(tables.map((t) => [t, new Set<string>()]))
   const selfRef = new Map<string, string>()
@@ -153,19 +175,95 @@ async function plan(pg: Client, schema: string) {
     deps.get(f.child)?.add(f.parent)
   }
   const order: string[] = []
+  const steps: Step[] = []
   const placed = new Set<string>()
   while (order.length < tables.length) {
     const ready = tables.filter((t) => !placed.has(t) && [...deps.get(t)!].every((d) => placed.has(d)))
-    if (!ready.length) throw new Error(`foreign-key cycle among ${tables.filter((t) => !placed.has(t))}`)
-    for (const t of ready) { order.push(t); placed.add(t) }
+    if (ready.length) {
+      for (const t of ready) { order.push(t); placed.add(t); steps.push({ table: t }) }
+      continue
+    }
+    const group = readyCycle(tables.filter((t) => !placed.has(t)), deps, placed)
+    if (!group) throw new Error(`foreign-key cycle among ${tables.filter((t) => !placed.has(t))} that no group can resolve`)
+    for (const t of group) { order.push(t); placed.add(t) }
+    steps.push({ group })
   }
-  return { tables, order, selfRef }
+  return { tables, order, steps, selfRef, fks }
 }
 
+/** A strongly connected set of the remaining tables whose other dependencies are all placed (Tarjan). */
+function readyCycle(remaining: string[], deps: Map<string, Set<string>>, placed: Set<string>): string[] | null {
+  const index = new Map<string, number>(), low = new Map<string, number>(), stack: string[] = [], on = new Set<string>()
+  const sccs: string[][] = []
+  let i = 0
+  const visit = (v: string) => {
+    index.set(v, i); low.set(v, i); i++; stack.push(v); on.add(v)
+    for (const w of deps.get(v)!) {
+      if (placed.has(w) || !remaining.includes(w)) continue
+      if (!index.has(w)) { visit(w); low.set(v, Math.min(low.get(v)!, low.get(w)!)) }
+      else if (on.has(w)) low.set(v, Math.min(low.get(v)!, index.get(w)!))
+    }
+    if (low.get(v) === index.get(v)) {
+      const scc: string[] = []
+      let w: string
+      do { w = stack.pop()!; on.delete(w); scc.push(w) } while (w !== v)
+      sccs.push(scc.sort())
+    }
+  }
+  for (const v of remaining) if (!index.has(v)) visit(v)
+  return sccs.find((s) => s.length > 1 && s.every((t) => [...deps.get(t)!].every((d) => placed.has(d) || s.includes(d)))) ?? null
+}
+
+/**
+ * The rows of a cyclic group, every row after the rows it references inside
+ * the group (self-references included). Throws, naming the rows, if some rows
+ * reference each other (a true cycle) or reference a row that is not there.
+ */
+function rowOrder(rowsBy: Map<string, Record<string, unknown>[]>, fks: Fk[]): { table: string; row: Record<string, unknown> }[] {
+  const multi = fks.find((f) => f.child_cols.includes(",") || f.parent_cols.includes(","))
+  if (multi) throw new Error(`multi-column foreign key ${multi.child}(${multi.child_cols}) in a cyclic group is not supported`)
+  const key = (table: string, col: string, v: unknown) => `${table}.${col}=${String(v)}`
+  const refCols = new Map<string, Set<string>>()
+  for (const f of fks) refCols.set(f.parent, (refCols.get(f.parent) ?? new Set()).add(f.parent_cols))
+  const existing = new Set<string>()
+  for (const [t, rows] of rowsBy) for (const r of rows) for (const c of refCols.get(t) ?? []) existing.add(key(t, c, r[c]))
+  const needs = (it: { table: string; row: Record<string, unknown> }) =>
+    fks.filter((f) => f.child === it.table && it.row[f.child_cols] != null)
+      .map((f) => ({ f, k: key(f.parent, f.parent_cols, it.row[f.child_cols]) }))
+      // A row that references itself needs no earlier row: Postgres checks the FK at the end of the INSERT.
+      .filter((n) => !(n.f.parent === it.table && it.row[n.f.parent_cols] === it.row[n.f.child_cols]))
+
+  const out: { table: string; row: Record<string, unknown> }[] = []
+  const done = new Set<string>()
+  let pending = [...rowsBy].flatMap(([table, rows]) => rows.map((row) => ({ table, row })))
+  while (pending.length) {
+    const ready = pending.filter((it) => needs(it).every((n) => done.has(n.k)))
+    if (!ready.length) {
+      const why = pending.slice(0, 10).map((it) => {
+        const open = needs(it).filter((n) => !done.has(n.k))
+        return `${it.table} ${String(it.row.id)} (${open.map((n) => `${n.f.child_cols} -> ${n.f.parent} ${String(it.row[n.f.child_cols])}${existing.has(n.k) ? "" : ", NOT IN THE DUMP"}`).join("; ")})`
+      })
+      throw new Error(`row-level foreign-key cycle or dangling reference in the group ${[...rowsBy.keys()].join(" <-> ")}: ${why.join(" | ")}${pending.length > 10 ? ` | ... ${pending.length - 10} more` : ""}`)
+    }
+    for (const it of ready) {
+      out.push(it)
+      for (const c of refCols.get(it.table) ?? []) done.add(key(it.table, c, it.row[c]))
+    }
+    const readySet = new Set(ready)
+    pending = pending.filter((it) => !readySet.has(it))
+  }
+  return out
+}
+
+/**
+ * The columns a dump writes. A generated column (schema v2: Item.bracket,
+ * STORED from valueLeaves) is left out: Postgres refuses an INSERT that names
+ * it, and the restore recomputes it from the columns that are written.
+ */
 async function columnsOf(pg: Client, schema: string, table: string): Promise<string[]> {
   return (await pg.query(
     `SELECT column_name FROM information_schema.columns
-      WHERE table_schema = $1 AND table_name = $2 ORDER BY ordinal_position`, [schema, table]))
+      WHERE table_schema = $1 AND table_name = $2 AND is_generated = 'NEVER' ORDER BY ordinal_position`, [schema, table]))
     .rows.map((r) => r.column_name)
 }
 
@@ -237,7 +335,7 @@ async function dump(outPath: string) {
   printTarget(schema, "READ-ONLY")
   const pg = await connect()
   await pg.query(`SET SESSION default_transaction_read_only = on`)
-  const { order, selfRef } = await plan(pg, schema)
+  const { order, steps, selfRef, fks } = await plan(pg, schema)
   const out = createWriteStream(outPath, { encoding: "utf8" })
   const write = (s: string) => new Promise<void>((res, rej) => out.write(s, (e) => (e ? rej(e) : res())))
 
@@ -268,20 +366,40 @@ async function dump(outPath: string) {
     `SET standard_conforming_strings = on;\n\nBEGIN;\n\n`)
 
   const counts: Record<string, number> = {}
-  for (const table of order) {
-    const cols = await columnsOf(pg, schema, table)
-    const quoted = cols.map((c) => `"${c}"`).join(", ")
-    let rows: Record<string, unknown>[] = (await pg.query(`SELECT ${quoted} FROM ${q(schema, table)}`)).rows
-    const self = selfRef.get(table)
-    if (self && rows.length) rows = parentFirst(rows, self)
+  const insert = (table: string, cols: string[], r: Record<string, unknown>) =>
+    `INSERT INTO "${table}" (${cols.map((c) => `"${c}"`).join(", ")}) VALUES (${cols.map((c) => literal(r[c])).join(", ")});\n`
+  for (const step of steps) {
+    if ("table" in step) {
+      const table = step.table
+      const cols = await columnsOf(pg, schema, table)
+      let rows: Record<string, unknown>[] = (await pg.query(`SELECT ${cols.map((c) => `"${c}"`).join(", ")} FROM ${q(schema, table)}`)).rows
+      const self = selfRef.get(table)
+      if (self && rows.length) rows = parentFirst(rows, self)
 
-    counts[table] = rows.length
-    await write(`-- table: "${table}" (${rows.length} rows)\n`)
-    for (const r of rows) {
-      await write(`INSERT INTO "${table}" (${quoted}) VALUES (${cols.map((c) => literal(r[c])).join(", ")});\n`)
+      counts[table] = rows.length
+      await write(`-- table: "${table}" (${rows.length} rows)\n`)
+      for (const r of rows) await write(insert(table, cols, r))
+      await write("\n")
+      console.log(`  ${table.padEnd(24)} ${String(rows.length).padStart(6)} rows`)
+      continue
     }
+    // A cyclic group: one `-- table:` line per table (backup-baylo-pg.ps1 counts
+    // them), then every row of the group in row-level reference order.
+    const colsOf = new Map<string, string[]>(), rowsBy = new Map<string, Record<string, unknown>[]>()
+    for (const table of step.group) {
+      const cols = await columnsOf(pg, schema, table)
+      colsOf.set(table, cols)
+      rowsBy.set(table, (await pg.query(`SELECT ${cols.map((c) => `"${c}"`).join(", ")} FROM ${q(schema, table)}`)).rows)
+    }
+    const ordered = rowOrder(rowsBy, fks.filter((f) => step.group.includes(f.child) && step.group.includes(f.parent)))
+    const label = step.group.join(" <-> ")
+    for (const table of step.group) {
+      counts[table] = rowsBy.get(table)!.length
+      await write(`-- table: "${table}" (${counts[table]} rows; cyclic group ${label}, rows interleaved below in reference order)\n`)
+    }
+    for (const { table, row } of ordered) await write(insert(table, colsOf.get(table)!, row))
     await write("\n")
-    console.log(`  ${table.padEnd(24)} ${String(rows.length).padStart(6)} rows`)
+    for (const table of step.group) console.log(`  ${table.padEnd(24)} ${String(counts[table]).padStart(6)} rows  (cyclic group ${label}, interleaved)`)
   }
 
   await write(`COMMIT;\n\n`)
