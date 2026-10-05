@@ -23,7 +23,7 @@
 import { Client, types } from "pg"
 import { existsSync } from "node:fs"
 import { readFile } from "node:fs/promises"
-import { V2_MIGRATIONS, loadMigration, prepareBatch, preV2Chain, withGuardedTransaction } from "../lib/migration-runner"
+import { V2_MIGRATIONS, loadMigration, prepareBatch, preV2Chain, withGuardedTransaction, type MigrationFile } from "../lib/migration-runner"
 
 for (const oid of [1082, 1114, 1083, 1184]) types.setTypeParser(oid, (v) => v)
 types.setTypeParser(20, (v) => v)
@@ -68,7 +68,7 @@ async function main() {
   const chain = await preV2Chain()
   console.log(`  pre-v2 chain: ${chain.length} migrations`)
 
-  const v2 = []
+  const v2: MigrationFile[] = []
   for (const m of V2_MIGRATIONS) {
     if (PART[m] && skip.has(PART[m])) { console.log(`  SKIPPED ${m}`); continue }
     // A phase not yet landed keeps its migration in prisma/schema-v2-pending/.
