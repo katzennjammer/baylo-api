@@ -1,6 +1,6 @@
 # Schema v2 cutover runbook
 
-**Status (5 Oct 2026):** all code is built and rehearsed, and nothing in this runbook has been run against live. What remains is the operator's run itself.
+**Status (5 Oct 2026, 13:30):** the first live lockdown run (13:03) was **refused inside its transaction** by a runner bug and rolled back. Live is unchanged (fingerprint `4a5835f1…8906`, grants as before). The bug is fixed, and the live path now has its own test, `test-cutover-live-path.ts`, which the operator runs before re-arming. See section 9b.
 **Rehearsed on:** `D:\BAYLO\backups\baylo-pg-20261004-221810.sql` and `baylo-pg-20261005-080500.sql`. Both hold 34 tables, 1959 rows, ledger 1744 / 1804 / 60.
 **Operator:** Jamaica. **Teammates:** Noor, John.
 **Design:** `docs/schema-v2.md`.
@@ -26,6 +26,7 @@
 - `test-pg-backup-target.ts <backup>`
 - `test-cutover-live-e2e.ts <backup>`
 - `test-post-cutover-guards.ts <v2 copy> <pre-v2 copy>` (on the post-cutover branch)
+- `test-cutover-live-path.ts <backup>`: the **live path itself** (authorization, typed phrase, one use) for lockdown, migrate and rollback, on a stand-in for `public`. The operator runs it, because it needs four typed phrases (section 9b)
 
 Live is one Supabase database: `aws-0-ap-southeast-1.pooler.supabase.com:5432`, database `postgres`, schema **`public`**. The scratch copies are other schemas in the same database. Every command prints its target first. **Stop if the target is not the one the step names.**
 
@@ -251,7 +252,7 @@ Afterwards Jamaica drops `schema_v2_cutgo_src` once nothing needs it any more.
 3. Teammates stay on (or go back to) the pre-v2 branch, then `npx prisma generate`, delete `.next\dev`, and restart.
 4. **Data written between step 5 and the rollback is lost**, because the backup is from before the migration. The freeze keeps this window empty, so do not unfreeze until GO or rollback.
 
-*`pg-backup.ts restore $B --force --confirm-live-rollback` is a different tool, for "old layout intact, data bad". It truncates and reloads rows; it does not rebuild tables. Never use it after a successful migration.*
+**`cutover-live.ts --purpose rollback` is the only live rollback.** Since 5 Oct, `pg-backup.ts restore` refuses `public` outright, and restores scratch schemas only. It used to take `--confirm-live-rollback`, which could never have worked: until the fix in 9b, the runner refused every authorized write to `public`.
 
 ## 9. The one-time live-write override (built and tested 5 Oct)
 
@@ -266,6 +267,45 @@ Afterwards Jamaica drops `schema_v2_cutgo_src` once nothing needs it any more.
   It logs to `D:\BAYLO\backups\cutover-<ts>.log`.
 - **The existing guards stay** for everything else: `v2.mjs`, `prisma.config.ts`, `assertV2Schema`, `live-guard.ts` and the runner.
 - **Tested** by `test-cutover-live-e2e.ts`. Ten refusals: no token, no env flag, migrate before lockdown, a second arm, wrong purpose, expired, counts changed, backup changed, another OS user, wrong phrase. Plus the live path with no terminal and without the flag, refused before connecting.
+- **Not tested by it: the live path succeeding.** Every e2e write goes to a scratch target, which takes the `--confirm` path. That gap is what let the 5 Oct bug through (9b).
+
+## 9b. The 5 Oct live-path bug and its fix
+
+**What happened.** At 13:03, `cl run --purpose lockdown` on live printed `re-checked … no app connections`, then `LOCKDOWN ROLLED BACK after 4156 ms -- public is exactly as it was: [migration guard] target "public" is the protected schema`. Live was then checked and found unchanged:
+- fingerprint `4a5835f1…8906`;
+- 34/34 tables equal to the backup;
+- anon/authenticated still reach 35/35 tables, as before;
+- no token armed.
+
+**Cause.** `withGuardedTransaction()` in `scripts/lib/migration-runner.ts` defaulted its protected schema to `public`. It then refused any target equal to that schema, **after** it had already accepted the live authorization.
+- Lockdown, migrate and rollback all run through that one call, and so did `pg-backup.ts restore` on `public`. So there was no working live write and no working live rollback.
+- No test had reached this path, because an authorization needs a human at a terminal.
+
+**Fix (on `feature/schema-v2`):**
+- The protected-schema check now applies to scratch targets only. For `public`, the authorization is the gate.
+- An authorization now names its **target and purpose**, and `withGuardedTransaction()` accepts it **once**. A second use is refused.
+- `confirmLiveWrite()` itself now requires `BAYLO_CUTOVER_LIVE=1`, as well as the flag, the terminal and the typed phrase.
+- `pg-backup.ts restore` refuses `public` (section 8).
+- The backstop on `public`, and the live fingerprint every test takes, now also compare the **contents** of every ACL: grants and default ACLs for anon/authenticated, not only the catalog's xmin.
+  - `cr snapshot` prints a `grants:` line and an `acl fingerprint:` line.
+  - The original `fingerprint:` is computed exactly as before, so it still compares with `4a5835f1…8906`.
+- The guard test asserts **why** each target is refused, so a wrong refusal cannot pass silently again.
+
+**The live-path test (stand-in).** `BAYLO_LIVE_STANDIN=schema_v2_cut_livepath` makes that one copy take the `public` path in every tool. That means `--confirm-live-<purpose>`, `BAYLO_CUTOVER_LIVE=1`, a terminal, and the typed phrase `<PURPOSE> STAND-IN (not live) schema_v2_cut_livepath <code>`.
+
+What keeps it away from live:
+- While the variable is set, **every tool refuses `public`**: cutover-live, pg-backup, the runner and `confirmLiveWrite`.
+- The runner's backstop still guards real `public` in every transaction.
+- Before the test was built, everything it runs was grepped for a hard-coded `public`: the lockdown, the six v2 migrations, the 27 pre-v2 migrations the rollback replays, and the runner's own SQL.
+  - The only hit is `CREATE SCHEMA IF NOT EXISTS "public"` in the baseline, and the runner strips it.
+  - `prepareBatch` refuses `public.` and `'public'` in any batch.
+
+Run it from a fresh PowerShell. It sets the two variables for its own child processes only:
+```powershell
+cd D:\BAYLO\baylo
+node_modules\.bin\tsx.cmd --env-file=.env scripts/schema-v2/test-cutover-live-path.ts $B
+```
+It must end `LIVE PATH TEST PASSED` and show live identical before and after, grants included.
 
 ## 10. Rehearsal record
 
@@ -288,6 +328,10 @@ Afterwards Jamaica drops `schema_v2_cutgo_src` once nothing needs it any more.
 | 5 Oct | org-settlement-http on the **pre-v2 code** (`8c0277f`, temporary worktree, webpack) against an **old-layout** copy of the same backup, run twice | 4d fails identically in both runs (95 passed, 1 failed), so it is **pre-existing**; live fingerprint identical before and after (`4a5835f1…8906`) | 90 s + 70 s |
 | 5 Oct | `test-post-cutover-guards.ts` (post-cutover branch) | PASSED: v2 copy starts; pre-v2 copy and live `public` refuse; reset/dev/push refused before connecting | — |
 | 5 Oct | Dropped `schema_v2_cut1`–`cut4` and their `_src` twins | live fingerprint identical before and after (`4a5835f1…8906`) | — |
+| 5 Oct | Backup `…20261005-124803.sql` (SHA `d5173210…0b0`) + restore drill | VERIFIED, matches live; DRILL PASSED | 12.9 s + 28.1 s |
+| 5 Oct | `test-cutover-live-e2e.ts` on that backup | PASSED | 253 s |
+| 5 Oct 13:03 | **Live lockdown, first run** | **Refused inside the transaction** (`target "public" is the protected schema`) and rolled back; live unchanged | 4.2 s |
+| 5 Oct | Fix (9b), then `test-migration-guard.ts`, `test-pg-backup-target.ts` and `test-cutover-live-e2e.ts` | all PASSED; live identical before and after, grants included (acl `4fba6757…`) | — |
 
 **org-settlement-http 4d: pre-existing, in the baseline.** The check *"anything the person's review moved is a QUEST_REWARD"* sums every non-TRADE_REWARD ledger row the person received in the last **60 s of wall-clock time**, and compares that with how much their balance moved during the review. The trade completing a few seconds earlier writes a 20-Leaf TASK_REWARD (and sometimes a quest reward) inside that window, so the check fails whenever the suite runs at normal speed. Measured on 5 Oct:
 
