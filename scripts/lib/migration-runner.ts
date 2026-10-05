@@ -81,7 +81,7 @@ export interface LiveWriteAuthorization { readonly [LIVE_BRAND]: true; readonly 
  * code. No environment variable can supply it, and neither can a pipe, CI or
  * a pasted command, since the code is new on every run.
  */
-export async function confirmLiveWrite(purpose: "rollback" | "cutover", target: string): Promise<LiveWriteAuthorization> {
+export async function confirmLiveWrite(purpose: "rollback" | "cutover" | "lockdown" | "migrate", target: string): Promise<LiveWriteAuthorization> {
   const flag = `--confirm-live-${purpose}`
   if (!process.argv.includes(flag)) throw new GuardError(`refusing to write "public" (LIVE): pass ${flag} and type the confirmation`)
   if (!process.stdin.isTTY || !process.stdout.isTTY) throw new GuardError(`refusing to write "public" (LIVE): ${flag} needs an interactive terminal to type the confirmation`)

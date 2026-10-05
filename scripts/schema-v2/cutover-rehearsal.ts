@@ -6,8 +6,10 @@
 //   inspect-live                            READ-ONLY report on live `public` (see below)
 //   counts --schema S [--backup F]          per-table counts in S vs live public (and vs F's trailer)
 //   build-old --schema S [--replace]        S := the PRE-v2 structure only (empty tables), for restore tests
-//   restore-old F --schema S [--replace]    S := backup F in the PRE-v2 structure, plus
-//                                           _prisma_migrations copied from live (read)
+//   restore-old F --schema S [--replace] [--mirror-grants]
+//                                           S := backup F in the PRE-v2 structure, plus
+//                                           _prisma_migrations copied from live (read);
+//                                           --mirror-grants also gives S live's anon/authenticated grants
 //   apply-single --schema S [--sleep-after N --sleep-secs K]
 //                                           THE CUTOVER METHOD: all six v2 migrations AND their
 //                                           _prisma_migrations rows in ONE transaction
@@ -22,6 +24,7 @@
 //   lockdown --schema S                     rehearse the API-role lockdown on S: mirror live's
 //                                           anon/authenticated grants, revoke, prove
 //   drop --schema S                         drop a schema_v2_cut* rehearsal schema
+//   snapshot                                READ-ONLY live fingerprint (compare before/after anything)
 //
 // SAFETY. Every write command refuses a schema that is not schema_v2_cut*,
 // so it can never name `public` or the week-2 copy schema_v2_wk1. Every write
@@ -40,6 +43,8 @@ import {
   V2_MIGRATIONS, applyV2InTransaction, prepareBatch, preV2Chain, prismaChecksum, v2Chain, withGuardedTransaction, type Batch,
 } from "../lib/migration-runner"
 import { describe, exposure, lockdownStatements } from "../lib/api-role-lockdown"
+import { liveSnapshot } from "../lib/live-snapshot"
+import { createHash } from "node:crypto"
 
 for (const oid of [1082, 1114, 1083, 1184]) types.setTypeParser(oid, (v) => v)
 types.setTypeParser(20, (v) => v)
@@ -278,6 +283,20 @@ async function buildOld() {
   } finally { await pg.end() }
 }
 
+/** Give a scratch copy live's API-role grants (measured 4 Oct 2026), so a lockdown rehearsal has something real to remove. */
+async function mirrorLiveGrants(g: { query: (sql: string) => Promise<unknown> }, s: string) {
+  const roles = "anon, authenticated, service_role"
+  for (const sql of [
+    `GRANT USAGE ON SCHEMA "${s}" TO ${roles}`,
+    `GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA "${s}" TO ${roles}`,
+    `GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA "${s}" TO ${roles}`,
+    `GRANT ALL PRIVILEGES ON ALL ROUTINES IN SCHEMA "${s}" TO ${roles}`,
+    `ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA "${s}" GRANT ALL ON TABLES TO ${roles}`,
+    `ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA "${s}" GRANT ALL ON SEQUENCES TO ${roles}`,
+    `ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA "${s}" GRANT ALL ON FUNCTIONS TO ${roles}`,
+  ]) await g.query(sql)
+}
+
 async function restoreOld() {
   const s = writableSchema()
   const { batch } = await readBackup(positional ?? "")
@@ -294,6 +313,7 @@ async function restoreOld() {
         const cols = Object.keys(r)
         await g.query(`INSERT INTO "_prisma_migrations" (${cols.map((c) => `"${c}"`).join(",")}) VALUES (${cols.map((_, i) => `$${i + 1}`).join(",")})`, cols.map((c) => r[c]))
       }
+      if (flag("--mirror-grants")) await mirrorLiveGrants(g, s)
     })
     const n = (await pg.query(`SELECT count(*)::int n FROM pg_tables WHERE schemaname = $1`, [s])).rows[0].n
     console.log(`  "${s}": pre-v2 structure from ${chain.length} migrations, backup restored, ${rows.length} live _prisma_migrations rows copied; ${n} tables incl. _prisma_migrations (${Date.now() - t0} ms)`)
@@ -436,16 +456,7 @@ async function lockdown() {
     console.log(`  live public (read-only): ${describe(live)}`)
     await withGuardedTransaction(pg, { target: s }, async (g) => {
       const q = (sql: string, params?: unknown[]) => g.query(sql, params)
-      const roles = "anon, authenticated, service_role"
-      for (const sql of [
-        `GRANT USAGE ON SCHEMA "${s}" TO ${roles}`,
-        `GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA "${s}" TO ${roles}`,
-        `GRANT ALL PRIVILEGES ON ALL SEQUENCES IN SCHEMA "${s}" TO ${roles}`,
-        `GRANT ALL PRIVILEGES ON ALL ROUTINES IN SCHEMA "${s}" TO ${roles}`,
-        `ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA "${s}" GRANT ALL ON TABLES TO ${roles}`,
-        `ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA "${s}" GRANT ALL ON SEQUENCES TO ${roles}`,
-        `ALTER DEFAULT PRIVILEGES FOR ROLE postgres IN SCHEMA "${s}" GRANT ALL ON FUNCTIONS TO ${roles}`,
-      ]) await q(sql)
+      await mirrorLiveGrants(g, s)
       const before = await exposure(q, s)
       console.log(`  copy, mirrored to live's shape: ${describe(before)}`)
       if (before.tablesExposed !== before.tables || !before.defaultAclExposed.length) throw new Error("the mirror does not reproduce live's exposure; the rehearsal would prove nothing")
@@ -490,6 +501,13 @@ const run: Record<string, () => Promise<void>> = {
   "inspect-live": inspectLive, counts, "restore-old": restoreOld,
   "apply-single": () => apply(true), "apply-perfile": () => apply(false),
   kill, state, rollback, drop, "build-old": buildOld, lockdown,
+  // READ-ONLY: the live fingerprint the tests compare (counts, ledger, catalog, _prisma_migrations).
+  snapshot: async () => {
+    printTarget("public (LIVE)", "READ-ONLY")
+    const s = await liveSnapshot()
+    console.log(`  live: ${s.summary}
+  fingerprint: ${createHash("sha256").update(s.text).digest("hex")}`)
+  },
 }
 if (!run[cmd]) { console.error(`usage: see header (got "${cmd}")`); process.exit(2) }
 run[cmd]().catch((e) => { console.error(e); process.exit(1) })

@@ -34,10 +34,19 @@ for (const oid of [1082, 1114, 1083, 1184]) types.setTypeParser(oid, (v) => v)
 types.setTypeParser(20, (v) => v)
 types.setTypeParser(1700, (v) => v)
 
-const i = process.argv.indexOf("--schema")
-const NEW = i === -1 ? "schema_v2_wk1" : process.argv[i + 1]
-const OLD = `${NEW}_src`
-if (!/^schema_v2_[a-z0-9_]+$/.test(NEW)) { console.error(`refusing schema "${NEW}"`); process.exit(2) }
+// --schema S          NEW = S, OLD = S_src (the rehearsal pair)
+// --new N --old O     explicit. After the live cutover: --new public --old
+//                     schema_v2_cutgo_src --post-cutover, comparing live with
+//                     the pre-cutover backup restored in the old layout. This
+//                     is safe because the run is proven read-only (above).
+const arg = (n: string) => { const k = process.argv.indexOf(n); return k === -1 ? undefined : process.argv[k + 1] }
+const NEW = arg("--new") ?? arg("--schema") ?? "schema_v2_wk1"
+const OLD = arg("--old") ?? `${NEW}_src`
+const v2Name = (s: string) => /^schema_v2_[a-z0-9_]+$/.test(s)
+if (!v2Name(OLD)) { console.error(`refusing old schema "${OLD}"`); process.exit(2) }
+if (!v2Name(NEW) && !(NEW === "public" && process.argv.includes("--post-cutover"))) {
+  console.error(`refusing new schema "${NEW}"${NEW === "public" ? " (pass --post-cutover to verify live after the cutover)" : ""}`); process.exit(2)
+}
 
 const o = (t: string) => `"${OLD}"."${t}"`
 const n = (t: string) => `"${NEW}"."${t}"`
