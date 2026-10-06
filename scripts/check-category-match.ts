@@ -16,6 +16,7 @@
  * listing can show fewer rows than were written for it.
  */
 import prisma from "../src/lib/prisma"
+import { activeSuspension, suspensionState } from "@/lib/moderation"
 import { WANTED_CATEGORIES, wantedList } from "@/lib/wanted-categories"
 import {
   MATCH_NOTIFY_CAP,
@@ -83,7 +84,7 @@ async function main() {
     },
     select: {
       userId: true, category: true, wantedCategories: WANTED_CATEGORIES, status: true, moderationHiddenAt: true,
-      user: { select: { email: true, deletedAt: true, isOrgAccount: true, suspendedAt: true, suspendedUntil: true } },
+      user: { select: { email: true, deletedAt: true, isOrgAccount: true, suspensions: activeSuspension() } },
     },
   })
   const blocks = await prisma.block.findMany({
@@ -112,7 +113,7 @@ async function main() {
     }
     const rule = rules.size === 2 ? "mutual" : [...rules][0]
     const live = items.filter((c) => c.status === "AVAILABLE" && c.moderationHiddenAt == null)
-    const suspended = u.suspendedAt != null && (u.suspendedUntil == null || u.suspendedUntil > now)
+    const suspended = suspensionState(u).suspended
 
     let outcome: string
     const p = picked.get(ownerId)

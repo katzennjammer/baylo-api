@@ -456,18 +456,12 @@ async function main() {
 
   // ── 10 ── suspension keeps the claim; deletion frees it
   head("10  suspension keeps the hash; deletion frees it")
-  await prisma.user.update({
-    where: { id: unverified.id },
-    data: { suspendedAt: new Date(), suspendedUntil: null },
-  })
+  await prisma.suspension.create({ data: { userId: unverified.id, level: 1, reason: "verify-id-verification" } })
   const stillClaimed = await prisma.idVerification.findUnique({
     where: { claimKey: hashIdNumber(ID_A) }, select: { id: true },
   })
   check("a SUSPENDED user's approved hash is still claimed", !!stillClaimed)
-  await prisma.user.update({
-    where: { id: unverified.id },
-    data: { suspendedAt: null, suspendedUntil: null },
-  })
+  await prisma.suspension.deleteMany({ where: { userId: unverified.id } })
 
   // Deletion goes through the real path so the summary and the row removal are
   // both exercised.

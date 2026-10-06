@@ -339,10 +339,9 @@ export async function activeOrgsFor(
   /**
    * The SHOP's Leaf balance -- its backing row's, never the person's. Here and
    * nowhere public: this list is only ever the caller's own ACTIVE
-   * memberships, so the figure reaches exactly the owners and staff who can
-   * spend it (the verified-MSME welcome grant lands here, and a listing posted
-   * as the shop is boosted from here). Added 25 Sep 2026 because nothing in
-   * the app showed it, and a paid grant read as a missing one.
+   * memberships, so the figure reaches exactly the owner who can spend it
+   * (the verified-MSME welcome grant lands here). Added 25 Sep 2026 because
+   * nothing in the app showed it, and a paid grant read as a missing one.
    */
   leaves: number
 }[]> {

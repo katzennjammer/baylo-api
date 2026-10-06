@@ -79,13 +79,13 @@ async function main() {
     data: { name: "Free", email: `${P}free@example.com`, isVerified: true, leaves: 0 },
   })
   const premiumUser = await prisma.user.create({
-    data: { name: "Premium", email: `${P}premium@example.com`, isVerified: true, leaves: 0, premiumUntil: future },
+    data: { name: "Premium", email: `${P}premium@example.com`, isVerified: true, leaves: 0, subscriptions: { create: { tier: "PREMIUM", endsAt: future } } },
   })
   const vipOnly = await prisma.user.create({
-    data: { name: "VipOnly", email: `${P}vip@example.com`, isVerified: true, leaves: 0, vipUntil: future },
+    data: { name: "VipOnly", email: `${P}vip@example.com`, isVerified: true, leaves: 0, subscriptions: { create: { tier: "VIP", endsAt: future } } },
   })
   const lapsed = await prisma.user.create({
-    data: { name: "Lapsed", email: `${P}lapsed@example.com`, isVerified: true, leaves: 0, premiumUntil: past },
+    data: { name: "Lapsed", email: `${P}lapsed@example.com`, isVerified: true, leaves: 0, subscriptions: { create: { tier: "PREMIUM", endsAt: past } } },
   })
   const owner = await prisma.user.create({
     data: { name: "Owner", email: `${P}owner@example.com`, isVerified: true, leaves: 0 },

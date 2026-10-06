@@ -3,7 +3,7 @@ import { auth } from "@root/auth"
 import prisma from "@/lib/prisma"
 import { REPORT } from "@/lib/report-case"
 import { IN_TRADE_PHASE } from "@/lib/trade-row"
-import { suspensionState } from "@/lib/moderation"
+import { suspensionState, activeSuspension, notSuspendedWhere, suspendedWhere } from "@/lib/moderation"
 import UserActions from "./UserActions"
 import { FilterChips } from "@/components/admin/FilterChips"
 import { StaggerGroup, StaggerItem } from "@/components/admin/Stagger"
@@ -66,14 +66,13 @@ export default async function UsersPage({ searchParams }: Props) {
       ...(status === "active"
         ? {
             deletedAt: null,
-            OR: [{ suspendedAt: null }, { suspendedUntil: { lte: now } }],
+            ...notSuspendedWhere(now),
           }
         : {}),
       ...(status === "suspended"
         ? {
             deletedAt: null,
-            suspendedAt: { not: null },
-            AND: [{ OR: [{ suspendedUntil: null }, { suspendedUntil: { gt: now } }] }],
+            ...suspendedWhere(now),
           }
         : {}),
       ...(status === "deleted" ? { deletedAt: { not: null } } : {}),
@@ -83,8 +82,8 @@ export default async function UsersPage({ searchParams }: Props) {
     where,
     select: {
       id: true, name: true, email: true, role: true, isVerified: true,
-      idVerifiedGrandfatheredAt: true, createdAt: true, suspendedAt: true,
-      suspendedUntil: true, deletedAt: true,
+      idVerifiedGrandfatheredAt: true, createdAt: true, suspensions: activeSuspension(now),
+      deletedAt: true,
       _count: { select: { items: true, casesFiled: { where: REPORT }, idVerifications: true, sentTrades: { where: IN_TRADE_PHASE }, receivedTrades: { where: IN_TRADE_PHASE } } },
       idVerifications: {
         select: { status: true, submittedAt: true },

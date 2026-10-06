@@ -201,6 +201,12 @@ export async function deleteAccount(
         avatar: null,
         bio: null,
         location: null,
+        // Personal data like the rest (3 Oct 2026). It was left behind on the
+        // tombstone until the privacy policy was written against this
+        // function and had to say so. Nothing reads it afterwards: the age
+        // gate is checked at signup and at Google sign-in, and neither can
+        // reach an account with no password and an unroutable address.
+        dateOfBirth: null,
         isVerified: false,
       },
     })

@@ -19,62 +19,194 @@ import type { Prisma, PrismaClient } from "@/generated/prisma/client"
 
 export interface SuspensionState {
   suspended: boolean
-  /** True when suspendedAt is set and suspendedUntil is null. */
+  /** True when the suspension in force has no endsAt. */
   indefinite: boolean
+  /** When the suspension in force began, or null when there is none. */
+  since: Date | null
   until: Date | null
+  /** What the admin wrote when imposing it. SHOWN TO THE USER at sign-in. */
+  reason: string | null
+  /** Which suspension this is for the account: 1 = first, 2 = second, ... */
+  level: number | null
 }
 
 /**
- * The ONLY correct reading of (suspendedAt, suspendedUntil).
+ * A Suspension row that is IN FORCE at `now`: not lifted, and either
+ * indefinite (endsAt IS NULL) or still running (endsAt in the future).
  *
- * The trap this function exists to close: `suspendedUntil == null` looks like
- * "not suspended" and means the opposite — an indefinite suspension. Testing
- * either column alone gets it backwards half the time, so nothing tests either
- * column alone.
+ * The trap this exists to close: `endsAt == null` looks like "over" and means
+ * the opposite — an indefinite suspension. And a row merely EXISTING means
+ * nothing at all, because rows are kept as history. So nothing tests a column
+ * alone; every reader goes through this, suspensionState() or
+ * notSuspendedWhere().
  *
- * A lapsed suspension (until is in the past) reads as NOT suspended and the row
- * is left alone. There is no sweep and none is needed: unlike a DPA deadline,
- * nothing accrues while a suspension runs, so lazily deciding "is it over?" at
- * read time gives exactly the same answer a sweep would have written.
+ * A lapsed suspension (endsAt is in the past) reads as not in force and the
+ * row is left alone. There is no sweep and none is needed: nothing accrues
+ * while a suspension runs, so lazily deciding "is it over?" at read time gives
+ * exactly the same answer a sweep would have written.
+ */
+export function activeSuspensionWhere(now: Date = new Date()): Prisma.SuspensionWhereInput {
+  return { liftedAt: null, OR: [{ endsAt: null }, { endsAt: { gt: now } }] }
+}
+
+/**
+ * How a reader loads what suspensionState() needs:
+ * `suspensions: activeSuspension()` in a User select or include.
+ */
+export function activeSuspension(now: Date = new Date()) {
+  return {
+    where: activeSuspensionWhere(now),
+    select: { startsAt: true, endsAt: true, liftedAt: true, reason: true, level: true },
+    take: 1,
+  } satisfies Prisma.User$suspensionsArgs
+}
+
+/**
+ * The ONLY correct reading of a user's suspensions.
+ *
+ * Applies the in-force rule itself rather than trusting that the rows it was
+ * handed were loaded with activeSuspension(): a caller that selected the whole
+ * history must not read as suspended because of a row from last year.
  */
 export function suspensionState(user: {
-  suspendedAt: Date | null
-  suspendedUntil: Date | null
+  suspensions: { startsAt: Date; endsAt: Date | null; liftedAt: Date | null; reason?: string; level?: number }[]
 }): SuspensionState {
-  if (!user.suspendedAt) return { suspended: false, indefinite: false, until: null }
-  if (user.suspendedUntil === null) {
-    return { suspended: true, indefinite: true, until: null }
-  }
+  const now = Date.now()
+  const s = user.suspensions.find((s) => !s.liftedAt && (s.endsAt === null || s.endsAt.getTime() > now))
+  if (!s) return { suspended: false, indefinite: false, since: null, until: null, reason: null, level: null }
   return {
-    suspended: user.suspendedUntil.getTime() > Date.now(),
-    indefinite: false,
-    until: user.suspendedUntil,
+    suspended: true, indefinite: s.endsAt === null, since: s.startsAt, until: s.endsAt,
+    reason: s.reason ?? null, level: s.level ?? null,
+  }
+}
+
+/**
+ * The 403 body a sign-in route answers a suspended account with.
+ *
+ * ONLY EVER SENT AFTER THE CALLER HAS PROVED THE ACCOUNT IS THEIRS -- a correct
+ * password, or a Google ID token for its email. Before that point "suspended"
+ * is an answer about somebody else's account, and saying it would let anyone
+ * enumerate who is suspended and why.
+ *
+ * `error` is the whole message for a client that shows nothing else; the other
+ * fields let the app lay out a proper notice: the reason the admin gave, when
+ * it started and ends, and which suspension this is for the account.
+ */
+export function suspendedBody(state: SuspensionState) {
+  return {
+    error: state.indefinite
+      ? "This account has been suspended. Contact support if you think that is a mistake."
+      : `This account is suspended until ${state.until!.toLocaleDateString()}.`,
+    code: "ACCOUNT_SUSPENDED",
+    indefinite: state.indefinite,
+    since: state.since,
+    until: state.until,
+    reason: state.reason,
+    level: state.level,
   }
 }
 
 /**
  * suspensionState() as a WHERE fragment: "this user is not suspended RIGHT NOW".
  *
- * The same rule as the function above, and it exists because the obvious
- * shorthand is wrong in a way that reads as correct. `suspendedAt: null` looks
- * like "not suspended" and silently keeps hiding a user whose suspension
- * EXPIRED, because suspendedAt is never cleared by the passage of time — only
- * by an unsuspend. A seven-day suspension would become permanent for every
- * query that took the shortcut.
+ * The same rule as the function above. `suspensions: { none: {} }` is the
+ * obvious shorthand and is wrong in a way that reads as correct: it keeps
+ * hiding a user whose suspension EXPIRED or was lifted, because the row stays.
+ * A seven-day suspension would become permanent for every query that took the
+ * shortcut.
  *
- * Expressed as a NOT around the positive condition rather than as a top-level
- * OR, so it composes into a `where` that already has an `OR` of its own without
- * either clobbering the other.
+ * A single relation key, so it composes into a `where` that already has an
+ * `OR` of its own without either clobbering the other.
  */
 export function notSuspendedWhere(now: Date = new Date()): Prisma.UserWhereInput {
-  return {
-    NOT: {
-      AND: [
-        { suspendedAt: { not: null } },
-        // Indefinite (until IS NULL) or still running (until in the future).
-        { OR: [{ suspendedUntil: null }, { suspendedUntil: { gt: now } }] },
-      ],
-    },
+  return { suspensions: { none: activeSuspensionWhere(now) } }
+}
+
+/** The opposite of notSuspendedWhere(): "this user IS suspended right now". */
+export function suspendedWhere(now: Date = new Date()): Prisma.UserWhereInput {
+  return { suspensions: { some: activeSuspensionWhere(now) } }
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000
+
+// Manila, spelled out: the server's own zone and locale are whatever the host
+// happens to be, and this date is read by a person in the Philippines.
+const noticeDate = (d: Date) =>
+  d.toLocaleDateString("en-PH", { day: "numeric", month: "long", year: "numeric", timeZone: "Asia/Manila" })
+
+/**
+ * The words of the "your suspension is over" notice. Pure, so the wording is
+ * checkable without a database (scripts/verify-suspension-subscription.ts).
+ *
+ * It restates the reason and the length because the notice is read days after
+ * the lockout screen was: "your suspension ended" with nothing beside it leaves
+ * the person to remember what it was for. A reason is quoted verbatim but cut
+ * at 200 characters -- this is one row in a list, not the appeal record.
+ */
+export function suspensionEndedMessage(s: {
+  reason: string
+  startsAt: Date
+  endsAt: Date | null
+  liftedAt: Date | null
+}): string {
+  const reason = s.reason.length > 200 ? `${s.reason.slice(0, 200).trimEnd()}…` : s.reason
+  const why = `It was placed for: "${reason}"`
+  const close = "Thank you for your patience. Please keep to the community rules so this stays behind you."
+
+  // Lifted by staff before it would have ended (or it had no end at all).
+  if (s.liftedAt && (s.endsAt === null || s.liftedAt.getTime() < s.endsAt.getTime())) {
+    return `Welcome back. Our team lifted the suspension on your account on ${noticeDate(s.liftedAt)}${
+      s.endsAt ? ", ahead of its end date" : ""
+    }. ${why} ${close}`
+  }
+  // Ran its course. endsAt is set here: an indefinite one can only be lifted.
+  const days = Math.max(1, Math.round((s.endsAt!.getTime() - s.startsAt.getTime()) / DAY_MS))
+  return `Welcome back. Your ${days}-day suspension ended on ${noticeDate(s.endsAt!)}. ${why} ${close}`
+}
+
+/**
+ * Tells an account its suspension is over. Called by the sign-in routes, after
+ * they have established the account is NOT suspended right now.
+ *
+ * AT SIGN-IN, NOT AT THE MOMENT IT ENDS, because for half the cases there is no
+ * such moment: a timed suspension simply stops being in force when the clock
+ * passes endsAt, and nothing runs then (see activeSuspensionWhere()). Doing it
+ * here covers that case and the admin's unsuspend with one code path, and
+ * costs the user nothing -- they could not have read it any earlier.
+ *
+ * ONCE PER SUSPENSION: the notice carries the Suspension's id as its entity,
+ * and a second sign-in finds it and stops.
+ *
+ * NEVER THROWS. A courtesy notice must not be able to fail a sign-in; a failure
+ * is logged and the next sign-in tries again.
+ */
+export async function notifySuspensionEnded(db: PrismaClient, userId: string): Promise<void> {
+  try {
+    const now = new Date()
+    const last = await db.suspension.findFirst({
+      where: { userId, OR: [{ liftedAt: { not: null } }, { endsAt: { lte: now } }] },
+      orderBy: { startsAt: "desc" },
+    })
+    if (!last) return
+
+    const told = await db.notification.findFirst({
+      where: { userId, entityType: "suspension", entityId: last.id },
+      select: { id: true },
+    })
+    if (told) return
+
+    await db.notification.create({
+      data: {
+        userId,
+        type: "SUSPENSION_LIFTED",
+        message: suspensionEndedMessage(last),
+        // No `actorId`: the user must not learn which moderator handled it.
+        entityType: "suspension",
+        entityId: last.id,
+      },
+    })
+  } catch (e) {
+    console.error("[moderation] could not write the suspension-ended notice", e)
   }
 }
 

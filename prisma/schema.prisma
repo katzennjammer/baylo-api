@@ -69,34 +69,9 @@ model User {
   // token issued before deletion stops working immediately.
   deletedAt DateTime?
 
-  // Premium subscription. Null or in the past means not subscribed; there is no
-  // boolean beside it, because a boolean would have to be flipped back by a job
-  // when the term ends and this column simply stops being true.
-  //
-  // NOTHING WRITES THIS YET. Play Billing is the only lawful way to sell a
-  // digital subscription inside the Android app and there is no Play Console
-  // account to test it against, so the column is set by hand
-  // (scripts/set-premium.ps1) and read by ONE place: isPremium() in
-  // @/lib/premium. What it gates is ACQUIRING an item whose value bracket is
-  // PREMIUM_MIN_BRACKET or above -- proposing for one, or accepting an offer
-  // of one -- see @/lib/brackets. It never hides a listing and never gates
-  // giving one away.
-  //
-  // BETA (provisional, 30 Sep 2026): Premium is a one-time lifetime purchase
-  // for now, stored as the sentinel PREMIUM_LIFETIME_UNTIL (9999-12-31) in
-  // @/lib/premium -- a real future date, so isPremium() is unchanged.
-  premiumUntil DateTime?
-
-  // VIP subscription (23 Sep 2026). Same shape and same caveats as
-  // premiumUntil -- a date, not a boolean, set by hand today via
-  // scripts/set-premium.ps1 and read by ONE place, isVip() in @/lib/premium.
-  //
-  // VIP is a SUPERSET of Premium, not a sibling of it: it gates acquiring an
-  // item at VIP_MIN_BRACKET or above (see @/lib/brackets), and it ALSO passes
-  // everything premiumUntil alone would -- a VIP subscriber never needs both
-  // columns set. enforcePremiumForListing() checks vip before premium for
-  // exactly that reason.
-  vipUntil DateTime?
+  /// Premium and VIP terms, one row each. See Subscription -- the User row
+  /// itself holds no subscription state.
+  subscriptions Subscription[]
 
   items                  Item[]
   /// Every deal this account proposed, or was proposed to -- the offer phase
@@ -141,23 +116,9 @@ model User {
   // route tree for any handler that reads `role` out of a request body.
   role Role @default(USER)
 
-  // Account suspension, written only by POST /api/admin/users/[id] with
-  // action "suspend" / "unsuspend".
-  //
-  // suspendedAt     non-null means suspended right now.
-  // suspendedUntil  when it lifts. NULL WITH suspendedAt SET MEANS INDEFINITE --
-  //                 not "already lifted". suspensionState() in @/lib/moderation
-  //                 is the only correct reading of the pair; do not test either
-  //                 column alone.
-  //
-  // Both are CLEARED on unsuspend rather than kept as history. That is the
-  // opposite of DeferredContract.defaultedAt, and deliberately so: a default is
-  // a fact about the debtor that the tier system keeps charging against, while a
-  // lifted suspension is a moderation decision whose record belongs in
-  // AdminAction, next to who lifted it and why. A suspension history smeared
-  // across the User row would be a second, worse audit log.
-  suspendedAt    DateTime?
-  suspendedUntil DateTime?
+  /// Every suspension this account has had, one row each. See Suspension --
+  /// the User row itself holds no suspension state.
+  suspensions Suspension[]
 
   /// Reports this person filed and listing appeals they opened (filedBy), and
   /// the cases they decided as staff (decidedBy). See ModerationCase.
@@ -253,10 +214,85 @@ model User {
   // Every reputation aggregate filters on this. Cheap, and the reason the flag
   // is a column rather than a join -- see the note above.
   @@index([isOrgAccount])
-  // Soft-delete and suspension sweeps. Raw CREATE INDEX in the old chain;
-  // declared here so they survive the squash.
+  // Soft-delete sweeps. Raw CREATE INDEX in the old chain; declared here so it
+  // survives the squash.
   @@index([deletedAt])
-  @@index([suspendedAt])
+}
+
+enum SubscriptionTier {
+  PREMIUM
+  // A SUPERSET of Premium, not a sibling of it: a live VIP row passes every
+  // Premium gate without a PREMIUM row beside it. See isVip() in @/lib/premium.
+  VIP
+}
+
+/**
+ * One term of Premium or VIP, for one account.
+ *
+ * A subscription is a DATE RANGE, not a flag: a row whose endsAt is in the past
+ * is simply not in force, and nothing has to run at expiry for that to become
+ * true. Every reader goes through @/lib/premium, so the definition of
+ * "subscribed" cannot fork.
+ *
+ * NOTHING IN THE APP WRITES THIS YET. Play Billing is the only lawful way to
+ * sell a digital subscription inside the Android app and there is no Play
+ * Console account to test it against, so rows are written by hand
+ * (scripts/set-premium.ps1). What a live row gates is ACQUIRING an item whose
+ * value bracket is PREMIUM_MIN_BRACKET (or VIP_MIN_BRACKET) or above -- see
+ * @/lib/brackets. It never hides a listing and never gates giving one away.
+ *
+ * Rows are never deleted. Cancelling or replacing a term sets its endsAt to
+ * now, so the table is also the account's subscription history.
+ */
+model Subscription {
+  id String @id @default(cuid())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  tier SubscriptionTier
+
+  startsAt DateTime @default(now())
+  // BETA (provisional, 30 Sep 2026): Premium is a one-time lifetime purchase
+  // for now, stored as the sentinel PREMIUM_LIFETIME_UNTIL (9999-12-31) in
+  // @/lib/premium -- a real future date, so isPremium() needs no special case.
+  endsAt   DateTime
+
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+/**
+ * One suspension of one account, written only by POST /api/admin/users/[id].
+ *
+ * IN FORCE means liftedAt is null AND (endsAt is null OR endsAt is in the
+ * future). endsAt NULL MEANS INDEFINITE, not "already over" -- suspensionState()
+ * and notSuspendedWhere() in @/lib/moderation are the only correct readings; do
+ * not test a column alone.
+ *
+ * Rows are never deleted or reused: an unsuspend stamps liftedAt, and the next
+ * suspension is a new row with the next `level`. That is what makes this table
+ * the account's PROGRESSION -- first offence, second, third -- which the two
+ * columns it replaced on User could not hold. AdminAction still records who
+ * imposed and who lifted each one.
+ */
+model Suspension {
+  id String @id @default(cuid())
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// 1 for the account's first suspension, 2 for its second, and so on. Set
+  /// once, at creation, to (suspensions this account already has) + 1.
+  level  Int
+  reason String @db.Text
+
+  startsAt DateTime  @default(now())
+  endsAt   DateTime?
+  liftedAt DateTime?
+
+  @@index([userId])
 }
 
 model Follow {
@@ -1219,6 +1255,15 @@ enum NotificationType {
    * from this one, never an edit of it).
    */
   LISTING_EXPIRED
+
+  /**
+   * The recipient's suspension is over -- lifted by staff, or run out. Written
+   * by notifySuspensionEnded() at their first sign-in afterwards, once per
+   * Suspension row. No actor: the user is not told which moderator. entityType
+   * "suspension", entityId the Suspension's id, which is also what stops a
+   * second notice for the same one. Informational; no screen opens from it.
+   */
+  SUSPENSION_LIFTED
 }
 
 enum FollowStatus {
@@ -2134,8 +2179,8 @@ enum AchievementCriterion {
   BRIDGE_COMPLETED
   // ── PREMIUM PERK #4 (24 Sep 2026) ─────────────────────────────
   //
-  // Boolean, same shape as VERIFIED_ACCOUNT: isPremium(User.premiumUntil) OR
-  // isVip(User.vipUntil) at the moment evaluateAchievements() runs. Once
+  // Boolean, same shape as VERIFIED_ACCOUNT: a live PREMIUM or VIP Subscription
+  // row (see @/lib/premium) at the moment evaluateAchievements() runs. Once
   // granted it behaves like every other achievement here -- PERMANENT, never
   // revoked -- so a lapsed subscription keeps the badge. That is not a special
   // case coded in; it falls straight out of the engine's existing rule that

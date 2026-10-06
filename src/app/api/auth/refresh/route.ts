@@ -7,7 +7,7 @@ import {
   toTokenUser,
 } from "@/lib/auth-tokens"
 import { clientIp, enforceRateLimit } from "@/lib/rate-limit-config"
-import { suspensionState } from "@/lib/moderation"
+import { suspensionState, activeSuspension } from "@/lib/moderation"
 
 /**
  * POST /api/auth/refresh — trades a refresh token for a fresh pair.
@@ -77,7 +77,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid refresh token" }, { status: 401 })
   }
 
-  const user = await prisma.user.findUnique({ where: { id: stored.userId } })
+  const user = await prisma.user.findUnique({ where: { id: stored.userId }, include: { suspensions: activeSuspension() } })
   if (!user || user.deletedAt || suspensionState(user).suspended) {
     await revokeTokenFamily(stored.familyId)
     return NextResponse.json({ error: "Invalid refresh token" }, { status: 401 })

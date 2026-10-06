@@ -1,6 +1,7 @@
 import Link from "next/link"
 import { notFound } from "next/navigation"
 import prisma from "@/lib/prisma"
+import { activeSuspension, suspensionState } from "@/lib/moderation"
 import {
   ID_TYPE_LABEL,
   MAX_ID_SUBMISSIONS,
@@ -93,7 +94,7 @@ export default async function IdVerificationDetailPage({ params }: Props) {
           createdAt: true,
           dateOfBirth: true,
           totalTrades: true,
-          suspendedAt: true,
+          suspensions: activeSuspension(),
           idVerifiedGrandfatheredAt: true,
           _count: { select: { items: true } },
         },
@@ -244,10 +245,10 @@ export default async function IdVerificationDetailPage({ params }: Props) {
             />
             <Field label="Listings" value={row.user._count.items} />
             <Field label="Completed trades" value={row.user.totalTrades} />
-            {row.user.suspendedAt && (
+            {suspensionState(row.user).since && (
               <Field
                 label="Suspended"
-                value={<span style={{ color: "#b91c1c" }}>yes — since {row.user.suspendedAt.toLocaleDateString()}</span>}
+                value={<span style={{ color: "#b91c1c" }}>yes — since {suspensionState(row.user).since!.toLocaleDateString()}</span>}
               />
             )}
             {row.user.idVerifiedGrandfatheredAt && (

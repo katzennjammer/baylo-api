@@ -21,7 +21,7 @@ export const dynamic = "force-dynamic"
  * personal history means popularity alone. This route only loads, trims to
  * `limit`, and dresses the winners as v1 items.
  *
- * Two reads of Item, like /featured: the scorer sees ids, categories and dates
+ * Two reads of Item: the scorer sees ids, categories and dates
  * for up to CANDIDATE_SCAN_CAP listings; the full rows are fetched for the
  * chosen few. `where` is re-applied on the second read so a listing that went
  * unavailable in between drops out rather than being served.

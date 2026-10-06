@@ -65,41 +65,117 @@ export async function GET(req: NextRequest) {
   const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000)
   const keyset = olderThan(cursor)
 
-  // The perishable sweep, before the feed is read. See the longer note in
-  // /api/v1/browse -- nothing here runs on a schedule, so the read paths that
-  // would serve an expired listing are the ones that run it.
-  await expirePerishableItems(prisma)
-
-  // ── 1 ── viewer, with their own available categories riding along.
-  const viewer = await prisma.user.findUnique({
-    where: { id: viewerId },
-    select: {
-      id: true, name: true, avatar: true, location: true,
-      leaves: true, lifetimeLeaves: true, rating: true,
-      totalTrades: true, isVerified: true,
-      items: { where: { status: "AVAILABLE" }, select: { category: true } },
-    },
-  })
+  // ── ROUND TRIPS, NOT QUERIES, ARE THE COST ──────────────────────────────────
+  //
+  // The database is a network hop away (Supabase, Singapore), so every awaited
+  // statement costs a full round trip no matter how cheap the SQL is. Run one
+  // after another, the calls below were ~15 round trips; nothing but the feed's
+  // follow-ups (3, 4, 4b) actually depends on an earlier answer. So the
+  // independent calls go out together in round A, the feed's follow-ups in
+  // round B, and the route costs four round trips counting auth instead of
+  // fifteen. The queries themselves are unchanged.
+  const actingPromise = resolveActing()
+  const [
+    viewer,
+    acting,
+    feedRows,
+    trendingRows,
+    candidates,
+    [unreadMessages, unreadMessageConversations, unreadNotifications],
+    followRequests,
+  ] = await Promise.all([
+    // ── 1 ── viewer, with their own available categories riding along.
+    prisma.user.findUnique({
+      where: { id: viewerId },
+      select: {
+        id: true, name: true, avatar: true, location: true,
+        leaves: true, lifetimeLeaves: true, rating: true,
+        totalTrades: true, isVerified: true,
+        items: { where: { status: "AVAILABLE" }, select: { category: true } },
+      },
+    }),
+    actingPromise,
+    // The perishable sweep stays strictly BEFORE the feed read -- chained, not
+    // parallel -- or the page could race the UPDATE and serve an expired
+    // listing. See the longer note in /api/v1/browse: nothing here runs on a
+    // schedule, so the read paths that would serve one are the ones that sweep.
+    expirePerishableItems(prisma).then(() => readFeed()),
+    readTrending(),
+    readCandidates(),
+    actingPromise.then(readInboxUnread),
+    // ── 9 ── pending follow requests: always the person's.
+    prisma.follow.count({
+      where: { followeeId: viewerId, status: "PENDING" },
+    }),
+  ])
   if (!viewer) return unauthenticated()
+
+  const { page, nextCursor } = paginate(feedRows, limit, (r) =>
+    encodeCursor(r.createdAt, r.id),
+  )
+
+  // ── ROUND B ── everything keyed on this page, in parallel.
+  const featuredOwnerIds = [...new Set(page.map((r) => r.user.id))]
+  const [access, tiers, featuredRows] = await Promise.all([
+    // ── 3 ── pickup access for exactly this page. One query, not one per item.
+    preciseAccessItemIds(viewerId, page.map((r) => r.id)),
+    // ── 4 ── trust tiers for this page's owners.
+    //
+    // The badge on every card reads from this and NOT from `owner.totalTrades`,
+    // which is a denormalised counter that has drifted above the real completed
+    // count -- the difference between a badge that describes someone and a badge
+    // that contradicts the gate they are about to hit. See loadTrustTiers() for
+    // why it is two aggregates and not two queries per owner.
+    //
+    // Deduplicated by that function, so a page where one person posted eight of
+    // the twenty listings costs exactly what a page of twenty strangers does.
+    loadTrustTiers(
+      prisma,
+      page.map((r) => ({ id: r.user.id, rating: r.user.rating })),
+    ),
+    // ── 4b ── each owner's featured achievement.
+    featuredOwnerIds.length > 0
+      ? prisma.$queryRaw<Array<{ userId: string; id: string; name: string; icon: string; imageUrl: string | null }>>`
+          SELECT ua."userId", a.id, a.name, a.icon, a."imageUrl"
+          FROM "UserProgress" ua
+          JOIN "Achievement" a ON a.id = ua."achievementId"
+          WHERE ua."type" = 'ACHIEVEMENT'
+            AND ua."userId" = ANY (${featuredOwnerIds})
+            AND (
+              ua."homeDisplayOrder" IS NOT NULL
+              OR ua."displayOrder" IS NOT NULL
+            )
+          ORDER BY COALESCE(ua."homeDisplayOrder", ua."displayOrder") ASC,
+                   ua."unlockedAt" DESC
+        `
+      : Promise.resolve([]),
+  ])
+
+  const featuredAchievements = new Map<string, { id: string; name: string; icon: string; imageUrl: string | null }>()
+  for (const row of featuredRows) {
+    if (!featuredAchievements.has(row.userId)) {
+      featuredAchievements.set(row.userId, { id: row.id, name: row.name, icon: row.icon, imageUrl: row.imageUrl })
+    }
+  }
 
   // ── 1b ── who the header's balance belongs to (25 Sep 2026).
   //
-  // Acting as a shop, the pill shows the SHOP's Leaves: that is the balance a
-  // boost of a shop listing is charged to (see /api/v1/items/[id]/boost), so it
-  // is the number the person is spending from. `viewer.leaves` stays the
+  // Acting as a shop, the pill shows the SHOP's Leaves: that is the balance the
+  // shop's own trades draw on, so it is the number the person is spending
+  // from. `viewer.leaves` stays the
   // PERSON's -- offers, trades and the rank ladder are always theirs.
   //
   // NEVER A 403. POST /api/items refuses a dead org header; the home feed must
   // not, or being removed from a shop would blank the app. A refused or absent
   // membership is `acting: null`, and the pill falls back to the person, which
   // is also who the server would charge.
-  const actingResult = await resolveActingIdentity(prisma, viewerId, req.headers.get(ORG_CONTEXT_HEADER))
-  const actingAs = actingResult.ok && actingResult.acting.organization ? actingResult.acting : null
-  const shopRow = actingAs
-    ? await prisma.user.findUnique({ where: { id: actingAs.actingUserId }, select: { leaves: true } })
-    : null
-  const acting =
-    actingAs?.organization && shopRow
+  async function resolveActing() {
+    const actingResult = await resolveActingIdentity(prisma, viewerId, req.headers.get(ORG_CONTEXT_HEADER))
+    const actingAs = actingResult.ok && actingResult.acting.organization ? actingResult.acting : null
+    const shopRow = actingAs
+      ? await prisma.user.findUnique({ where: { id: actingAs.actingUserId }, select: { leaves: true } })
+      : null
+    return actingAs?.organization && shopRow
       ? {
           organizationId: actingAs.organization.id,
           name: actingAs.organization.name,
@@ -109,10 +185,31 @@ export async function GET(req: NextRequest) {
           orgUserId: actingAs.actingUserId,
         }
       : null
+  }
+
+  // ── 7, 8 ── the inbox's unread counts, one call each.
+  //
   // Whose unread counts the header badges: the shop's while acting as it,
   // with the same fallback as the pill -- a refused context counts the person.
-  // Follow requests stay the person's; they are not part of the inbox.
-  const inboxId = acting ? acting.orgUserId : viewerId
+  // Follow requests (9) stay the person's; they are not part of the inbox.
+  // Chained on resolveActing(), so they still go out in round A.
+  function readInboxUnread(acting: Awaited<ReturnType<typeof resolveActing>>) {
+    const inboxId = acting ? acting.orgUserId : viewerId
+    return Promise.all([
+      prisma.message.count({
+        where: { receiverId: inboxId, read: false },
+      }),
+      prisma.message.findMany({
+        where: { receiverId: inboxId, read: false },
+        distinct: ["senderId"],
+        select: { senderId: true },
+      }),
+      // A shop's bell counts only the types it lists. See shopBellWhere().
+      prisma.notification.count({
+        where: { userId: inboxId, read: false, AND: acting ? [shopBellWhere()] : [] },
+      }),
+    ])
+  }
 
   // ── 2 ── the feed: everything available, newest first, keyset paginated.
   //
@@ -124,60 +221,17 @@ export async function GET(req: NextRequest) {
   // counted against `take`, and never on the wire. Filtering after the fetch
   // would silently shorten every page — 20 requested, 17 shown — and break the
   // keyset cursor's contract that a full page means there is more.
-  const feedRows = await prisma.item.findMany({
-    where: { status: "AVAILABLE", ...visibleItemWhere(viewerId), ...(keyset ?? {}) },
-    select: {
-      ...V1_ITEM_SELECT,
-      user: { select: V1_ITEM_OWNER_SELECT },
-      ...v1ItemStatsSelect(viewerId),
-    },
-    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-    take: limit + 1,
-  })
-  const { page, nextCursor } = paginate(feedRows, limit, (r) =>
-    encodeCursor(r.createdAt, r.id),
-  )
-
-  // ── 3 ── pickup access for exactly this page. One query, not one per item.
-  const access = await preciseAccessItemIds(viewerId, page.map((r) => r.id))
-
-  // ── 4 ── trust tiers for this page's owners.
-  //
-  // The badge on every card reads from this and NOT from `owner.totalTrades`,
-  // which is a denormalised counter that has drifted above the real completed
-  // count -- the difference between a badge that describes someone and a badge
-  // that contradicts the gate they are about to hit. See loadTrustTiers() for
-  // why it is two aggregates and not two queries per owner.
-  //
-  // Deduplicated by that function, so a page where one person posted eight of
-  // the twenty listings costs exactly what a page of twenty strangers does.
-  const tiers = await loadTrustTiers(
-    prisma,
-    page.map((r) => ({ id: r.user.id, rating: r.user.rating })),
-  )
-
-  const featuredOwnerIds = [...new Set(page.map((r) => r.user.id))]
-  const featuredAchievements = new Map<string, { id: string; name: string; icon: string; imageUrl: string | null }>()
-  if (featuredOwnerIds.length > 0) {
-    const rows = await prisma.$queryRaw<Array<{ userId: string; id: string; name: string; icon: string; imageUrl: string | null }>>`
-      SELECT ua."userId", a.id, a.name, a.icon, a."imageUrl"
-      FROM "UserProgress" ua
-      JOIN "Achievement" a ON a.id = ua."achievementId"
-      WHERE ua."type" = 'ACHIEVEMENT'
-        AND ua."userId" = ANY (${featuredOwnerIds})
-        AND (
-          ua."homeDisplayOrder" IS NOT NULL
-          OR ua."displayOrder" IS NOT NULL
-        )
-      ORDER BY COALESCE(ua."homeDisplayOrder", ua."displayOrder") ASC,
-               ua."unlockedAt" DESC
-    `
-
-    for (const row of rows) {
-      if (!featuredAchievements.has(row.userId)) {
-        featuredAchievements.set(row.userId, { id: row.id, name: row.name, icon: row.icon, imageUrl: row.imageUrl })
-      }
-    }
+  function readFeed() {
+    return prisma.item.findMany({
+      where: { status: "AVAILABLE", ...visibleItemWhere(viewerId), ...(keyset ?? {}) },
+      select: {
+        ...V1_ITEM_SELECT,
+        user: { select: V1_ITEM_OWNER_SELECT },
+        ...v1ItemStatsSelect(viewerId),
+      },
+      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      take: limit + 1,
+    })
   }
 
   // ── 5 ── trending: the 7-day category groupBy that four web pages inline.
@@ -185,17 +239,19 @@ export async function GET(req: NextRequest) {
   // trending chip is a count of things you can then go and look at; counting
   // listings the next screen refuses to show you makes the chip a lie and,
   // worse, leaks the existence of a blocked user's activity as a number.
-  const trendingRows = await prisma.item.groupBy({
-    by: ["category"],
-    where: {
-      createdAt: { gte: weekAgo },
-      status: { not: "REMOVED" },
-      ...visibleItemWhere(viewerId),
-    },
-    _count: { id: true },
-    orderBy: { _count: { id: "desc" } },
-    take: 5,
-  })
+  function readTrending() {
+    return prisma.item.groupBy({
+      by: ["category"],
+      where: {
+        createdAt: { gte: weekAgo },
+        status: { not: "REMOVED" },
+        ...visibleItemWhere(viewerId),
+      },
+      _count: { id: true },
+      orderBy: { _count: { id: "desc" } },
+      take: 5,
+    })
+  }
 
   // ── 6 ── match candidates.
   // Suggesting someone you blocked, or who blocked you, as a trading partner is
@@ -206,43 +262,28 @@ export async function GET(req: NextRequest) {
   // synthetic account, the trade count beside it belongs to a business rather
   // than to somebody building a reputation, and organisations are excluded
   // from the trust ladder everywhere else for exactly that reason.
-  const candidates = await prisma.user.findMany({
-    where: {
-      id: { not: viewerId },
-      deletedAt: null,
-      items: { some: { status: "AVAILABLE", moderationHiddenAt: null } },
-      ...userNotBlocked(viewerId),
-      ...notSuspendedWhere(),
-      ...notAnOrgWhere(),
-    },
-    select: {
-      id: true, name: true, avatar: true, totalTrades: true,
-      items: {
-        where: { status: "AVAILABLE", moderationHiddenAt: null },
-        select: { category: true },
-        take: 5,
+  function readCandidates() {
+    return prisma.user.findMany({
+      where: {
+        id: { not: viewerId },
+        deletedAt: null,
+        items: { some: { status: "AVAILABLE", moderationHiddenAt: null } },
+        ...userNotBlocked(viewerId),
+        ...notSuspendedWhere(),
+        ...notAnOrgWhere(),
       },
-    },
-    orderBy: { updatedAt: "desc" },
-    take: 5,
-  })
-
-  // ── 7, 8, 9 ── the unread counts, one call each.
-  const unreadMessages = await prisma.message.count({
-    where: { receiverId: inboxId, read: false },
-  })
-  const unreadMessageConversations = await prisma.message.findMany({
-    where: { receiverId: inboxId, read: false },
-    distinct: ["senderId"],
-    select: { senderId: true },
-  })
-  // A shop's bell counts only the types it lists. See shopBellWhere().
-  const unreadNotifications = await prisma.notification.count({
-    where: { userId: inboxId, read: false, AND: acting ? [shopBellWhere()] : [] },
-  })
-  const followRequests = await prisma.follow.count({
-    where: { followeeId: viewerId, status: "PENDING" },
-  })
+      select: {
+        id: true, name: true, avatar: true, totalTrades: true,
+        items: {
+          where: { status: "AVAILABLE", moderationHiddenAt: null },
+          select: { category: true },
+          take: 5,
+        },
+      },
+      orderBy: { updatedAt: "desc" },
+      take: 5,
+    })
+  }
 
   // sharedCategories()/matchReason() rather than the overlap this route used to
   // compute inline. The identical calculation lived here and in GET

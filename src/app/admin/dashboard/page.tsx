@@ -1,6 +1,7 @@
 import Link from "next/link"
 import { IdCard, Gavel, Scale, type LucideIcon } from "lucide-react"
 import prisma from "@/lib/prisma"
+import { suspendedWhere } from "@/lib/moderation"
 import { CountUp } from "@/components/admin/CountUp"
 import { OverviewCards, type OverviewMetric } from "./OverviewCards"
 import { REPORT } from "@/lib/report-case"
@@ -48,8 +49,7 @@ export default async function AdminDashboardPage() {
       prisma.user.count({
         where: {
           deletedAt: null,
-          suspendedAt: { not: null },
-          OR: [{ suspendedUntil: null }, { suspendedUntil: { gt: new Date() } }],
+          ...suspendedWhere(),
         },
       }),
       prisma.item.count({ where: { moderationHiddenAt: { not: null } } }),

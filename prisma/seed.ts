@@ -503,8 +503,6 @@ async function seedUsers(passwordHash: string) {
       // id_verification migration stamped on every account that existed then.
       idVerifiedGrandfatheredAt: T0,
       deletedAt: null,
-      suspendedAt: null,
-      suspendedUntil: null,
     }
     await prisma.user.upsert({
       where: { id: u.id },

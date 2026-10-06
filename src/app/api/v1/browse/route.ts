@@ -234,69 +234,84 @@ export async function GET(req: NextRequest) {
     ...V1_ITEM_SAFEZONE_SELECT,
   }
 
-  let page: unknown[]
-  let nextCursor: string | null
+  // ── ROUNDS ── the sweep above, then the page, the item facets, the org cards
+  // and the business facets together (none reads another's answer), then the
+  // pickup access that needs the page. Each await is a round trip to a remote
+  // database; run one after another these were five, now they are two.
+  const [{ page, nextCursor }, facetRows, orgRows, businessFacetRows] = await Promise.all([
+    readPage(),
+    readFacets(),
+    readOrgRows(),
+    readBusinessFacets(),
+  ])
 
-  if (sort === "nearest") {
-    // ── 1 (nearest) ──
-    // Keyset pagination on a computed distance cannot be expressed in Prisma,
-    // so the candidate set is bounded instead: the bounding box plus a hard cap,
-    // sorted and cursored in memory. The cursor is still a real keyset —
-    // (distance, id) — so ties never drop or duplicate a row.
-    const rows = await prisma.item.findMany({
-      where: { ...baseWhere, pickupLat: { not: null }, pickupLng: { not: null } },
-      select: selection,
-      take: NEAREST_SCAN_CAP,
-      orderBy: [{ createdAt: "desc" }, { id: "desc" }],
-    })
+  const rowsOut = page as V1ItemRow[]
 
-    const withDistance = rows
-      .map((r) => ({
-        row: r,
-        d: haversineKm(lat!, lng!, r.pickupLat as number, r.pickupLng as number),
-      }))
-      .filter((x) => radiusKm === undefined || x.d <= radiusKm)
-      .sort((a, b) => (a.d === b.d ? (a.row.id < b.row.id ? 1 : -1) : a.d - b.d))
+  // ── 2 ── pickup access for this page only.
+  const access = await preciseAccessItemIds(viewerId, rowsOut.map((r) => r.id))
 
-    const afterDistance = cursor && typeof cursor.k === "number" ? cursor.k : null
-    const after =
-      afterDistance !== null && cursor
-        ? withDistance.filter(
-            (x) => x.d > afterDistance || (x.d === afterDistance && x.row.id < cursor.id),
-          )
-        : withDistance
+  async function readPage(): Promise<{ page: unknown[]; nextCursor: string | null }> {
+    if (sort === "nearest") {
+      // ── 1 (nearest) ──
+      // Keyset pagination on a computed distance cannot be expressed in Prisma,
+      // so the candidate set is bounded instead: the bounding box plus a hard cap,
+      // sorted and cursored in memory. The cursor is still a real keyset —
+      // (distance, id) — so ties never drop or duplicate a row.
+      const rows = await prisma.item.findMany({
+        where: { ...baseWhere, pickupLat: { not: null }, pickupLng: { not: null } },
+        select: selection,
+        take: NEAREST_SCAN_CAP,
+        orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+      })
 
-    const sliced = paginate(after, limit, (x) => encodeCursor(x.d, x.row.id))
-    page = sliced.page.map((x) => x.row)
-    nextCursor = sliced.nextCursor
-  } else if (sort === "expiring") {
-    // ── 1 (expiring) ── soonest trade window first; perishable=true only (the
-    // schema refuses it otherwise). The window is createdAt + tradeWithinHours,
-    // which Prisma cannot ORDER BY without raw SQL, so this is nearest's
-    // arrangement: a bounded scan, sorted and cursored in memory on a real
-    // (expiresAt, id) keyset. The sweep above has already moved lapsed rows out
-    // of AVAILABLE, so nothing past its window is in the scan.
-    const rows = await prisma.item.findMany({
-      where: { ...baseWhere, tradeWithinHours: { not: null } },
-      select: selection,
-      take: EXPIRING_SCAN_CAP,
-      orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-    })
+      const withDistance = rows
+        .map((r) => ({
+          row: r,
+          d: haversineKm(lat!, lng!, r.pickupLat as number, r.pickupLng as number),
+        }))
+        .filter((x) => radiusKm === undefined || x.d <= radiusKm)
+        .sort((a, b) => (a.d === b.d ? (a.row.id < b.row.id ? 1 : -1) : a.d - b.d))
 
-    const withExpiry = rows
-      .map((r) => ({ row: r, t: r.createdAt.getTime() + (r.tradeWithinHours as number) * HOUR_MS }))
-      .sort((a, b) => (a.t === b.t ? (a.row.id < b.row.id ? -1 : 1) : a.t - b.t))
+      const afterDistance = cursor && typeof cursor.k === "number" ? cursor.k : null
+      const after =
+        afterDistance !== null && cursor
+          ? withDistance.filter(
+              (x) => x.d > afterDistance || (x.d === afterDistance && x.row.id < cursor.id),
+            )
+          : withDistance
 
-    const afterT = cursor && typeof cursor.k === "number" ? cursor.k : null
-    const after =
-      afterT !== null && cursor
-        ? withExpiry.filter((x) => x.t > afterT || (x.t === afterT && x.row.id > cursor.id))
-        : withExpiry
+      const sliced = paginate(after, limit, (x) => encodeCursor(x.d, x.row.id))
+      return { page: sliced.page.map((x) => x.row), nextCursor: sliced.nextCursor }
+    }
 
-    const sliced = paginate(after, limit, (x) => encodeCursor(x.t, x.row.id))
-    page = sliced.page.map((x) => x.row)
-    nextCursor = sliced.nextCursor
-  } else {
+    if (sort === "expiring") {
+      // ── 1 (expiring) ── soonest trade window first; perishable=true only (the
+      // schema refuses it otherwise). The window is createdAt + tradeWithinHours,
+      // which Prisma cannot ORDER BY without raw SQL, so this is nearest's
+      // arrangement: a bounded scan, sorted and cursored in memory on a real
+      // (expiresAt, id) keyset. The sweep above has already moved lapsed rows out
+      // of AVAILABLE, so nothing past its window is in the scan.
+      const rows = await prisma.item.findMany({
+        where: { ...baseWhere, tradeWithinHours: { not: null } },
+        select: selection,
+        take: EXPIRING_SCAN_CAP,
+        orderBy: [{ createdAt: "asc" }, { id: "asc" }],
+      })
+
+      const withExpiry = rows
+        .map((r) => ({ row: r, t: r.createdAt.getTime() + (r.tradeWithinHours as number) * HOUR_MS }))
+        .sort((a, b) => (a.t === b.t ? (a.row.id < b.row.id ? -1 : 1) : a.t - b.t))
+
+      const afterT = cursor && typeof cursor.k === "number" ? cursor.k : null
+      const after =
+        afterT !== null && cursor
+          ? withExpiry.filter((x) => x.t > afterT || (x.t === afterT && x.row.id > cursor.id))
+          : withExpiry
+
+      const sliced = paginate(after, limit, (x) => encodeCursor(x.t, x.row.id))
+      return { page: sliced.page.map((x) => x.row), nextCursor: sliced.nextCursor }
+    }
+
     // ── 1 (recent) ── plain keyset on createdAt.
     const rows = await prisma.item.findMany({
       where: { ...baseWhere, ...(olderThan(cursor) ?? {}) },
@@ -305,14 +320,8 @@ export async function GET(req: NextRequest) {
       take: limit + 1,
     })
     const sliced = paginate(rows, limit, (r) => encodeCursor(r.createdAt, r.id))
-    page = sliced.page
-    nextCursor = sliced.nextCursor
+    return { page: sliced.page, nextCursor: sliced.nextCursor }
   }
-
-  const rowsOut = page as V1ItemRow[]
-
-  // ── 2 ── pickup access for this page only.
-  const access = await preciseAccessItemIds(viewerId, rowsOut.map((r) => r.id))
 
   // ── 3 ── facets for the filter chips.
   //
@@ -325,12 +334,14 @@ export async function GET(req: NextRequest) {
   // them; a blocked user's listings are not a filter the viewer is toggling,
   // they are content that does not exist for this viewer, and a chip counting
   // them sends the user to an empty result.
-  const facetRows = await prisma.item.groupBy({
-    by: ["category"],
-    where: { status: "AVAILABLE", ...visibleItemWhere(viewerId) },
-    _count: { id: true },
-    orderBy: { _count: { id: "desc" } },
-  })
+  function readFacets() {
+    return prisma.item.groupBy({
+      by: ["category"],
+      where: { status: "AVAILABLE", ...visibleItemWhere(viewerId) },
+      _count: { id: true },
+      orderBy: { _count: { id: "desc" } },
+    })
+  }
 
   // ── 4 ── organisations whose NAME matches the search.
   //
@@ -347,9 +358,9 @@ export async function GET(req: NextRequest) {
   // REJECTED organisations are left out. Their document review failed, and a
   // prominent card is not where a business that could not be verified belongs;
   // PENDING ones stay in, unbadged, for the reason the pill keeps them.
-  const orgRows =
-    q && !cursor
-      ? await prisma.organization.findMany({
+  async function readOrgRows() {
+    return q && !cursor
+      ? prisma.organization.findMany({
           where: {
             name: { contains: q, mode: "insensitive" },
             verificationStatus: { not: "REJECTED" },
@@ -381,6 +392,7 @@ export async function GET(req: NextRequest) {
           take: 20,
         })
       : []
+  }
   const needle = q?.toLowerCase() ?? ""
   const matchRank = (name: string) => {
     const n = name.toLowerCase()
@@ -414,22 +426,24 @@ export async function GET(req: NextRequest) {
   // owner's organisation's column, and the chip only needs "is there anything".
   // Unfiltered by the other controls, like the item facets and for the same
   // reason: chips that vanish as you pick them are a worse control.
-  const businessFacetRows = orgsOnly
-    ? await prisma.organization.groupBy({
-        by: ["businessCategory"],
-        where: {
-          orgUser: {
-            is: {
-              ...userNotBlocked(viewerId),
-              ...notSuspendedWhere(),
-              items: { some: { status: "AVAILABLE", moderationHiddenAt: null } },
+  async function readBusinessFacets() {
+    return orgsOnly
+      ? prisma.organization.groupBy({
+          by: ["businessCategory"],
+          where: {
+            orgUser: {
+              is: {
+                ...userNotBlocked(viewerId),
+                ...notSuspendedWhere(),
+                items: { some: { status: "AVAILABLE", moderationHiddenAt: null } },
+              },
             },
           },
-        },
-        _count: { id: true },
-        orderBy: { _count: { id: "desc" } },
-      })
-    : []
+          _count: { id: true },
+          orderBy: { _count: { id: "desc" } },
+        })
+      : []
+  }
 
   return ok(
     {

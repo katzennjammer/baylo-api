@@ -1,6 +1,6 @@
 import prisma from "@/lib/prisma"
 import { NEW_PARTNER_WINDOW_DAYS } from "@/lib/task-constants"
-import { suspensionState } from "@/lib/moderation"
+import { suspensionState, activeSuspension } from "@/lib/moderation"
 import { bracketOf } from "@/lib/brackets"
 import { valueCap } from "@/lib/trade-rules"
 import { AdminListingImage } from "@/components/AdminListingImage"
@@ -66,7 +66,7 @@ export default async function ReviewQueuePage() {
       select: {
         id: true, title: true, category: true, condition: true, images: ITEM_IMAGES,
         valueLeaves: true, suggestedLeaves: true, valuationSource: true, updatedAt: true,
-        user: { select: { id: true, name: true, email: true, suspendedAt: true, suspendedUntil: true } },
+        user: { select: { id: true, name: true, email: true, suspensions: activeSuspension() } },
       },
       orderBy: [{ updatedAt: "asc" }, { id: "asc" }],
       take: 100,

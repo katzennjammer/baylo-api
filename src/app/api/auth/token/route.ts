@@ -3,7 +3,7 @@ import bcrypt from "bcryptjs"
 import prisma from "@/lib/prisma"
 import { issueTokenPair, toTokenUser } from "@/lib/auth-tokens"
 import { clientIp, enforceRateLimit } from "@/lib/rate-limit-config"
-import { suspensionState } from "@/lib/moderation"
+import { suspensionState, activeSuspension, suspendedBody, notifySuspensionEnded } from "@/lib/moderation"
 
 /**
  * POST /api/auth/token — email + password, in exchange for a token pair.
@@ -40,7 +40,7 @@ export async function POST(req: NextRequest) {
   const limited = enforceRateLimit("login", `${clientIp(req)}:${email}`)
   if (limited) return limited
 
-  const user = await prisma.user.findUnique({ where: { email } })
+  const user = await prisma.user.findUnique({ where: { email }, include: { suspensions: activeSuspension() } })
 
   // One message and one status for "no such user", "Google-only account with no
   // password", "an organisation's backing row" and "wrong password" alike.
@@ -81,17 +81,10 @@ export async function POST(req: NextRequest) {
   }
   const suspension = suspensionState(user)
   if (suspension.suspended) {
-    return NextResponse.json(
-      {
-        error: suspension.indefinite
-          ? "This account has been suspended. Contact support if you think that is a mistake."
-          : `This account is suspended until ${suspension.until!.toLocaleDateString()}.`,
-        code: "ACCOUNT_SUSPENDED",
-        until: suspension.until,
-      },
-      { status: 403 },
-    )
+    return NextResponse.json(suspendedBody(suspension), { status: 403 })
   }
+  // Back after a suspension: say so, once. See notifySuspensionEnded().
+  await notifySuspensionEnded(prisma, user.id)
 
   const pair = await issueTokenPair(user.id)
   return NextResponse.json({ ...pair, user: toTokenUser(user) })

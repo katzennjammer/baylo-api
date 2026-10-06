@@ -10,18 +10,16 @@
     "v2:prisma": "node scripts/v2.mjs prisma",
     "build": "next build",
     "start": "next start",
+    "start:lan": "next start -H 0.0.0.0",
     "lint": "eslint",
     "seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.104.2",
-    "@prisma/adapter-mariadb": "^7.8.0",
     "@prisma/adapter-pg": "^7.8.0",
     "@prisma/client": "^7.8.0",
-    "@tanstack/react-query": "^5.101.0",
     "@types/leaflet": "^1.9.21",
     "@types/nodemailer": "^8.0.0",
-    "axios": "^1.17.0",
     "bcryptjs": "^3.0.3",
     "cloudinary": "^2.10.0",
     "framer-motion": "^13.4.0",
@@ -39,9 +37,8 @@
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "react-hot-toast": "^2.6.0",
-    "sharp": "^0.35.1",
-    "zod": "^4.4.3",
-    "zustand": "^5.0.14"
+    "sharp": "^0.34.5",
+    "zod": "^4.4.3"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",

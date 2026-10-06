@@ -39,8 +39,12 @@ import { assertV2Schema, databaseSchema } from "@/lib/db-schema"
 // than the native client's request timeout, so the failure is now a real
 // error in the server log rather than a silent stall.
 //
-// The pool is small on purpose: five is plenty for one dev server plus one
-// script, and stays under the tenant's backend count even on the session URL.
+// The pool is small on purpose on the session URL: five stays under the
+// tenant's backend count. On the transaction pooler a client holds a backend
+// only for the length of one statement, so the limit there is ten -- the hot
+// routes (/api/v1/home, /api/v1/browse) send their independent queries in
+// parallel, and with five the second half of each batch queued behind the
+// first, costing a whole extra round trip to the database.
 //
 // ── `?schema=` IS HONOURED HERE, NOT BY THE DRIVER ──────────────────────────
 //
@@ -70,7 +74,9 @@ function createPrismaClient() {
   const adapter = new PrismaPg(
     {
       connectionString,
-      max: 5,
+      // Ten on the transaction pooler: /home and /browse send their independent
+      // queries in parallel, and five made the second half of each batch queue.
+      max: schema === "public" && process.env.DATABASE_POOL_URL ? 10 : 5,
       connectionTimeoutMillis: 10_000,
       // ── RAW SQL STAYS ON THE COPY (schema v2) ──────────────────────────────
       // The adapter's `schema` option qualifies MODEL queries only. A

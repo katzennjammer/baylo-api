@@ -22,7 +22,13 @@ const CSP = [
   "font-src 'self' data:",
   "connect-src 'self' https://res.cloudinary.com https://*.pusher.com wss://*.pusher.com https://nominatim.openstreetmap.org",
   "worker-src 'self' blob:",
-  "upgrade-insecure-requests",
+  // PRODUCTION ONLY (3 Oct 2026). The dev server speaks plain http, and a
+  // phone opening a page at http://<this machine's LAN address>:3000 obeys
+  // this directive by asking for the stylesheet and every image over https,
+  // which nothing answers: the page arrives unstyled with broken images.
+  // Browsers exempt localhost, so it only ever showed on a phone -- which is
+  // where the app's Settings rows open /policy/*.
+  ...(process.env.NODE_ENV === "production" ? ["upgrade-insecure-requests"] : []),
 ].join("; ");
 
 const SECURITY_HEADERS = [

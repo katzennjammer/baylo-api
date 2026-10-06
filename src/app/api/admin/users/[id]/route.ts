@@ -4,14 +4,14 @@ import { requireRole } from "@/lib/api-auth"
 import prisma from "@/lib/prisma"
 import { ok, notFound, conflict, forbidden, invalid } from "@/lib/v1/envelope"
 import { parseJsonBody } from "@/lib/v1/body"
-import { writeAudit, suspensionState } from "@/lib/moderation"
+import { writeAudit, suspensionState, activeSuspension, activeSuspensionWhere } from "@/lib/moderation"
 
 export const dynamic = "force-dynamic"
 
 /**
  * POST /api/admin/users/[id] — suspend or unsuspend an account.
  *
- * WHAT A SUSPENSION DOES: sets User.suspendedAt (and optionally suspendedUntil).
+ * WHAT A SUSPENSION DOES: writes a Suspension row (endsAt optional = indefinite).
  * resolveSession() refuses a suspended account, so every authenticated route in
  * the application stops working for them within the life of one request — not
  * within the 15-minute life of their access token, and not within the 30-day
@@ -80,7 +80,7 @@ export async function POST(
     where: { id },
     select: {
       id: true, name: true, email: true, role: true,
-      deletedAt: true, suspendedAt: true, suspendedUntil: true,
+      deletedAt: true, suspensions: activeSuspension(),
     },
   })
   if (!user) return notFound("Account not found")
@@ -110,16 +110,22 @@ export async function POST(
   const now = new Date()
   const until = days === undefined ? null : new Date(now.getTime() + days * 24 * 60 * 60 * 1000)
 
-  await prisma.$transaction(async (tx) => {
-    await tx.user.update({
-      where: { id },
-      data:
-        action === "suspend"
-          ? { suspendedAt: now, suspendedUntil: until }
-          : // BOTH cleared. suspendedAt alone would leave suspensionState()
-            // reading a stale suspendedUntil on the next suspension.
-            { suspendedAt: null, suspendedUntil: null },
-    })
+  const level = await prisma.$transaction(async (tx) => {
+    // The progression: this account's 1st, 2nd, 3rd... suspension. Counted
+    // from the rows already there, lifted and lapsed ones included.
+    const level = (await tx.suspension.count({ where: { userId: id } })) + 1
+    if (action === "suspend") {
+      await tx.suspension.create({
+        data: { userId: id, level, reason, startsAt: now, endsAt: until },
+      })
+    } else {
+      // Stamped, never deleted: the row stays as history and still counts
+      // towards the next suspension's level.
+      await tx.suspension.updateMany({
+        where: { userId: id, ...activeSuspensionWhere(now) },
+        data: { liftedAt: now },
+      })
+    }
     await writeAudit(tx, {
       actorId: actor.id,
       action: action === "suspend" ? "USER_SUSPENDED" : "USER_UNSUSPENDED",
@@ -130,18 +136,18 @@ export async function POST(
       detail: {
         email: user.email,
         name: user.name,
-        // The prior state, so an appeal can see whether this was a first
-        // suspension or the fourth. The User row itself keeps no history —
-        // this column IS the history.
+        // The state this action replaced. The full history, and whether this
+        // was a first suspension or the fourth, is the Suspension table.
         previous: {
-          suspendedAt: user.suspendedAt,
-          suspendedUntil: user.suspendedUntil,
+          suspendedAt: current.since,
+          suspendedUntil: current.until,
         },
         ...(action === "suspend"
-          ? { days: days ?? null, indefinite: days === undefined, until }
+          ? { days: days ?? null, indefinite: days === undefined, until, level }
           : {}),
       },
     })
+    return level
   })
 
   return ok({
@@ -150,6 +156,8 @@ export async function POST(
       suspendedAt: action === "suspend" ? now : null,
       suspendedUntil: action === "suspend" ? until : null,
       indefinite: action === "suspend" && days === undefined,
+      // Which suspension this is for the account: 1 = first, 2 = second, ...
+      level: action === "suspend" ? level : null,
     },
     audited: true,
     // Said out loud in the response, because it is the thing a moderator is

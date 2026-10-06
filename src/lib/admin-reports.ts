@@ -1,5 +1,5 @@
 import prisma from "@/lib/prisma"
-import { CATEGORY_LABEL, toWireCategory } from "@/lib/moderation"
+import { CATEGORY_LABEL, suspendedWhere, toWireCategory } from "@/lib/moderation"
 import { SAFE_ZONE_TYPE_LABELS, type SafeZoneTypeValue } from "@/lib/safe-zones"
 import { REPORT } from "@/lib/report-case"
 
@@ -349,12 +349,9 @@ export async function loadReportSummary(requestedDays: number): Promise<ReportSu
   const plannedMeetups = { meetupHubId: { not: null } }
   const claimedMeetups = { safeZoneHubId: { not: null } }
 
-  // "Suspended right now". suspendedUntil === null means INDEFINITE, not
-  // "not suspended" -- see suspensionState() in @/lib/moderation. Both columns
-  // must therefore be tested together, or a lapsed suspension still counts.
-  const stillSuspended = { suspendedUntil: null }
-  const runningUntil = { suspendedUntil: { gt: to } }
-  const suspension = { deletedAt: null, suspendedAt: { not: null }, OR: [stillSuspended, runningUntil] }
+  // "Suspended at the end of the window" -- see activeSuspensionWhere() in
+  // @/lib/moderation for why a row existing is not enough.
+  const suspension = { deletedAt: null, ...suspendedWhere(to) }
 
   // ── Everything independent, in one round trip ───────────────────────
   // None of these reads depends on another, so they run together instead of as

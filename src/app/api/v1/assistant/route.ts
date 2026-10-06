@@ -1,7 +1,7 @@
 import { NextRequest } from "next/server"
 import { resolveSession } from "@/lib/api-auth"
 import prisma from "@/lib/prisma"
-import { isPremium, isVip } from "@/lib/premium"
+import { isPremium, isVip, premiumUntil, vipUntil, SUBSCRIPTION_SELECT } from "@/lib/premium"
 import { enforceRateLimit } from "@/lib/rate-limit-config"
 import { MAX_USER_TURNS, assistantBodySchema, runAssistantTurn } from "@/lib/assistant/turn"
 import { parseJsonBody } from "@/lib/v1/body"
@@ -59,9 +59,9 @@ export async function POST(req: NextRequest) {
 
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: { premiumUntil: true, vipUntil: true },
+    select: { subscriptions: SUBSCRIPTION_SELECT },
   })
-  if (!(isPremium(user?.premiumUntil) || isVip(user?.vipUntil))) {
+  if (!(isPremium(premiumUntil(user?.subscriptions)) || isVip(vipUntil(user?.subscriptions)))) {
     return forbidden("The search assistant is part of Premium.", { rule: "PREMIUM_REQUIRED" })
   }
 

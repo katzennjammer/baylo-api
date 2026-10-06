@@ -14,7 +14,7 @@
 #   ./scripts/set-premium.ps1                                        # list current subscribers
 #   ./scripts/set-premium.ps1 jmjumuad2@gmail.com -Live              # confirm writing to LIVE
 #
-# This is the ONLY writer of premiumUntil/vipUntil. When a real subscription
+# This is the ONLY writer of the Subscription table. When a real subscription
 # lands, the Play Billing verifier replaces it and nothing else has to change:
 # every reader goes through isPremium()/isVip() in src/lib/premium.ts.
 #

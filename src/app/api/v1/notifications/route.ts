@@ -116,12 +116,11 @@ export async function GET(req: NextRequest) {
     for (const item of items) itemImages.set(item.id, firstImage(item.images))
   }
 
-  // ── The organisation a row is ABOUT, for the two org tokens ──────────────────
+  // ── The organisation a row is ABOUT ───────────────────────────────────────────
   //
-  // An ORG_INVITE's actor is the owner who sent it -- a person, often with no
-  // photo -- and an organisation-review row has no actor at all. Both rendered
-  // as a blank grey tile while every other kind of notification had a face or
-  // a photo. The subject of both is a shop, so the shop's logo is the picture.
+  // An organisation-review row has no actor at all, so it rendered as a blank
+  // grey tile while every other kind of notification had a face or a photo. Its
+  // subject is a shop, so the shop's logo is the picture.
   //
   // 'organization' carries an Organization id. ('org_invite' notifications
   // went with organisation staff in schema v2; the migration deleted them.)

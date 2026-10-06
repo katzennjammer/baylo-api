@@ -7,6 +7,7 @@ import { parseQuery } from "@/lib/v1/query"
 import {
   CATEGORY_LABEL,
   suspensionState,
+  activeSuspension,
   toWireCategory,
   toWireTarget,
   type ReportTargetWire,
@@ -68,7 +69,7 @@ async function loadContent(targetType: ReportTargetWire, targetId: string) {
       select: {
         id: true, name: true, email: true, avatar: true, bio: true,
         location: true, createdAt: true, rating: true, totalTrades: true,
-        isVerified: true, deletedAt: true, suspendedAt: true, suspendedUntil: true,
+        isVerified: true, deletedAt: true, suspensions: activeSuspension(),
         _count: { select: { items: true, casesFiled: { where: REPORT } } },
       },
     })

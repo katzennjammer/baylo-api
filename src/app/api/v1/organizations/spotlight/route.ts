@@ -29,7 +29,7 @@ export const dynamic = "force-dynamic"
  * empty storefront is a dead end. The backing account is not deleted, not
  * suspended, and not blocked either way, the same rules every item read uses.
  *
- * ── WHICH ONES: /featured's ROTATION ────────────────────────────────────────
+ * ── WHICH ONES: THE HOURLY ROTATION ─────────────────────────────────────────
  *
  * hourlyRotation() from @/lib/rotation, seeded with SPOTLIGHT_SEED in place
  * of a category: every eligible shop shuffled by sha256(hour, seed, id), the
@@ -38,7 +38,7 @@ export const dynamic = "force-dynamic"
  * dozen shops, all new, there is no signal that would rank them fairly yet.
  * That ranking is the deferred "Verified shops" section, NOT this one.
  *
- * Two reads, like /featured: eligible ids, then the chosen rows. The second
+ * Two reads: eligible ids, then the chosen rows. The second
  * re-applies the eligibility filter, so a shop that lost its last listing
  * between the two drops out rather than being served.
  *
@@ -54,8 +54,8 @@ export const dynamic = "force-dynamic"
 const SPOTLIGHT_CAP = 6
 
 /**
- * The rotation's seed. Not a Category value, and not /featured's all-category
- * seed, so a shop id and an item id can never share a draw by accident.
+ * The rotation's seed. Named for this section, so nothing else that ever uses
+ * the rotation can share a draw with it by accident.
  */
 const SPOTLIGHT_SEED = "shop-spotlight"
 

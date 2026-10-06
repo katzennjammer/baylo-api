@@ -1,4 +1,4 @@
-// Sets or clears User.premiumUntil or User.vipUntil by hand, so both sides of
+// Grants or ends a Premium or VIP Subscription row by hand, so both sides of
 // the premium/VIP gates can be demonstrated before Play Billing exists.
 //
 // Run from the baylo-api/ directory (or via scripts/set-premium.ps1, which
@@ -9,7 +9,7 @@
 //   npx tsx --env-file=.env scripts/set-tier.ts jmjumuad2@gmail.com --clear            # back to not subscribed
 //   npx tsx --env-file=.env scripts/set-tier.ts                                        # list current subscribers
 //
-// This is the ONLY writer of either column. When a real subscription lands,
+// This is the ONLY writer of the Subscription table. When a real subscription lands,
 // the Play Billing verifier replaces it and nothing else has to change: every
 // reader goes through isPremium()/isVip() in src/lib/premium.ts.
 //
@@ -57,24 +57,20 @@ async function main() {
   requireScratchSchema("scripts/set-tier.ts")
 
   const { email, tier, days, clear } = parseArgs(process.argv.slice(2))
-  const column = tier === "premium" ? "premiumUntil" : "vipUntil"
+  const dbTier = tier === "premium" ? "PREMIUM" : "VIP"
 
   if (!email) {
-    console.log("Premium subscribers (premiumUntil in the future):")
-    for (const u of await prisma.user.findMany({
-      where: { premiumUntil: { gt: new Date() } },
-      select: { email: true, premiumUntil: true },
-      orderBy: { premiumUntil: "desc" },
-    })) {
-      console.log(`  ${u.email}  ${isLifetimePremium(u.premiumUntil) ? "lifetime (beta)" : u.premiumUntil?.toISOString()}`)
-    }
-    console.log("\nVIP subscribers (vipUntil in the future):")
-    for (const u of await prisma.user.findMany({
-      where: { vipUntil: { gt: new Date() } },
-      select: { email: true, vipUntil: true },
-      orderBy: { vipUntil: "desc" },
-    })) {
-      console.log(`  ${u.email}  ${u.vipUntil?.toISOString()}`)
+    const now = new Date()
+    for (const t of ["PREMIUM", "VIP"] as const) {
+      console.log(`${t} subscribers (a Subscription row ending in the future):`)
+      for (const row of await prisma.subscription.findMany({
+        where: { tier: t, endsAt: { gt: now } },
+        select: { endsAt: true, user: { select: { email: true } } },
+        orderBy: { endsAt: "desc" },
+      })) {
+        console.log(`  ${row.user.email}  ${isLifetimePremium(row.endsAt) ? "lifetime (beta)" : row.endsAt.toISOString()}`)
+      }
+      console.log()
     }
     return
   }
@@ -82,25 +78,29 @@ async function main() {
   // Premium with no --days is the beta lifetime grant; VIP with no --days is 30.
   const lifetime = !clear && tier === "premium" && days === null
   const grantDays = days ?? 30
-  const value = clear
-    ? null
-    : lifetime
-      ? PREMIUM_LIFETIME_UNTIL
-      : new Date(Date.now() + grantDays * 24 * 60 * 60 * 1000)
-  const updated = await prisma.user.update({
-    where: { email },
-    data: { [column]: value },
-    select: { email: true, premiumUntil: true, vipUntil: true },
+  const now = new Date()
+  const endsAt = lifetime ? PREMIUM_LIFETIME_UNTIL : new Date(now.getTime() + grantDays * 24 * 60 * 60 * 1000)
+
+  const user = await prisma.user.findUniqueOrThrow({ where: { email }, select: { id: true } })
+  await prisma.$transaction(async (tx) => {
+    // End whatever term of this tier is running, so the new grant REPLACES it
+    // (a 7-day demo grant must be able to shorten a lifetime one). Ended, not
+    // deleted: the rows are the history.
+    await tx.subscription.updateMany({
+      where: { userId: user.id, tier: dbTier, endsAt: { gt: now } },
+      data: { endsAt: now },
+    })
+    if (!clear) await tx.subscription.create({ data: { userId: user.id, tier: dbTier, startsAt: now, endsAt } })
   })
 
   console.log(
     clear
-      ? `Cleared ${column} for ${email}`
+      ? `Ended the ${dbTier} subscription for ${email}`
       : lifetime
-        ? `Set ${column} = LIFETIME (beta sentinel ${PREMIUM_LIFETIME_UNTIL.toISOString()}) for ${email}`
-        : `Set ${column} = now + ${grantDays} days for ${email}`,
+        ? `Granted ${dbTier} = LIFETIME (beta sentinel ${PREMIUM_LIFETIME_UNTIL.toISOString()}) to ${email}`
+        : `Granted ${dbTier} for ${grantDays} days to ${email}`,
   )
-  console.log(updated)
+  console.log(await prisma.subscription.findMany({ where: { userId: user.id }, orderBy: { createdAt: "asc" } }))
 }
 
 main()

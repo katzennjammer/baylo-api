@@ -3,7 +3,7 @@ import { redirect } from "next/navigation"
 import { Plus_Jakarta_Sans, JetBrains_Mono } from "next/font/google"
 import { auth } from "@root/auth"
 import prisma from "@/lib/prisma"
-import { suspensionState } from "@/lib/moderation"
+import { suspensionState, activeSuspension } from "@/lib/moderation"
 import AdminShell from "./AdminShell"
 import "./admin-theme.css"
 
@@ -50,10 +50,12 @@ export default async function AdminLayout({ children }: { children: ReactNode })
 
   const me = await prisma.user.findUnique({
     where: { id: session.user.id },
-    select: { role: true, name: true, deletedAt: true, suspendedAt: true, suspendedUntil: true },
+    select: { role: true, name: true, deletedAt: true, suspensions: activeSuspension() },
   })
 
-  if (!me || me.deletedAt || suspensionState(me).suspended) redirect("/auth/login")
+  // Not /auth/login: the cookie is still valid, so the proxy would bounce it
+  // straight back here. See the note on /api/auth/clear-session.
+  if (!me || me.deletedAt || suspensionState(me).suspended) redirect("/api/auth/clear-session")
   if (me.role !== "ADMIN") redirect("/dashboard")
 
   return (

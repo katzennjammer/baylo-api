@@ -88,7 +88,7 @@ export default function ModerationActions({ reportId, status, listing, subject, 
         value={reason}
         onChange={(e) => setReason(e.target.value)}
         maxLength={1000}
-        placeholder="Why? The reporter reads this too."
+        placeholder="Why? The reporter reads this too — and so does a user you suspend."
         style={{
           padding: "10px 12px", borderRadius: 10, fontSize: 13, minHeight: 80,
           border: "1.5px solid rgba(0,0,0,.15)", resize: "vertical",

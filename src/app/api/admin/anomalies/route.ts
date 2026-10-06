@@ -2,6 +2,7 @@ import { NextRequest } from "next/server"
 import { z } from "zod"
 import { requireRole } from "@/lib/api-auth"
 import prisma from "@/lib/prisma"
+import { activeSuspension } from "@/lib/moderation"
 import { bracketOf } from "@/lib/brackets"
 import { valueCap } from "@/lib/trade-rules"
 import { ok } from "@/lib/v1/envelope"
@@ -86,7 +87,7 @@ export async function GET(req: NextRequest) {
       valuationSource: true,
       createdAt: true,
       updatedAt: true,
-      user: { select: { id: true, name: true, email: true, suspendedAt: true } },
+      user: { select: { id: true, name: true, email: true, suspensions: activeSuspension() } },
     },
     orderBy: [{ updatedAt: "asc" }, { id: "asc" }],
     take: limit,
@@ -128,7 +129,7 @@ export async function GET(req: NextRequest) {
   const people = ids.length
     ? await prisma.user.findMany({
         where: { id: { in: ids } },
-        select: { id: true, name: true, email: true, suspendedAt: true, createdAt: true },
+        select: { id: true, name: true, email: true, suspensions: activeSuspension(), createdAt: true },
       })
     : []
   const byId = new Map(people.map((p) => [p.id, p]))

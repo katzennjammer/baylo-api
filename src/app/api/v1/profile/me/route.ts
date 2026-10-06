@@ -86,6 +86,9 @@ export async function GET(req: NextRequest) {
       id: true, name: true, avatar: true, bio: true, location: true, email: true,
       rating: true, totalTrades: true, leaves: true, lifetimeLeaves: true,
       isVerified: true, createdAt: true,
+      // Read ONLY to answer "does this account have a password" below. The hash
+      // itself never leaves this function.
+      password: true,
       _count: {
         select: {
           reviewsReceived: true,
@@ -257,6 +260,12 @@ export async function GET(req: NextRequest) {
         lifetimeLeaves: user.lifetimeLeaves,
         rank: getLeafRank(user.lifetimeLeaves),
         isVerified: user.isVerified,
+        /**
+         * False for an account made with Google that never set a password. A
+         * boolean, never the hash: Settings uses it to say how this account
+         * signs in. Added 3 Oct 2026; older clients ignore it.
+         */
+        hasPassword: user.password !== null,
         createdAt: user.createdAt,
       },
       counts: {

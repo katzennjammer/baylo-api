@@ -82,7 +82,7 @@ export function visibleItemWhere(viewerId: string): Prisma.ItemWhereInput {
         // to reply -- and would let a suspension be waited out by an account
         // that kept collecting trade requests the whole time.
         //
-        // notSuspendedWhere() and not `suspendedAt: null`: see the note on that
+        // notSuspendedWhere() and not a hand-rolled filter: see the note on that
         // function for why the shorthand turns every timed suspension permanent.
         ...notSuspendedWhere(),
       },

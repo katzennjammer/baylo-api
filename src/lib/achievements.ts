@@ -1,7 +1,7 @@
 import type { Prisma, PrismaClient, AchievementCriterion } from "@/generated/prisma/client"
 import prisma from "@/lib/prisma"
 import { isIdVerified } from "@/lib/id-verification"
-import { isPremium, isVip } from "@/lib/premium"
+import { isPremium, isVip, premiumUntil, vipUntil, SUBSCRIPTION_SELECT } from "@/lib/premium"
 
 /**
  * The achievements engine.
@@ -108,7 +108,7 @@ async function readActivity(db: Db, userId: string): Promise<Activity | null> {
         where: { id: userId },
         select: {
           isVerified: true, avatar: true, bio: true, location: true, lifetimeLeaves: true,
-          premiumUntil: true, vipUntil: true,
+          subscriptions: SUBSCRIPTION_SELECT,
         },
       }),
       db.item.count({ where: { userId } }),
@@ -145,7 +145,7 @@ async function readActivity(db: Db, userId: string): Promise<Activity | null> {
     safeZoneMeetups,
     reportsFiled,
     bridgesCompleted,
-    premiumSubscriber: isPremium(user.premiumUntil) || isVip(user.vipUntil),
+    premiumSubscriber: isPremium(premiumUntil(user.subscriptions)) || isVip(vipUntil(user.subscriptions)),
   }
 }
 

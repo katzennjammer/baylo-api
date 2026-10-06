@@ -3,6 +3,8 @@ import { createRemoteJWKSet, jwtVerify } from "jose"
 import prisma from "@/lib/prisma"
 import { issueTokenPair, toTokenUser } from "@/lib/auth-tokens"
 import { markVerified } from "@/lib/verification"
+import { suspensionState, activeSuspension, suspendedBody, notifySuspensionEnded } from "@/lib/moderation"
+import { googleAudiencePolicy, isConfigured, isTrustedGoogleAudience } from "@/lib/google-audience"
 
 /**
  * POST /api/auth/google/token — Google sign-in for the native client.
@@ -22,7 +24,9 @@ import { markVerified } from "@/lib/verification"
  *               endpoint is an unauthenticated "log me in as anyone" API.
  *   issuer    — must be Google. A validly-signed token from some other issuer
  *               proves nothing about a Google account.
- *   audience  — must be OUR client id. Google signs ID tokens for every app on
+ *   audience  — must be one of OUR client ids: listed exactly, or minted in a
+ *               project named in GOOGLE_TRUSTED_PROJECTS (see
+ *               @/lib/google-audience). Google signs ID tokens for every app on
  *               the platform with the same keys, so without this check a token
  *               issued to an unrelated app is accepted here verbatim.
  *   expiry    — enforced by jwtVerify.
@@ -35,21 +39,8 @@ import { markVerified } from "@/lib/verification"
 const GOOGLE_JWKS = createRemoteJWKSet(new URL("https://www.googleapis.com/oauth2/v3/certs"))
 const GOOGLE_ISSUERS = ["https://accounts.google.com", "accounts.google.com"]
 
-/**
- * Native apps use their own OAuth client ids — an iOS and an Android client are
- * separate from the web one, and each stamps its own id into `aud`. All of them
- * are legitimate audiences for this backend, so they are listed explicitly
- * rather than the audience check being loosened.
- */
-function acceptedAudiences(): string[] {
-  const ids = [
-    process.env.GOOGLE_CLIENT_ID,
-    ...(process.env.GOOGLE_NATIVE_CLIENT_IDS ?? "").split(","),
-  ]
-  return [...new Set(ids.map((id) => id?.trim()).filter((id): id is string => !!id))]
-}
-
 interface GoogleIdTokenClaims {
+  aud?: unknown
   email?: string
   email_verified?: boolean | string
   name?: string
@@ -67,8 +58,8 @@ export async function POST(req: NextRequest) {
   const idToken = typeof body.idToken === "string" ? body.idToken.trim() : ""
   if (!idToken) return NextResponse.json({ error: "idToken is required" }, { status: 400 })
 
-  const audience = acceptedAudiences()
-  if (audience.length === 0) {
+  const policy = googleAudiencePolicy()
+  if (!isConfigured(policy)) {
     // Refuse rather than fall back to an unchecked audience: a missing config
     // must fail closed, because the permissive alternative is the vulnerability.
     return NextResponse.json({ error: "Google sign-in is not configured" }, { status: 500 })
@@ -76,12 +67,15 @@ export async function POST(req: NextRequest) {
 
   let claims: GoogleIdTokenClaims
   try {
-    const { payload } = await jwtVerify(idToken, GOOGLE_JWKS, {
-      issuer: GOOGLE_ISSUERS,
-      audience,
-    })
+    // Signature, issuer and expiry here; the audience is checked just below,
+    // because jose's `audience` option only takes an exact list and a trusted
+    // PROJECT is a pattern, not a list.
+    const { payload } = await jwtVerify(idToken, GOOGLE_JWKS, { issuer: GOOGLE_ISSUERS })
     claims = payload as GoogleIdTokenClaims
   } catch {
+    return NextResponse.json({ error: "Invalid Google ID token" }, { status: 401 })
+  }
+  if (!isTrustedGoogleAudience(claims.aud, policy)) {
     return NextResponse.json({ error: "Invalid Google ID token" }, { status: 401 })
   }
 
@@ -98,7 +92,22 @@ export async function POST(req: NextRequest) {
   // lookup key, same fallback name, same avatar source. Both paths must land on
   // the same account, or a user who signs in on web and then on mobile ends up
   // with two.
-  const existing = await prisma.user.findUnique({ where: { email } })
+  const existing = await prisma.user.findUnique({
+    where: { email },
+    include: { suspensions: activeSuspension() },
+  })
+
+  // A verified Google ID token for this email is the proof of ownership a
+  // correct password is on /api/auth/token, so the same answer is safe here.
+  // Without it a suspended account was handed a token pair that every other
+  // route then refused: the app signed in "successfully" into a wall of 401s,
+  // with nothing anywhere saying why.
+  if (existing) {
+    const suspension = suspensionState(existing)
+    if (suspension.suspended) return NextResponse.json(suspendedBody(suspension), { status: 403 })
+    // Back after a suspension: say so, once. See notifySuspensionEnded().
+    await notifySuspensionEnded(prisma, existing.id)
+  }
   const user =
     existing ??
     (await prisma.user.create({

@@ -1,7 +1,7 @@
 import type { PrismaClient } from "@/generated/prisma/client"
 import { bracketOf, type Bracket } from "@/lib/brackets"
 import { offerTerms, type FeePayer, type OfferLegality } from "@/lib/trade-rules"
-import { isPremium, isVip } from "@/lib/premium"
+import { isPremium, isVip, premiumUntil, vipUntil, SUBSCRIPTION_SELECT } from "@/lib/premium"
 import { ITEM_IMAGES, type ImageRow } from "@/lib/item-images"
 
 /**
@@ -134,9 +134,9 @@ export async function assessOffer(
     const payerId = provisional.payer === "proposer" ? proposerId : target.userId
     const payer = await db.user.findUnique({
       where: { id: payerId },
-      select: { premiumUntil: true, vipUntil: true },
+      select: { subscriptions: SUBSCRIPTION_SELECT },
     })
-    premiumPayer = isPremium(payer?.premiumUntil) || isVip(payer?.vipUntil)
+    premiumPayer = isPremium(premiumUntil(payer?.subscriptions)) || isVip(vipUntil(payer?.subscriptions))
   }
 
   const terms = offerTerms(offeredBracket, targetBracket, premiumPayer)

@@ -2,6 +2,7 @@ import { NextRequest } from "next/server"
 import { z } from "zod"
 import { requireRole } from "@/lib/api-auth"
 import prisma from "@/lib/prisma"
+import { activeSuspension, notSuspendedWhere, suspendedWhere, suspensionState } from "@/lib/moderation"
 import { REPORT } from "@/lib/report-case"
 import { IN_TRADE_PHASE } from "@/lib/trade-row"
 import { ok } from "@/lib/v1/envelope"
@@ -33,14 +34,13 @@ export async function GET(req: NextRequest) {
     ...(status === "active"
       ? {
           deletedAt: null,
-          OR: [{ suspendedAt: null }, { suspendedUntil: { lte: now } }],
+          ...notSuspendedWhere(now),
         }
       : {}),
     ...(status === "suspended"
       ? {
           deletedAt: null,
-          suspendedAt: { not: null },
-          AND: [{ OR: [{ suspendedUntil: null }, { suspendedUntil: { gt: now } }] }],
+          ...suspendedWhere(now),
         }
       : {}),
     ...(status === "deleted" ? { deletedAt: { not: null } } : {}),
@@ -57,8 +57,7 @@ export async function GET(req: NextRequest) {
       isVerified: true,
       dateOfBirth: true,
       createdAt: true,
-      suspendedAt: true,
-      suspendedUntil: true,
+      suspensions: activeSuspension(now),
       deletedAt: true,
       _count: {
         select: {
@@ -95,9 +94,8 @@ export async function GET(req: NextRequest) {
       },
       idVerification: user.idVerifications[0] ?? null,
       idVerifications: undefined,
-      suspended: user.suspendedAt !== null && (
-        user.suspendedUntil === null || user.suspendedUntil > new Date()
-      ),
+      suspensions: undefined,
+      suspended: suspensionState(user).suspended,
     })),
   })
 }

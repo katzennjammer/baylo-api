@@ -56,7 +56,7 @@ export default function UserActions({
       <input
         value={reason}
         onChange={(event) => setReason(event.target.value)}
-        placeholder="Reason required"
+        placeholder="Reason required — the user sees this"
         maxLength={1000}
         disabled={!canSuspend || busy}
         style={{ padding: "7px 9px", borderRadius: 7, border: "1px solid rgba(0,0,0,.16)", fontSize: 12 }}

@@ -78,15 +78,6 @@ export async function GET(
       isOrgAccount: true,
       /**
        * The organisation this profile IS, when it is one. Null for a person.
-       *
-       * The staff count comes nested off it rather than as a sixth query,
-       * because it is the number that REPLACES followers/following in the org
-       * header -- so it is needed on exactly the reads where `organization` is
-       * non-null, and never otherwise.
-       *
-       * ACTIVE members only. A pending invitation is somebody who has not
-       * agreed to appear on a public profile, and counting them would put a
-       * number on the page that includes people who said nothing.
        */
       organization: {
         select: {
@@ -223,8 +214,7 @@ export async function GET(
          * The organisation block, or null for a person. THE CLIENT BRANCHES ON
          * THIS and on nothing else: a square logo instead of a round avatar, a
          * building-store placeholder instead of initials, the verified badge
-         * instead of the trust tier, and the staff count instead of
-         * followers/following.
+         * instead of the trust tier.
          *
          * Everything else on the profile -- the posts grid, Follow, Message,
          * the tabs -- is untouched, which is why this is an extra field rather

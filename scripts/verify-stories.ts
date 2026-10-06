@@ -188,11 +188,11 @@ async function main() {
     (await authorsIn(alice.id)).includes(bob.id) && (await authorsIn(alice.id)).includes(carol.id))
   await prisma.block.deleteMany({ where: { blockerId: carol.id } })
 
-  await prisma.user.update({ where: { id: bob.id }, data: { suspendedAt: new Date(), suspendedUntil: null } })
+  await prisma.suspension.create({ data: { userId: bob.id, level: 1, reason: "verify-stories" } })
   check("suspended author: Bob's story is gone for Alice", !(await authorsIn(alice.id)).includes(bob.id))
-  await prisma.user.update({ where: { id: bob.id }, data: { suspendedAt: new Date(Date.now() - 2 * H), suspendedUntil: new Date(Date.now() - H) } })
+  await prisma.suspension.updateMany({ where: { userId: bob.id }, data: { startsAt: new Date(Date.now() - 2 * H), endsAt: new Date(Date.now() - H) } })
   check("a lapsed suspension brings it back", (await authorsIn(alice.id)).includes(bob.id))
-  await prisma.user.update({ where: { id: bob.id }, data: { suspendedAt: null, suspendedUntil: null } })
+  await prisma.suspension.deleteMany({ where: { userId: bob.id } })
 
   // ═══════════════════════════════════════════════════════════════════════════
   head("6  Delete")

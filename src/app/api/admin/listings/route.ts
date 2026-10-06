@@ -2,6 +2,7 @@ import { NextRequest } from "next/server"
 import { z } from "zod"
 import { requireRole } from "@/lib/api-auth"
 import prisma from "@/lib/prisma"
+import { activeSuspension } from "@/lib/moderation"
 import { ok } from "@/lib/v1/envelope"
 import { parseQuery } from "@/lib/v1/query"
 
@@ -40,7 +41,7 @@ export async function GET(req: NextRequest) {
       // is the only way to see the divergence on a listing that never went to
       // review because it stayed inside the one-bracket cap.
       valueLeaves: true, suggestedLeaves: true, valueSetByUser: true,
-      user: { select: { id: true, name: true, email: true, suspendedAt: true, suspendedUntil: true } },
+      user: { select: { id: true, name: true, email: true, suspensions: activeSuspension() } },
     },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take: limit,

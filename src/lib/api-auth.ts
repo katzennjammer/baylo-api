@@ -3,7 +3,7 @@ import { NextResponse } from "next/server"
 import { auth } from "@root/auth"
 import prisma from "@/lib/prisma"
 import { verifyAccessToken } from "@/lib/auth-tokens"
-import { suspensionState } from "@/lib/moderation"
+import { suspensionState, activeSuspension } from "@/lib/moderation"
 
 /**
  * The single authentication entry point for every authenticated API route.
@@ -17,7 +17,7 @@ import { suspensionState } from "@/lib/moderation"
  *
  * TWO ACCOUNT STATES ARE REFUSED HERE, both by returning null:
  *   deleted    (deletedAt)   -- the account is gone; see the note on the column.
- *   suspended  (suspendedAt) -- a moderator has stopped this account acting.
+ *   suspended  (Suspension)  -- a moderator has stopped this account acting.
  *
  * Suspension is checked in this one place, and that is what makes it real. The
  * alternative -- a gate each write route opts into -- is a gate the next route
@@ -79,7 +79,7 @@ export async function resolveSession(): Promise<AuthSession | null> {
       where: { id: userId },
       select: {
         id: true, name: true, email: true, avatar: true,
-        role: true, deletedAt: true, suspendedAt: true, suspendedUntil: true,
+        role: true, deletedAt: true, suspensions: activeSuspension(),
       },
     })
     // A deleted account is not merely absent from listings — it must stop
@@ -103,7 +103,7 @@ export async function resolveSession(): Promise<AuthSession | null> {
   // long way, and the token itself carries no deletion state.
   const cookieUser = await prisma.user.findUnique({
     where: { id: session.user.id },
-    select: { role: true, deletedAt: true, suspendedAt: true, suspendedUntil: true },
+    select: { role: true, deletedAt: true, suspensions: activeSuspension() },
   })
   if (!cookieUser || cookieUser.deletedAt) return null
   // A 30-day NextAuth cookie outlives a suspension decision by a very long way,

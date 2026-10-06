@@ -14,7 +14,7 @@ import { ORG_CONTEXT_HEADER, resolveActingIdentity } from "@/lib/organizations"
  *
  * Acting as a shop (X-Baylo-Org, re-checked against an ACTIVE membership by
  * resolveActingIdentity() on every request -- the same call resolveInbox()
- * and the boost route make), the backing row's listings are this request's
+ * makes), the backing row's listings are this request's
  * too. Any ACTIVE member, owner or staff, the same people who may post as the
  * shop.
  *
@@ -22,8 +22,7 @@ import { ORG_CONTEXT_HEADER, resolveActingIdentity } from "@/lib/organizations"
  *
  * `ownerIds` is the person AND the acting shop, never the shop instead of the
  * person. The header rides every request, and a person acting as a shop who
- * opens a listing from their personal shelf is still its owner -- the same
- * reason the boost route lets the listing pick the payer.
+ * opens a listing from their personal shelf is still its owner.
  *
  * ── NOTHING WIDENS WITHOUT THE HEADER ───────────────────────────────────────
  *

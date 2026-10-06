@@ -10,6 +10,7 @@ import {
 } from "@/lib/trade-rules"
 import { BRACKET_CEILINGS, PREMIUM_MIN_BRACKET } from "@/lib/brackets"
 import { OFFER_EXPIRY_DAYS } from "@/lib/offers"
+import { PolicyDocument } from "@/components/PolicyDocument"
 
 /**
  * /policy/trading — the trading policy the consent checkbox agrees to.
@@ -50,17 +51,11 @@ export default function TradingPolicyPage() {
   })
 
   return (
-    <main
-      style={{
-        maxWidth: 680,
-        margin: "0 auto",
-        padding: "40px 24px 80px",
-        fontSize: 16,
-        lineHeight: 1.6,
-      }}
-    >
-      <h1 style={{ fontSize: 28, marginBottom: 4 }}>Trading policy</h1>
-      <p style={{ color: "#666", fontSize: 13, marginTop: 0 }}>Version {TRADING_POLICY_VERSION}</p>
+    // The frame Help, Terms and Privacy use (3 Oct 2026). This page drew its own
+    // <main>, and so sat 40 px from the top under the site's fixed Navbar with
+    // every paragraph margin and list bullet reset away by globals.css -- see
+    // the notes in PolicyDocument. The WORDING IS UNCHANGED, so the version is.
+    <PolicyDocument title="Trading policy" meta={`Version ${TRADING_POLICY_VERSION}`}>
 
       <h2 id="brackets" style={{ fontSize: 20, marginTop: 32 }}>Value brackets</h2>
       <p>
@@ -133,6 +128,6 @@ export default function TradingPolicyPage() {
         Leaves are Baylo&apos;s trading points. They have no cash value and cannot be bought, sold or
         exchanged for money.
       </p>
-    </main>
+    </PolicyDocument>
   )
 }

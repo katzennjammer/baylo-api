@@ -5,6 +5,7 @@ import prisma from "@/lib/prisma"
 import {
   CATEGORY_LABEL,
   suspensionState,
+  activeSuspension,
   toWireCategory,
   toWireTarget,
 } from "@/lib/moderation"
@@ -84,7 +85,7 @@ export default async function ReportDetailPage({
             id: true, title: true, description: true, images: ITEM_IMAGES, category: true,
             condition: true, valueLeaves: true, status: true,
             moderationHiddenAt: true, createdAt: true,
-            user: { select: { id: true, name: true, email: true, suspendedAt: true, suspendedUntil: true } },
+            user: { select: { id: true, name: true, email: true, suspensions: activeSuspension() } },
           },
         })
       : null,
@@ -94,7 +95,7 @@ export default async function ReportDetailPage({
           select: {
             id: true, name: true, email: true, bio: true, location: true,
             createdAt: true, rating: true, totalTrades: true, role: true,
-            suspendedAt: true, suspendedUntil: true, deletedAt: true,
+            suspensions: activeSuspension(), deletedAt: true,
             _count: { select: { items: true } },
             items: {
               select: { id: true, title: true, images: ITEM_IMAGES, status: true, moderationHiddenAt: true },
@@ -109,7 +110,7 @@ export default async function ReportDetailPage({
           where: { id: report.targetId },
           select: {
             id: true, content: true, createdAt: true,
-            sender: { select: { id: true, name: true, email: true, suspendedAt: true, suspendedUntil: true } },
+            sender: { select: { id: true, name: true, email: true, suspensions: activeSuspension() } },
             receiver: { select: { id: true, name: true } },
           },
         })
@@ -119,7 +120,7 @@ export default async function ReportDetailPage({
           where: { id: report.targetId },
           select: {
             id: true, caption: true, createdAt: true, expiresAt: true, deletedAt: true,
-            user: { select: { id: true, name: true, email: true, suspendedAt: true, suspendedUntil: true } },
+            user: { select: { id: true, name: true, email: true, suspensions: activeSuspension() } },
             item: { select: { id: true, title: true, images: ITEM_IMAGES, status: true, moderationHiddenAt: true } },
           },
         })

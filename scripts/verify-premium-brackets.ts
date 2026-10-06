@@ -120,7 +120,7 @@ async function main() {
       email: `${P}paid@example.com`,
       isVerified: true,
       leaves: 0,
-      premiumUntil: new Date(Date.now() + 86_400_000),
+      subscriptions: { create: { tier: "PREMIUM", endsAt: new Date(Date.now() + 86_400_000) } },
     },
   })
   const lapsed = await prisma.user.create({
@@ -129,7 +129,7 @@ async function main() {
       email: `${P}lapsed@example.com`,
       isVerified: true,
       leaves: 0,
-      premiumUntil: new Date(Date.now() - 86_400_000),
+      subscriptions: { create: { tier: "PREMIUM", endsAt: new Date(Date.now() - 86_400_000) } },
     },
   })
   const vipUser = await prisma.user.create({
@@ -138,7 +138,7 @@ async function main() {
       email: `${P}vip@example.com`,
       isVerified: true,
       leaves: 0,
-      vipUntil: new Date(Date.now() + 86_400_000),
+      subscriptions: { create: { tier: "VIP", endsAt: new Date(Date.now() + 86_400_000) } },
     },
   })
   const vipLapsed = await prisma.user.create({
@@ -147,7 +147,7 @@ async function main() {
       email: `${P}viplapsed@example.com`,
       isVerified: true,
       leaves: 0,
-      vipUntil: new Date(Date.now() - 86_400_000),
+      subscriptions: { create: { tier: "VIP", endsAt: new Date(Date.now() - 86_400_000) } },
     },
   })
   const mk = (title: string, valueLeaves: number | null) =>

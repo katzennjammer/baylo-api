@@ -1,11 +1,11 @@
 // Baylo database, schema v2 (final). Generated from prisma/schema.prisma on
-// feature/schema-v2. Paste into https://dbdiagram.io. 25 tables, 49 foreign keys.
+// feature/schema-v2. Paste into https://dbdiagram.io. 27 tables, 51 foreign keys.
 // Prisma model names are the Postgres table names (no @@map). _prisma_migrations is omitted.
 // "cuid()" ids and @updatedAt timestamps are set by the Prisma client, not by a DB default.
 
 Project baylo {
   database_type: 'PostgreSQL'
-  Note: 'Baylo peer-to-peer barter app. Schema v2: 34 tables consolidated to 25. See docs/schema-v2.md.'
+  Note: 'Baylo peer-to-peer barter app. Schema v2: 34 tables consolidated to 25, then Subscription and Suspension split out of User (27). See docs/schema-v2.md.'
 }
 
 // ===================== Identity & auth =====================
@@ -26,23 +26,49 @@ Table "User" {
   "createdAt" timestamp(3) [not null, default: `now()`]
   "updatedAt" timestamp(3) [not null, note: '@updatedAt, set by Prisma on every write']
   "deletedAt" timestamp(3)
-  "premiumUntil" timestamp(3)
-  "vipUntil" timestamp(3)
   "leaves" integer [not null, default: 0, note: 'Current Leaves balance. SUM(User.leaves) = SUM(LeafTransaction.amount)']
   "lifetimeLeaves" integer [not null, default: 0, note: 'Leaves ever earned; drives rank. Not derivable from the ledger']
   "role" "Role" [not null, default: 'USER']
-  "suspendedAt" timestamp(3)
-  "suspendedUntil" timestamp(3)
   "isOrgAccount" boolean [not null, default: false, note: 'TRUE on an Organization\'s backing row (never logs in)']
   "idVerifiedGrandfatheredAt" timestamp(3)
 
   indexes {
     "isOrgAccount"
     "deletedAt"
-    "suspendedAt"
   }
 
-  Note: '''Every account: people, staff (role ADMIN) and the backing rows of organizations (isOrgAccount). Holds the Leaves balance, premium/VIP windows, suspension and soft-delete state.'''
+  Note: '''Every account: people, staff (role ADMIN) and the backing rows of organizations (isOrgAccount). Holds the Leaves balance and soft-delete state. Premium/VIP terms are in Subscription; suspensions are in Suspension.'''
+}
+
+Table "Subscription" {
+  "id" text [pk, note: 'cuid(), set by Prisma']
+  "userId" text [not null]
+  "tier" "SubscriptionTier" [not null]
+  "startsAt" timestamp(3) [not null, default: `now()`]
+  "endsAt" timestamp(3) [not null, note: 'In force while in the future. Beta lifetime Premium = 9999-12-31']
+  "createdAt" timestamp(3) [not null, default: `now()`]
+
+  indexes {
+    "userId"
+  }
+
+  Note: '''One term of Premium or VIP for one account. Never deleted: cancelling or replacing a term sets endsAt to now, so the rows are also the subscription history.'''
+}
+
+Table "Suspension" {
+  "id" text [pk, note: 'cuid(), set by Prisma']
+  "userId" text [not null]
+  "level" integer [not null, note: 'Progression: 1 = the account's first suspension, 2 = its second, ...']
+  "reason" text [not null]
+  "startsAt" timestamp(3) [not null, default: `now()`]
+  "endsAt" timestamp(3) [note: 'NULL = indefinite']
+  "liftedAt" timestamp(3) [note: 'Set when staff unsuspend early']
+
+  indexes {
+    "userId"
+  }
+
+  Note: '''One suspension of one account. In force while liftedAt is null and endsAt is null or in the future. Never deleted, so the rows are the account's suspension history and each new one takes the next level.'''
 }
 
 Table "AuthToken" {
@@ -579,12 +605,14 @@ Table "ItemSafeZone" {
   Note: '''Which safe hubs a listing's owner is willing to meet at (many-to-many Item <-> SafeZoneHub).'''
 }
 
-// ===================== Foreign keys (49) =====================
+// ===================== Foreign keys (51) =====================
 // ">" = many-to-one, "-" = one-to-one. Delete actions as declared (or Prisma's default:
 // Restrict for a required relation, SetNull for an optional one). All updates cascade.
 
 Ref "Follow_follower": "Follow"."followerId" > "User"."id" [delete: cascade, update: cascade]
 Ref "Follow_followee": "Follow"."followeeId" > "User"."id" [delete: cascade, update: cascade]
+Ref "Subscription_user": "Subscription"."userId" > "User"."id" [delete: cascade, update: cascade]
+Ref "Suspension_user": "Suspension"."userId" > "User"."id" [delete: cascade, update: cascade]
 Ref "AuthToken_user": "AuthToken"."userId" > "User"."id" [delete: cascade, update: cascade]
 Ref "Item_user": "Item"."userId" > "User"."id" [delete: cascade, update: cascade]
 Ref "ItemImage_item": "ItemImage"."itemId" > "Item"."id" [delete: cascade, update: cascade]
@@ -634,6 +662,11 @@ Ref "StoryView_story": "StoryView"."storyId" > "Story"."id" [delete: cascade, up
 Ref "StoryView_viewer": "StoryView"."viewerId" > "User"."id" [delete: cascade, update: cascade]
 
 // ===================== Enums (32) =====================
+
+Enum "SubscriptionTier" {
+  "PREMIUM"
+  "VIP"
+}
 
 Enum "AuthTokenType" {
   "REFRESH"
@@ -751,6 +784,7 @@ Enum "NotificationType" {
   "CATEGORY_MATCH"
   "ORG_INVITE"
   "LISTING_EXPIRED"
+  "SUSPENSION_LIFTED"
 }
 
 Enum "FollowStatus" {

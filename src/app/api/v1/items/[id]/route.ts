@@ -3,7 +3,7 @@ import { bracketOf, valueNeedsPremium, valueNeedsVip } from "@/lib/brackets"
 import { valueCap } from "@/lib/trade-rules"
 import { valueRejectionSentence } from "@/lib/value-rejection"
 import { ownerAppealState } from "@/lib/appeals"
-import { isPremium, isVip } from "@/lib/premium"
+import { isPremium, isVip, premiumUntil, vipUntil, SUBSCRIPTION_SELECT } from "@/lib/premium"
 import { z } from "zod"
 import { resolveSession } from "@/lib/api-auth"
 import { resolveListingOwners } from "@/lib/listing-owner"
@@ -214,7 +214,7 @@ export async function GET(
         }),
     prisma.user.findUnique({
       where: { id: viewerId },
-      select: { leaves: true, premiumUntil: true, vipUntil: true },
+      select: { leaves: true, subscriptions: SUBSCRIPTION_SELECT },
     }),
     // The same function the contract gates enforce with, so the badge on this
     // screen can never promise something the server would then refuse.
@@ -265,12 +265,12 @@ export async function GET(
       // whatever bracket it is in, and a padlock on your own item would read as
       // a claim about you.
       offerLock:
-        !isOwner && valueNeedsVip(item.valueLeaves) && !isVip(viewerRow?.vipUntil)
+        !isOwner && valueNeedsVip(item.valueLeaves) && !isVip(vipUntil(viewerRow?.subscriptions))
           ? ("vip" as const)
           : !isOwner &&
               valueNeedsPremium(item.valueLeaves) &&
-              !isPremium(viewerRow?.premiumUntil) &&
-              !isVip(viewerRow?.vipUntil)
+              !isPremium(premiumUntil(viewerRow?.subscriptions)) &&
+              !isVip(vipUntil(viewerRow?.subscriptions))
             ? ("premium" as const)
             : null,
       leaves: viewerRow?.leaves ?? 0,
