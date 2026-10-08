@@ -1,5 +1,5 @@
 %% Baylo database, schema v2 (final). Generated from prisma/schema.prisma (feature/schema-v2).
-%% 28 tables, 53 foreign keys. Key columns only: primary keys, foreign keys, unique
+%% 28 tables + 1 view, 53 foreign keys. Key columns only: primary keys, foreign keys, unique
 %% columns, and enum-typed columns. The full column list is in baylo-v2.dbml.
 erDiagram
     %% ---- Identity & auth ----
@@ -185,6 +185,10 @@ erDiagram
         string itemId PK, FK
         string hubId PK, FK
     }
+    %% ---- View (display only, NOT a table, so deliberately not drawn as an entity) ----
+    %% ItemWantedCategorySummary: one row per listing with wanted categories, computed on every
+    %% read from Item + ItemWantedCategory + Category (itemId, title, userId, wantedCategories,
+    %% wantedCategoryIds, wantedCount). Stores nothing; security_invoker, no API-role grants.
     %% ---- Relationships (53) ----
     User ||--o{ Follow : "followerId"
     User ||--o{ Follow : "followeeId"

@@ -1,11 +1,12 @@
 // Baylo database, schema v2 (final). Generated from prisma/schema.prisma on
-// feature/schema-v2. Paste into https://dbdiagram.io. 28 tables, 53 foreign keys.
+// feature/schema-v2. Paste into https://dbdiagram.io. 28 tables + 1 view, 53 foreign keys.
+// The view (ItemWantedCategorySummary) is NOT a table; DBML has no view type, so it is the sticky note below.
 // Prisma model names are the Postgres table names (no @@map). _prisma_migrations is omitted.
 // "cuid()" ids and @updatedAt timestamps are set by the Prisma client, not by a DB default.
 
 Project baylo {
   database_type: 'PostgreSQL'
-  Note: 'Baylo peer-to-peer barter app. Schema v2: 34 tables consolidated to 25, then Subscription and Suspension split out of User (27), then the Category lookup table (28). See docs/schema-v2.md.'
+  Note: 'Baylo peer-to-peer barter app. Schema v2: 34 tables consolidated to 25, then Subscription and Suspension split out of User (27), then the Category lookup table (28), plus one display view (ItemWantedCategorySummary). See docs/schema-v2.md.'
 }
 
 // ===================== Identity & auth =====================
@@ -612,6 +613,15 @@ Table "ItemSafeZone" {
   }
 
   Note: '''Which safe hubs a listing's owner is willing to meet at (many-to-many Item <-> SafeZoneHub).'''
+}
+
+// ===================== View (display only, not a table) =====================
+
+Note view_ItemWantedCategorySummary {
+  '''VIEW "ItemWantedCategorySummary" (8 Oct 2026). A read-only view for display, NOT a table: it stores nothing.
+One row per listing that has wanted categories, computed on every read from Item + ItemWantedCategory + Category:
+itemId, title, userId, wantedCategories (labels joined with ", " in Category.sortOrder order), wantedCategoryIds (text[] of codes, same order), wantedCount.
+security_invoker = true; no privileges for anon / authenticated.'''
 }
 
 // ===================== Foreign keys (53) =====================

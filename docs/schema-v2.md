@@ -3,7 +3,7 @@
 Status: **week 1 complete (3 Oct 2026)**. Designed, built and verified on a scratch copy of the live data. No app code has changed, nothing has touched the live database, and nothing has been merged.
 Branch: `feature/schema-v2` (API repo, from `feature/stories-v1` @ `8c0277f`).
 
-> **Current count: 28 tables** (plus `_prisma_migrations`). This document records the 34 → 25 redesign as it was done. Since the cutover, three tables were added on top of the 25: **Suspension** and **Subscription** (5 Oct 2026) and the **Category** lookup table (8 Oct 2026). See [section 6](#6-after-the-cutover-25--28-tables).
+> **Current count: 28 tables + 1 view** (plus `_prisma_migrations`). This document records the 34 → 25 redesign as it was done. Since the cutover, three tables were added on top of the 25: **Suspension** and **Subscription** (5 Oct 2026) and the **Category** lookup table (8 Oct 2026). The read-only view **ItemWantedCategorySummary** (8 Oct 2026) is for display and is not a table. See [section 6](#6-after-the-cutover-25--28-tables).
 
 | Week | What | Gate |
 |---|---|---|
@@ -24,6 +24,7 @@ Branch: `feature/schema-v2` (API repo, from `feature/stories-v1` @ `8c0277f`).
 | Migration 5: completedAt backfill (data, needs trade) | `prisma/migrations/20261004000001_schema_v2_trade_completed_backfill/migration.sql` |
 | Migration 6: drop Trade hide flags (needs trade) | `prisma/migrations/20261004000002_schema_v2_drop_trade_hidden/migration.sql` |
 | Later: Suspension + Subscription (5 Oct) | `prisma/migrations/20261005000000_suspension_subscription_tables/migration.sql` |
+| Later: ItemWantedCategorySummary view (8 Oct; a view, not a table) | `prisma/migrations/20261008100000_item_wanted_category_summary_view/migration.sql`, reverse in `prisma/rollback/`, run by `scripts/apply-wanted-summary-view.ts` (section 6) |
 | Later: Category lookup table (8 Oct) | `prisma/migrations/20261008000000_category_lookup_table/migration.sql`, reverse in `prisma/rollback/`, run by `scripts/apply-category-lookup.ts` (section 6) |
 | Scratch builder | `scripts/schema-v2/build-scratch.ts` |
 | Verifier | `scripts/schema-v2/verify-v2.ts` |
@@ -457,6 +458,15 @@ It is applied by `scripts/apply-category-lookup.ts`, never by `migrate deploy` o
 | After forward again | 28 | 290 | 8 | 25 | 20 | 214 = 214 |
 
 Per-category counts on Item and ItemWantedCategory were identical at every step. After forward, `prisma migrate status` reports the copy up to date, and `prisma migrate diff` from the copy to `schema.prisma` shows nothing for Category, Item or ItemWantedCategory. It does show two Achievement lines: pre-existing drift between the migration chain and the schema. Separately, live differs from the schema on one `Achievement.icon` default. Neither involves this change.
+
+### The ItemWantedCategorySummary view (8 Oct 2026): a view, not a table
+
+**28 tables + 1 view.** `"ItemWantedCategorySummary"` is a read-only Postgres **view** for display: one row per listing that has wanted categories, with `itemId`, `title`, the owner's `userId`, `wantedCategories` (the labels joined with ", " in `Category.sortOrder` order, e.g. "Electronics, Fashion, Gaming"), `wantedCategoryIds` (the codes as a `text[]`, same order) and `wantedCount`. It is computed from Item + ItemWantedCategory + Category on every read and **stores nothing**: ItemWantedCategory stays the one source of the data (one row per item per wanted category, 1NF), and the view only presents it the way a person reads it.
+
+- **Migration** `20261008100000_item_wanted_category_summary_view`, so it is in `_prisma_migrations`; reverse in `prisma/rollback/`; applied by `scripts/apply-wanted-summary-view.ts` (forward / reverse / read-only `verify`), the same guarded path as the Category table.
+- **No Prisma model.** Nothing in the app reads it, and Prisma ignores views unless the `views` preview feature is on, so `migrate diff` is unaffected (checked on the rehearsal copy).
+- **Locked out of the API, twice.** `REVOKE ALL` from `anon` and `authenticated`, and `security_invoker = true` (Postgres 15+; live is 17.6), so a reader also needs SELECT on the three tables, which the API roles do not have. Rehearsal: reading it as either role is refused ("permission denied for view"), and even after a deliberate, rolled-back `GRANT SELECT` on the view it is still refused ("permission denied for table Item").
+- **Tooling.** Backups dump tables only (a view has no rows); a restore or drill rebuilds the view from its migration. `db push` creates no views, so `scripts/scratch.ps1` runs `scripts/create-display-views.ts` after each push, which runs the view's migration file.
 
 ---
 
