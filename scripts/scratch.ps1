@@ -77,6 +77,10 @@ try {
       # nothing does unless we do (prisma/category-seed.ts).
       npx tsx --env-file=.env scripts/seed-categories.ts
       if ($LASTEXITCODE -ne 0) { throw "seed-categories failed" }
+      # db push creates no views either; the display views come from their
+      # migration files (scripts/create-display-views.ts).
+      npx tsx --env-file=.env scripts/create-display-views.ts
+      if ($LASTEXITCODE -ne 0) { throw "create-display-views failed" }
     }
   }
 
