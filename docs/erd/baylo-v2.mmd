@@ -1,5 +1,5 @@
 %% Baylo database, schema v2 (final). Generated from prisma/schema.prisma (feature/schema-v2).
-%% 25 tables, 49 foreign keys. Key columns only: primary keys, foreign keys, unique
+%% 28 tables, 53 foreign keys. Key columns only: primary keys, foreign keys, unique
 %% columns, and enum-typed columns. The full column list is in baylo-v2.dbml.
 erDiagram
     %% ---- Identity & auth ----
@@ -7,6 +7,15 @@ erDiagram
         string id PK
         string email UK
         Role role
+    }
+    Subscription {
+        string id PK
+        string userId FK
+        SubscriptionTier tier
+    }
+    Suspension {
+        string id PK
+        string userId FK
     }
     AuthToken {
         string id PK
@@ -25,7 +34,7 @@ erDiagram
     %% ---- Listings ----
     Item {
         string id PK
-        Category category
+        string categoryId FK
         Condition condition
         ItemStatus status
         ValueRejectionReason valueRejectionReason "nullable"
@@ -38,7 +47,12 @@ erDiagram
     }
     ItemWantedCategory {
         string itemId PK, FK
-        Category category PK
+        string categoryId PK, FK
+    }
+    Category {
+        string id PK
+        string label UK
+        int sortOrder UK
     }
     %% ---- Trading ----
     Trade {
@@ -171,13 +185,17 @@ erDiagram
         string itemId PK, FK
         string hubId PK, FK
     }
-    %% ---- Relationships (49) ----
+    %% ---- Relationships (53) ----
     User ||--o{ Follow : "followerId"
     User ||--o{ Follow : "followeeId"
+    User ||--o{ Subscription : "userId"
+    User ||--o{ Suspension : "userId"
     User ||--o{ AuthToken : "userId"
     User ||--o{ Item : "userId"
     Item ||--o{ ItemImage : "itemId"
     Item ||--o{ ItemWantedCategory : "itemId"
+    Category ||--o{ Item : "categoryId"
+    Category ||--o{ ItemWantedCategory : "categoryId"
     User ||--o{ Trade : "senderId"
     User ||--o{ Trade : "receiverId"
     Item ||--o{ Trade : "requestedItemId"

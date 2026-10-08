@@ -3,6 +3,8 @@
 Status: **week 1 complete (3 Oct 2026)**. Designed, built and verified on a scratch copy of the live data. No app code has changed, nothing has touched the live database, and nothing has been merged.
 Branch: `feature/schema-v2` (API repo, from `feature/stories-v1` @ `8c0277f`).
 
+> **Current count: 28 tables** (plus `_prisma_migrations`). This document records the 34 → 25 redesign as it was done. Since the cutover, three tables were added on top of the 25: **Suspension** and **Subscription** (5 Oct 2026) and the **Category** lookup table (8 Oct 2026). See [section 6](#6-after-the-cutover-25--28-tables).
+
 | Week | What | Gate |
 |---|---|---|
 | 1 | Backup, design, new schema, migrations, data migration, all on a copy | **this document** |
@@ -21,6 +23,8 @@ Branch: `feature/schema-v2` (API repo, from `feature/stories-v1` @ `8c0277f`).
 | Migration 4: audit fixes (schema only, needs core) | `prisma/migrations/20261004000000_schema_v2_audit_fixes/migration.sql` |
 | Migration 5: completedAt backfill (data, needs trade) | `prisma/migrations/20261004000001_schema_v2_trade_completed_backfill/migration.sql` |
 | Migration 6: drop Trade hide flags (needs trade) | `prisma/migrations/20261004000002_schema_v2_drop_trade_hidden/migration.sql` |
+| Later: Suspension + Subscription (5 Oct) | `prisma/migrations/20261005000000_suspension_subscription_tables/migration.sql` |
+| Later: Category lookup table (8 Oct) | `prisma/migrations/20261008000000_category_lookup_table/migration.sql`, reverse in `prisma/rollback/`, run by `scripts/apply-category-lookup.ts` (section 6) |
 | Scratch builder | `scripts/schema-v2/build-scratch.ts` |
 | Verifier | `scripts/schema-v2/verify-v2.ts` |
 | Scratch schemas (kept for week 2) | `schema_v2_wk1` (new structure) and `schema_v2_wk1_src` (old structure, same data, untouched reference) |
@@ -63,7 +67,8 @@ Notation: `Old.col → New.col`. "=" means the same table and the same column. T
 | id, title, description, category, condition, valueLeaves, valueSetByUser, suggestedLeaves, valuationSource, revaluationCount, status, wantedItems, pickupLat, pickupLng, pickupAddress, moderationHiddenAt, valueRejectionReason, createdAt, updatedAt, userId, isPerishable, quantity, quantityUnit, tradeWithinHours | = |
 | images (JSON array in TEXT) | **ItemImage**(itemId, position = array index, url) |
 | imageHash | **dropped**: duplicate of ItemImage(position 0).hash, asserted equal on all 51 rows before the drop |
-| lookingForCategories (enum[]) | **ItemWantedCategory**(itemId, category) |
+| lookingForCategories (enum[]) | **ItemWantedCategory**(itemId, category); since 8 Oct the column is `categoryId`, an FK to **Category** (section 6) |
+| category (enum) | unchanged in v2; since 8 Oct `categoryId`, an FK to **Category** (section 6) |
 | isFeatured, featuredUntil, featuredAt | **dropped**: boosting removed |
 | (new) | `bracket`: a STORED GENERATED column, `CASE` over `valueLeaves` (copy three of `BRACKET_CEILINGS`), NULL when valueLeaves is NULL |
 
@@ -228,6 +233,7 @@ Every per-type rule below is a **CHECK constraint** in the migrations. Prisma ne
 - ItemImage PK is (itemId, position) and ItemWantedCategory PK is (itemId, category), both Cascade from Item.
 - ItemWantedCategory's `category` B-tree index replaces the GIN index on the array.
 - The PK makes a repeated category impossible. The array never prevented repeats, though none exist today.
+- Since 8 Oct 2026 the column is `categoryId` (FK → Category, Restrict), and the PK and index are on it: ItemWantedCategory is the junction of Item ↔ Category (section 6).
 
 ## 2c. Data-loss check: what does not survive (live, 3 Oct 2026)
 
@@ -398,6 +404,59 @@ Both depend on the trade migration. `build-scratch.ts --skip trade` skips them t
 2. Rebuild the scratch copy from **that** backup and run `verify-v2.ts`. The preconditions in each migration (open DPAs, CommentLike/ConversationHide rows, org owners, offer shapes) catch any drift since 3 Oct.
 3. `prisma migrate deploy` on live (the three migrations, or only the ones that passed the go/no-go), then deploy the week-2 code.
 4. Recovery path: restore the step-1 backup (`pg-backup.ts restore`) and redeploy the old code.
+
+## 6. After the cutover: 25 → 28 tables
+
+| Date | Table(s) | Why | Migration |
+|---|---|---|---|
+| 5 Oct 2026 | **Subscription**, **Suspension** | `User.premiumUntil`/`vipUntil` and `suspendedAt`/`suspendedUntil` became one row per term / per suspension, with an id and a history | `20261005000000_suspension_subscription_tables` |
+| 8 Oct 2026 | **Category** | the category list became a table, so the ERD shows Item ↔ ItemWantedCategory ↔ Category as a proper many-to-many (thesis feedback) | `20261008000000_category_lookup_table` |
+
+### The Category lookup table (8 Oct 2026)
+
+**Before.** `category` was a Postgres enum used by two columns, `Item.category` and `ItemWantedCategory.category`. In the ERD, ItemWantedCategory linked only to Item and read like a leftover list.
+
+**After.**
+
+```
+Category(id PK, label UNIQUE, sortOrder UNIQUE)            -- 20 rows, seeded from the enum
+Item.categoryId                  -> Category.id            -- NOT NULL, ON DELETE RESTRICT
+ItemWantedCategory(itemId     -> Item      ON DELETE CASCADE,
+                   categoryId -> Category  ON DELETE RESTRICT,
+                   PK (itemId, categoryId))
+```
+
+Item ↔ ItemWantedCategory ↔ Category is now a many-to-many through a junction table, and Item → Category is one-to-many. The number of ItemWantedCategory rows did not change: one row per item per wanted category is already the 1NF form; only the column became a foreign key.
+
+**Design decisions.**
+
+- **Natural key.** `Category.id` is the stable code (`'ELECTRONICS'`), not a number. That is the string the API, the mobile app, the search assistant and every stored row already used, so the two FK columns hold the same values the enum columns held. API responses did not change and the mobile app needed no change. Codes are never renamed (clients branch on them); `label` is the field that changes. Code tables keyed by their code are standard practice (ISO country and currency codes are the textbook case) and are in 3NF: `label` and `sortOrder` depend on the key and nothing else.
+- **Prisma field names.** The columns are `categoryId` in the database. In `schema.prisma` the scalar field stays `category` (`@map("categoryId")`) and the relation field is `categoryRef`, so every existing query, `groupBy`, filter and create kept working unchanged.
+- **No `icon` column.** The server never renders icons; the app maps a code to its glyph itself. Adding one later is a one-line migration.
+- **`sortOrder` keeps the enum's order.** Postgres sorts an enum in declaration order (ELECTRONICS, CLOTHING, …), not alphabetically. `lookingFor` lists are now sorted by `Category.sortOrder`, so their order did not change.
+- **Labels in two places, checked.** The API still sends `CATEGORY_LABELS` from `src/lib/v1/taxonomy.ts`, and the table holds the same labels. `scripts/verify-category-table.ts` fails if the migration's seed, the table, the rollback enum and the code disagree.
+- **Reference data on `db push` schemas.** `db push` builds an empty Category table, and every listing insert needs a row. `prisma/category-seed.ts` fills it from the code lists; `scripts/scratch.ps1` (after every push) and `prisma/seed.ts` call it. On a migrated database the migration seeds it.
+- **Backups.** Category is dumped like any other table. Because the migration also seeds it, `pg-backup.ts restore` and `drill` empty it before loading a dump that carries it (`SEEDED_BY_MIGRATION`).
+
+**The migration is hand-written.** `prisma migrate diff` generates `DROP COLUMN "category"` + `ADD COLUMN "categoryId" NOT NULL` for this change, which loses every value. In one transaction, the migration:
+
+1. renames the enum to `Category_old`, because a table brings a row type of its own name and `CREATE TABLE "Category"` would otherwise fail with `type "Category" already exists` (found in the rehearsal);
+2. creates and seeds Category, and asserts the seed equals the enum (labels and order);
+3. adds `categoryId` to both tables, backfills it from `category::text`, and checks every row;
+4. sets NOT NULL, adds both FKs, re-keys the PK and indexes, and drops the old columns and then the enum.
+
+It is applied by `scripts/apply-category-lookup.ts`, never by `migrate deploy` on live. The script takes Prisma's migrate lock and locks both tables NOWAIT. Before commit, every other table's count, each category's count on both tables, and the Leaves ledger must be unchanged. The reverse (`prisma/rollback/20261008000000_category_lookup_table.sql`, run with `apply-category-lookup.ts reverse`) restores the enum, the columns, the PK and the indexes under their original names. The only visible difference after a reverse is that `category` becomes the last column of its table.
+
+**Rehearsal (8 Oct 2026)** on `scratch_category`, a copy of the verified backup `baylo-pg-20261008-082324.sql` (27 tables, 270 rows, ledger 214 = 214; restore drill passed):
+
+| Step | Tables | Rows | Item | ItemWantedCategory | Category | Ledger |
+|---|---|---|---|---|---|---|
+| Before | 27 | 270 | 8 | 25 | (none) | 214 = 214 |
+| After forward | 28 | 290 | 8 | 25 | 20 | 214 = 214 |
+| After reverse | 27 | 270 | 8 | 25 | (none) | 214 = 214 |
+| After forward again | 28 | 290 | 8 | 25 | 20 | 214 = 214 |
+
+Per-category counts on Item and ItemWantedCategory were identical at every step. After forward, `prisma migrate status` reports the copy up to date, and `prisma migrate diff` from the copy to `schema.prisma` shows nothing for Category, Item or ItemWantedCategory. It does show two Achievement lines: pre-existing drift between the migration chain and the schema. Separately, live differs from the schema on one `Achievement.icon` default. Neither involves this change.
 
 ---
 

@@ -1,11 +1,11 @@
 // Baylo database, schema v2 (final). Generated from prisma/schema.prisma on
-// feature/schema-v2. Paste into https://dbdiagram.io. 27 tables, 51 foreign keys.
+// feature/schema-v2. Paste into https://dbdiagram.io. 28 tables, 53 foreign keys.
 // Prisma model names are the Postgres table names (no @@map). _prisma_migrations is omitted.
 // "cuid()" ids and @updatedAt timestamps are set by the Prisma client, not by a DB default.
 
 Project baylo {
   database_type: 'PostgreSQL'
-  Note: 'Baylo peer-to-peer barter app. Schema v2: 34 tables consolidated to 25, then Subscription and Suspension split out of User (27). See docs/schema-v2.md.'
+  Note: 'Baylo peer-to-peer barter app. Schema v2: 34 tables consolidated to 25, then Subscription and Suspension split out of User (27), then the Category lookup table (28). See docs/schema-v2.md.'
 }
 
 // ===================== Identity & auth =====================
@@ -125,7 +125,7 @@ Table "Item" {
   "id" text [pk, note: 'cuid(), set by Prisma']
   "title" text [not null]
   "description" text [not null]
-  "category" "Category" [not null]
+  "categoryId" text [not null, note: 'FK to Category.id: the category code, e.g. ELECTRONICS']
   "condition" "Condition" [not null]
   "valueLeaves" integer
   "bracket" integer [note: 'database-generated. STORED GENERATED from valueLeaves (brackets 1..8+). Never written by the app']
@@ -152,7 +152,8 @@ Table "Item" {
     ("isPerishable", "status", "createdAt")
     ("status", "bracket")
     ("status", "moderationHiddenAt")
-    ("valuationSource", "category")
+    ("valuationSource", "categoryId")
+    "categoryId"
     "userId"
   }
 
@@ -174,14 +175,22 @@ Table "ItemImage" {
 
 Table "ItemWantedCategory" {
   "itemId" text [not null]
-  "category" "Category" [not null]
+  "categoryId" text [not null]
 
   indexes {
-    ("itemId", "category") [pk]
-    "category"
+    ("itemId", "categoryId") [pk]
+    "categoryId"
   }
 
-  Note: '''Categories the owner wants in exchange for a listing (drives CATEGORY_MATCH notifications).'''
+  Note: '''Junction of the Item <-> Category many-to-many: the categories the owner wants in exchange for a listing, one row per item per category (drives CATEGORY_MATCH notifications).'''
+}
+
+Table "Category" {
+  "id" text [pk, note: 'the stable code, e.g. ELECTRONICS (natural key; never renamed)']
+  "label" text [not null, unique, note: 'display name, e.g. Electronics']
+  "sortOrder" smallint [not null, unique, note: 'display order (the old enum order)']
+
+  Note: '''Lookup table of listing categories (20 rows, seeded by the migration). Replaced enum Category on 8 Oct 2026. Referenced by Item.categoryId (what a listing is) and ItemWantedCategory.categoryId (what its owner wants).'''
 }
 
 // ===================== Trading =====================
@@ -605,7 +614,7 @@ Table "ItemSafeZone" {
   Note: '''Which safe hubs a listing's owner is willing to meet at (many-to-many Item <-> SafeZoneHub).'''
 }
 
-// ===================== Foreign keys (51) =====================
+// ===================== Foreign keys (53) =====================
 // ">" = many-to-one, "-" = one-to-one. Delete actions as declared (or Prisma's default:
 // Restrict for a required relation, SetNull for an optional one). All updates cascade.
 
@@ -617,6 +626,8 @@ Ref "AuthToken_user": "AuthToken"."userId" > "User"."id" [delete: cascade, updat
 Ref "Item_user": "Item"."userId" > "User"."id" [delete: cascade, update: cascade]
 Ref "ItemImage_item": "ItemImage"."itemId" > "Item"."id" [delete: cascade, update: cascade]
 Ref "ItemWantedCategory_item": "ItemWantedCategory"."itemId" > "Item"."id" [delete: cascade, update: cascade]
+Ref "Item_category": "Item"."categoryId" > "Category"."id" [delete: restrict, update: cascade]
+Ref "ItemWantedCategory_category": "ItemWantedCategory"."categoryId" > "Category"."id" [delete: restrict, update: cascade]
 Ref "Trade_sender": "Trade"."senderId" > "User"."id" [delete: restrict, update: cascade]
 Ref "Trade_receiver": "Trade"."receiverId" > "User"."id" [delete: restrict, update: cascade]
 Ref "Trade_requestedItem": "Trade"."requestedItemId" > "Item"."id" [delete: restrict, update: cascade]
@@ -699,29 +710,6 @@ Enum "QuestKind" {
   "COMPLETE_TRADE"
   "COMPLETE_BRIDGE_TRADE"
   "COMPLETE_SAFEZONE_TRADE"
-}
-
-Enum "Category" {
-  "ELECTRONICS"
-  "CLOTHING"
-  "BAGS"
-  "BEAUTY"
-  "ACCESSORIES"
-  "FURNITURE"
-  "BOOKS"
-  "GAMING"
-  "SPORTS"
-  "BIKES"
-  "TOYS"
-  "TOOLS"
-  "MUSIC"
-  "ART"
-  "COLLECTIBLES"
-  "PETS"
-  "PLANTS"
-  "FOOD"
-  "SERVICES"
-  "OTHER"
 }
 
 Enum "Condition" {
@@ -1000,6 +988,7 @@ TableGroup "Listings" {
   "Item"
   "ItemImage"
   "ItemWantedCategory"
+  "Category"
 }
 
 TableGroup "Trading" {
