@@ -70,6 +70,7 @@ function head(s: string) {
   console.log(`\n── ${s} ${"─".repeat(Math.max(0, 66 - s.length))}`)
 }
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any -- untyped JSON from the wire
 type Json = Record<string, any>
 
 async function get(path: string, token: string): Promise<{ status: number; json: Json }> {
@@ -267,7 +268,12 @@ async function main() {
   // ── 4 ──
   head("4  the SENDER counters; both read the counter, agreement cleared")
   const at2 = new Date(at.getTime() + 60 * 60 * 1000)
-  const counter = await post(`/api/v1/trades/${trade.id}/meetup`, sender.token, { hubId: hubB.id, at: at2.toISOString() })
+  // A counter names the plan it replaces (8 Oct 2026); verify-hub-suggestion
+  // covers what happens without it.
+  const counter = await post(`/api/v1/trades/${trade.id}/meetup`, sender.token, {
+    hubId: hubB.id, at: at2.toISOString(),
+    replaces: { hubId: hubA.id, at: at.toISOString(), proposedBy: "receiver" },
+  })
   check("counter accepted (200)", counter.status === 200, counter)
   const s4 = await listRow(sender.token, trade.id)
   const r4 = await listRow(receiver.token, trade.id)

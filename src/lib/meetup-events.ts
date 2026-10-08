@@ -48,7 +48,12 @@ export type MeetupChangedPayload = {
 }
 
 export async function notifyMeetupChanged(userId: string, payload: MeetupChangedPayload): Promise<void> {
-  await pusher.trigger(`private-user-${userId}`, MEETUP_CHANGED_EVENT, payload).catch(() => {
+  // try/await, not `.catch()` on the call: a trigger that throws before it
+  // returns a promise (a bad channel name, a missing key) would skip a
+  // `.catch()` chained onto it and reach the route as a 500.
+  try {
+    await pusher.trigger(`private-user-${userId}`, MEETUP_CHANGED_EVENT, payload)
+  } catch {
     // See the header. The plan is saved; the partner's next refetch will show it.
-  })
+  }
 }

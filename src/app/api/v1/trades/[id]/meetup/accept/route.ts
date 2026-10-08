@@ -108,11 +108,44 @@ export async function POST(
     return conflict("That plan changed before you agreed. Have another look.")
   }
 
-  const updated = await prisma.trade.update({
-    where: { id },
+  /*
+   * Conditional on the plan read above, in the UPDATE's own WHERE. The echo
+   * checks compare against a read; a counter landing between that read and
+   * this write would otherwise be marked agreed by somebody who never saw it.
+   */
+  const written = await prisma.trade.updateMany({
+    where: {
+      id,
+      status: "ACCEPTED",
+      meetupHubId: trade.meetupHubId,
+      meetupAt: trade.meetupAt,
+      meetupProposedBySender: trade.meetupProposedBySender,
+      meetupAgreedAt: null,
+    },
     data: { meetupAgreedAt: new Date() },
-    select: { id: true, ...MEETUP_SELECT },
   })
+
+  const updated = await prisma.trade.findUnique({
+    where: { id },
+    select: { id: true, status: true, ...MEETUP_SELECT },
+  })
+  if (!updated) return notFound("Trade not found")
+
+  if (written.count === 0) {
+    const samePlan =
+      updated.meetupHubId === trade.meetupHubId &&
+      updated.meetupAt?.getTime() === trade.meetupAt.getTime() &&
+      updated.meetupProposedBySender === trade.meetupProposedBySender
+    if (samePlan && updated.meetupAgreedAt) {
+      // A double tap racing itself: the other request agreed this same plan.
+      return ok({ plan: v1MeetupPlan(updated), alreadyAgreed: true })
+    }
+    if (updated.status !== "ACCEPTED") return conflict("That trade has moved past arranging a meeting.")
+    return conflict("That plan changed before you agreed. Have another look.", {
+      rule: "MEETUP_CHANGED",
+      plan: v1MeetupPlan(updated),
+    })
+  }
 
   const partnerId = viewerIsSender ? trade.receiverId : trade.senderId
 
