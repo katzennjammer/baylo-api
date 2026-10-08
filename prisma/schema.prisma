@@ -373,7 +373,11 @@ model Item {
   id          String    @id @default(cuid())
   title       String
   description String    @db.Text
-  category    Category
+  /// The category CODE ("ELECTRONICS"), a foreign key to Category.id. Column
+  /// "categoryId" in the database; named `category` here so every query, the
+  /// API and the mobile app keep the string they always used. See Category.
+  category    String    @map("categoryId")
+  categoryRef Category  @relation(fields: [category], references: [id])
   condition   Condition
   // The FINAL value: what the owner is asking, after any override they made.
   // This is the number every other surface reads. The owner may set it lower
@@ -567,6 +571,8 @@ model Item {
   @@index([status, moderationHiddenAt])
   // The comparables lookup: same source, same category.
   @@index([valuationSource, category])
+  // FK-backing index for Category (the composite above does not lead with it).
+  @@index([category])
   // FK-backing indexes. MySQL/InnoDB created these implicitly for every
   // foreign key; Postgres does not, and neither does Prisma on Postgres.
   // Declared so the migration to Postgres keeps every index the live
@@ -612,13 +618,47 @@ model ItemImage {
 /// The composite PK makes a repeated category impossible, which the array
 /// never enforced. The `category` index is what the matcher's
 /// "who wants FOOD?" lookup reads; it replaces the GIN index on the array.
+///
+/// The junction of a many-to-many: Item <-> ItemWantedCategory <-> Category
+/// (Category lookup table, 8 Oct 2026). One row per item per wanted category,
+/// exactly as before; only the column became a foreign key. Like
+/// Item.category, the field is `category` (the code) on column "categoryId".
 model ItemWantedCategory {
-  itemId   String
-  category Category
-  item     Item     @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  itemId      String
+  category    String   @map("categoryId")
+  item        Item     @relation(fields: [itemId], references: [id], onDelete: Cascade)
+  categoryRef Category @relation(fields: [category], references: [id])
 
   @@id([itemId, category])
   @@index([category])
+}
+
+/// WHAT A LISTING IS: the lookup table that replaced `enum Category`
+/// (8 Oct 2026, migration 20261008000000_category_lookup_table).
+///
+/// A NATURAL KEY, ON PURPOSE. `id` is the stable code ("ELECTRONICS") that the
+/// API, the mobile app, the search assistant and every stored row already use,
+/// so Item.categoryId and ItemWantedCategory.categoryId hold the same strings
+/// the enum column held and no client changed. A code is never renamed (the
+/// apps branch on it); `label` is what changes. Deleting a category that any
+/// listing uses is refused (RESTRICT).
+///
+/// THE 20 ROWS ARE REFERENCE DATA, not user data. The migration seeds them;
+/// a schema built by `db push` gets them from prisma/category-seed.ts
+/// (scripts/scratch.ps1 -Push and prisma/seed.ts both call it). The labels
+/// must equal CATEGORY_LABELS in @/lib/v1/taxonomy, which is still what the API
+/// sends; scripts/verify-category-table.ts fails if the two differ.
+///
+/// `sortOrder` is the old enum's declaration order. Postgres sorted the enum
+/// in that order, not alphabetically, and lists such as `lookingFor` keep it
+/// by sorting on this column.
+model Category {
+  id        String @id
+  label     String @unique
+  sortOrder Int    @unique @db.SmallInt
+
+  items    Item[]
+  wantedBy ItemWantedCategory[]
 }
 
 /// ONE DEAL, FROM PROPOSAL TO HANDOFF, IN ONE ROW (schema v2).
@@ -1058,28 +1098,7 @@ model SwapCode {
   @@index([userId])
 }
 
-enum Category {
-  ELECTRONICS
-  CLOTHING
-  BAGS
-  BEAUTY
-  ACCESSORIES
-  FURNITURE
-  BOOKS
-  GAMING
-  SPORTS
-  BIKES
-  TOYS
-  TOOLS
-  MUSIC
-  ART
-  COLLECTIBLES
-  PETS
-  PLANTS
-  FOOD
-  SERVICES
-  OTHER
-}
+// `enum Category` was here until 8 Oct 2026; it is now the Category table.
 
 enum Condition {
   NEW
