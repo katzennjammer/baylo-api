@@ -18,10 +18,12 @@
 // ── WHAT IT WRITES: DATA ONLY, AND WHY THAT IS ENOUGH HERE ──────────────────
 //
 // The schema is not in the dump. It does not need to be: it is in this repo,
-// as prisma/migrations/20260915000000_postgres_baseline, which builds all 25
-// tables, 20 enum types, 55 indexes and 48 foreign keys from empty and is the
-// source of truth for them. A restore is therefore two steps, and the file
-// says so in its own header:
+// as prisma/migrations, starting from 20260915000000_postgres_baseline (the
+// original 25 tables, 20 enum types, 55 indexes and 48 foreign keys) and
+// built forward by every later migration to today's 28 tables, which is the
+// source of truth for them. The dump's header lists the migrations it was
+// taken under. A restore is therefore two steps, and the file says so in its
+// own header:
 //
 //     npx prisma migrate deploy                       (build the empty schema)
 //     npx tsx scripts/pg-backup.ts restore <file>     (put the rows back)
@@ -318,6 +320,25 @@ function trailerCounts(sql: string): [string, number][] {
   })
 }
 
+// Tables a MIGRATION fills with reference rows, which a dump also carries in
+// full: Category (20261008000000_category_lookup_table seeds its 20 rows). A
+// schema built from the migrations therefore already holds them, and loading
+// the dump on top would collide on the primary key. The dump is the truth, so
+// restore and drill empty these first, in the same transaction, when the dump
+// has the table. Nothing references them yet at that point: every other table
+// is still empty.
+const SEEDED_BY_MIGRATION = ["Category"]
+
+async function clearSeeded(g: { query(sql: string): Promise<unknown> }, schema: string, sql: string, present: readonly string[]) {
+  const inDump = new Set(trailerCounts(sql).map(([t]) => t))
+  for (const t of SEEDED_BY_MIGRATION) {
+    if (inDump.has(t) && present.includes(t)) {
+      await g.query(`DELETE FROM ${q(schema, t)}`)
+      console.log(`  cleared ${t} (seeded by its migration; the dump carries its rows)`)
+    }
+  }
+}
+
 async function readDump(inPath: string): Promise<string> {
   if (!existsSync(inPath)) { console.error(`no such file: ${inPath}`); process.exit(2) }
   const sql = await readFile(inPath, "utf8")
@@ -445,6 +466,7 @@ async function restore(inPath: string, force: boolean) {
       if (!tables.length) throw new GuardError(`"${schema}" has no tables: build its structure first (prisma migrate deploy)`)
       const occupied: string[] = []
       for (const t of tables) {
+        if (SEEDED_BY_MIGRATION.includes(t)) continue // reference rows; cleared below
         const n = Number((await g.query(`SELECT count(*) AS n FROM ${q(schema, t)}`)).rows[0].n)
         if (n > 0) occupied.push(`${t}=${n}`)
       }
@@ -456,6 +478,7 @@ async function restore(inPath: string, force: boolean) {
         await g.query(`TRUNCATE ${tables.map((t) => q(schema, t)).join(", ")} CASCADE`)
         console.log(`  --force: truncated ${tables.length} tables in "${schema}" (same transaction)`)
       }
+      await clearSeeded(g, schema, sql, tables)
 
       await g.run(batch)
 
@@ -515,6 +538,8 @@ async function drill(inPath: string) {
       for (const m of chain) await g.run(m.batch)
       const tables = Number((await g.query(`SELECT count(*) AS n FROM pg_tables WHERE schemaname = $1`, [DRILL_SCHEMA])).rows[0].n)
       console.log(`  schema built: ${tables} tables`)
+      const built = (await g.query(`SELECT tablename FROM pg_tables WHERE schemaname = $1`, [DRILL_SCHEMA])).rows.map((r) => String(r.tablename))
+      await clearSeeded(g, DRILL_SCHEMA, sql, built)
       console.log(`  restoring ${inPath}`)
       await g.run(batch)
 

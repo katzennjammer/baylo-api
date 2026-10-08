@@ -35,7 +35,7 @@ import { decideItemValue } from "../src/lib/valuation-server"
 import { findCategoryMatches } from "../src/lib/category-match"
 import { valueCap } from "../src/lib/trade-rules"
 import { bracketOf } from "../src/lib/brackets"
-import type { Category } from "@/generated/prisma/client"
+import type { Category } from "@/lib/v1/taxonomy"
 
 const RUN_TAG = `verify-orgs-${Date.now()}`
 

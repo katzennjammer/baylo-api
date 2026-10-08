@@ -87,6 +87,7 @@ import { PrismaPg } from "@prisma/adapter-pg"
 import bcrypt from "bcryptjs"
 import { SAFE_ZONE_HUB_SEED } from "../scripts/safezone-hub-data"
 import { requireScratchSchema, targetSchema } from "../scripts/lib/live-guard"
+import { seedCategories } from "./category-seed"
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Client
@@ -718,6 +719,9 @@ async function main() {
   console.log(`\n  seeding \`${db}\`\n`)
 
   const passwordHash = await bcrypt.hash(SEED_PASSWORD, BCRYPT_ROUNDS)
+
+  // Before any listing: Item.categoryId is a foreign key to these rows.
+  console.log(`  categories ${await seedCategories(prisma)} (reference data)`)
 
   const hubs = await seedHubs()
   console.log(`  hubs      ${hubs.seeded} Safe-Zone Hubs${hubs.held ? ` (${hubs.held} held back: no verified coordinate)` : ""}`)

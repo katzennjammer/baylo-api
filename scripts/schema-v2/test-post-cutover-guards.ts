@@ -12,10 +12,12 @@
 //      only on the connection. If the guard were wrong, there is nothing at
 //      that address to harm.
 //   3  the server's startup gate (checkV2Database, what instrumentation.ts runs):
-//      the v2 copy STARTS, the pre-v2 copy REFUSES, and live `public`, still
-//      pre-v2, REFUSES. Every one of these is a read (to_regclass lookups).
+//      the v2 copy STARTS, the pre-v2 copy REFUSES, and live `public` REFUSES
+//      until it has the Category table (8 Oct 2026) and STARTS after. Every
+//      one of these is a read (to_regclass lookups).
 //   4  live untouched: the same snapshot before and after
 import { spawnSync } from "node:child_process"
+import { Client } from "pg"
 import { refusal, commandOf } from "../../prisma/command-guard"
 import { layoutVerdict, V2_ONLY_TABLES, PRE_V2_ONLY_TABLES, assertV2Schema } from "../../src/lib/db-schema"
 import { liveSnapshot, liveUrl } from "../lib/live-snapshot"
@@ -76,7 +78,17 @@ async function main() {
   ok(g2.code === 1 && /REFUSING to start: schema "[^"]+" is not in the v2 layout/.test(g2.out) && /still has pre-v2/.test(g2.out), `${OLDCOPY} (pre-v2): REFUSES`)
   const g3 = gate(undefined)
   console.log(`       | ${g3.out.trim().split(/\r?\n/).filter((l) => /schema v2/.test(l)).join(" | ").slice(0, 200)}`)
-  ok(g3.code === 1 && /schema "public" is not in the v2 layout/.test(g3.out) && /live has not been migrated/.test(g3.out), "public (live, still pre-v2): REFUSES")
+  // Live has been v2 since the 5 Oct cutover, so "public is pre-v2" no longer
+  // holds. Since 8 Oct the gate also needs the Category table: live REFUSES
+  // (with the Category message) until 20261008000000_category_lookup_table is
+  // applied there, and STARTS after. Which one is expected is read, not assumed.
+  const liveHasCategory = await (async () => {
+    const pg = new Client({ connectionString: liveUrl() })
+    await pg.connect()
+    try { return Boolean((await pg.query(`SELECT to_regclass('public."Category"') IS NOT NULL AS ok`)).rows[0].ok) } finally { await pg.end() }
+  })()
+  if (liveHasCategory) ok(g3.code === 0 && /v2 layout confirmed/.test(g3.out), "public (live, Category migrated): STARTS")
+  else ok(g3.code === 1 && /schema "public" has no "Category" table/.test(g3.out), "public (live, Category not yet migrated): REFUSES")
 
   console.log("\n4. Live untouched")
   const after = await liveSnapshot()

@@ -72,6 +72,11 @@ try {
       $env:DATABASE_URL = $url
       npx prisma db push 2>&1 | Select-Object -Last 1
       if ($LASTEXITCODE -ne 0) { throw "db push failed" }
+      # db push builds an EMPTY Category table, and every listing insert needs
+      # one of its rows (foreign key). The migration seeds them on live; here
+      # nothing does unless we do (prisma/category-seed.ts).
+      npx tsx --env-file=.env scripts/seed-categories.ts
+      if ($LASTEXITCODE -ne 0) { throw "seed-categories failed" }
     }
   }
 

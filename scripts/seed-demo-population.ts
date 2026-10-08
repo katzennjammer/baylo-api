@@ -87,7 +87,7 @@ import { decidePerishableValue } from "../src/lib/perishable"
 import { bracketOf } from "../src/lib/brackets"
 import { ORGS, PERISHABLE, PERISHABLE_EXTRA, STANDARD, type OrgSeed, type Row } from "./lib/demo-population-catalogue"
 import LISTING_IMAGES from "./lib/demo-listing-images.json"
-import type { Category } from "@/generated/prisma/client"
+import type { Category } from "@/lib/v1/taxonomy"
 
 const DOMAIN = "baylo-demo.test"
 const ID_PREFIX = "demo-pop-"

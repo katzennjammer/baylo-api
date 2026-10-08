@@ -43,8 +43,13 @@ export function assertV2Schema(schema: string): void {
   }
 }
 
-/** Tables that exist ONLY in the v2 layout, and tables that exist ONLY before it. */
-export const V2_ONLY_TABLES = ["AuthToken", "ItemImage", "ItemWantedCategory", "ModerationCase", "UserProgress", "SwapCode", "Like", "Comment", "Trade"] as const
+/**
+ * Tables that exist ONLY in the v2 layout, and tables that exist ONLY before it.
+ * "Category" (8 Oct 2026, 20261008000000_category_lookup_table) is here so that
+ * this code refuses to START on a database that has not had that migration,
+ * rather than failing every listing query with a missing "categoryId" column.
+ */
+export const V2_ONLY_TABLES = ["AuthToken", "ItemImage", "ItemWantedCategory", "ModerationCase", "UserProgress", "SwapCode", "Like", "Comment", "Trade", "Category"] as const
 export const PRE_V2_ONLY_TABLES = ["Offer", "TradeRequest", "TaskCompletion", "RefreshToken", "OrganizationMember", "QuestAssignment", "UserAchievement", "Report", "ListingAppeal"] as const
 
 /** "v2" only when every v2 table is present and every pre-v2 table is gone. Pure, so it is testable without a database. */

@@ -55,6 +55,10 @@ export async function checkV2Database() {
     const elapsed = Date.now() - t0
 
     const verdict = layoutVerdict(new Set(rows.filter((r) => r.present).map((r) => r.t)))
+    if (!verdict.ok && verdict.missing.length === 1 && verdict.missing[0] === "Category" && !verdict.leftover.length) {
+      throw new Error(`[schema v2] REFUSING to start: schema "${schema}" has no "Category" table. This code needs the ` +
+        "migration 20261008000000_category_lookup_table (scripts/apply-category-lookup.ts); see docs/schema-v2.md section 6.")
+    }
     if (!verdict.ok) {
       throw new Error(`[schema v2] REFUSING to start: schema "${schema}" is not in the v2 layout` +
         (verdict.missing.length ? ` (missing ${verdict.missing.join(", ")})` : "") +

@@ -2,22 +2,29 @@
 //
 // Was the enum array `Item.lookingForCategories`; is now ItemWantedCategory
 // rows (itemId, category). The API still sends `lookingForCategories:
-// Category[]`, built here, so no client changes.
+// Category[]`, built here, so no client changes. Since 8 Oct 2026 `category`
+// is the code column "categoryId", a foreign key to the Category table.
 //
 //   READ   select `wantedCategories: WANTED_CATEGORIES`, then wantedList(rows).
 //   WRITE  wantedCategoriesCreate() for a new listing,
 //          replaceWantedCategories() for an edit.
 // No rows is the steady state -- see the ItemWantedCategory model note.
-import type { Category, Prisma } from "@/generated/prisma/client"
+import type { Prisma } from "@/generated/prisma/client"
+import type { Category } from "@/lib/v1/taxonomy"
 
-/** For `select`/`include`: `{ wantedCategories: WANTED_CATEGORIES }`. Sorted, so output is stable. */
+/**
+ * For `select`/`include`: `{ wantedCategories: WANTED_CATEGORIES }`. Sorted, so
+ * output is stable. By Category.sortOrder, NOT by the code: the enum this
+ * replaced sorted in declaration order (ELECTRONICS, CLOTHING, ...), and
+ * sorting the text would quietly reorder every `lookingFor` list.
+ */
 export const WANTED_CATEGORIES = {
   select: { category: true },
-  orderBy: { category: "asc" },
+  orderBy: { categoryRef: { sortOrder: "asc" } },
 } as const satisfies Prisma.Item$wantedCategoriesArgs
 
 /** The `lookingForCategories` array the API has always returned. */
-export function wantedList(rows: readonly { category: Category }[] | null | undefined): Category[] {
+export function wantedList(rows: readonly { category: string }[] | null | undefined): string[] {
   return (rows ?? []).map((r) => r.category)
 }
 
