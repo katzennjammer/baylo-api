@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "next dev",
     "dev:lan": "next dev -H 0.0.0.0",
+    "dev:clean": "node -e \"require('fs').rmSync('.next/dev',{recursive:true,force:true})\" && next dev",
     "dev:v2": "node scripts/v2.mjs dev",
     "v2:tsx": "node scripts/v2.mjs tsx",
     "v2:prisma": "node scripts/v2.mjs prisma",
