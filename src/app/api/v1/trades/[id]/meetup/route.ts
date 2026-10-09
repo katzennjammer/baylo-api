@@ -5,6 +5,7 @@ import prisma from "@/lib/prisma"
 import type { Prisma } from "@/generated/prisma/client"
 import { ok, unauthenticated, notFound, forbidden, conflict, fail, invalid } from "@/lib/v1/envelope"
 import { parseJsonBody } from "@/lib/v1/body"
+import { withJsonErrors } from "@/lib/v1/with-json-errors"
 import { resolveTradeParticipant } from "@/lib/trade-participant"
 import { v1Hub } from "@/lib/safe-zones"
 import { MEETUP_SELECT, allHubs, listingHubIds, proposableHub, v1MeetupPlan } from "@/lib/meetup"
@@ -135,7 +136,10 @@ const TRADE_SELECT = {
   ...MEETUP_SELECT,
 } as const
 
-export async function GET(
+export const GET = withJsonErrors("GET v1/trades/[id]/meetup", getMeetup)
+export const POST = withJsonErrors("POST v1/trades/[id]/meetup", proposeMeetup)
+
+async function getMeetup(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
@@ -198,7 +202,7 @@ export async function GET(
   })
 }
 
-export async function POST(
+async function proposeMeetup(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {

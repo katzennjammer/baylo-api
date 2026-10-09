@@ -4,6 +4,7 @@ import { resolveSession } from "@/lib/api-auth"
 import prisma from "@/lib/prisma"
 import { ok, unauthenticated, notFound, forbidden, conflict, fail } from "@/lib/v1/envelope"
 import { parseJsonBody } from "@/lib/v1/body"
+import { withJsonErrors } from "@/lib/v1/with-json-errors"
 import { resolveTradeParticipant } from "@/lib/trade-participant"
 import { MEETUP_SELECT, v1MeetupPlan } from "@/lib/meetup"
 import { notifyMeetupChanged } from "@/lib/meetup-events"
@@ -51,7 +52,9 @@ const bodySchema = z.strictObject({
   confirmAt: z.string().datetime({ offset: true }).optional(),
 })
 
-export async function POST(
+export const POST = withJsonErrors("POST v1/trades/[id]/meetup/accept", acceptMeetup)
+
+async function acceptMeetup(
   req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
