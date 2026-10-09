@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import bcrypt from "bcryptjs"
 import { resolveSession } from "@/lib/api-auth"
+import { revokeUserFamilies } from "@/lib/auth-tokens"
 import prisma from "@/lib/prisma"
 import { awardTaskAsync } from "@/lib/tasks"
 import { parseBody, updateUserSchema, deleteUserSchema } from "@/lib/validation"
@@ -50,6 +51,12 @@ export async function PATCH(req: NextRequest) {
   }
 
   const updated = await prisma.user.update({ where: { id: user.id }, data })
+
+  // A new password signs out every OTHER device. This one stays: the caller
+  // just proved the current password, and logging them out of the screen they
+  // changed it on would be a punishment. session.sid is null on the web cookie
+  // path, which keeps no phone session -- every refresh family goes.
+  if (data.password) await revokeUserFamilies(user.id, session.sid)
 
   // COMPLETE_PROFILE is awarded the moment avatar, bio and location are all
   // filled in — one-time, enforced by the task unique constraint on LeafTransaction.

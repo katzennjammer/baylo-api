@@ -14,7 +14,9 @@ import prisma from "@/lib/prisma"
  *   ACCESS  — a short-lived (15 min) HS256 JWT. Stateless: no database row, no
  *             revocation list. That is the trade being made — a stolen access
  *             token stays valid until it expires, which is why it expires fast
- *             and why the payload carries a user id and nothing else.
+ *             and why the payload carries a user id and its refresh family
+ *             (`sid`) and nothing else. The one database read it does get is
+ *             "is that family still signed in" (see resolveSession).
  *
  *   REFRESH — a 30-day opaque random string. NOT a JWT: there is nothing to
  *             read in it, and it is worthless to anyone who reads the database,
@@ -30,7 +32,7 @@ const REFRESH_TOKEN_TTL_MS = REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000
 
 // Bound to this app so a token minted here cannot be replayed against another
 // service that happens to share the secret. These are registered JWT claims,
-// not payload: the payload itself still carries only `userId`.
+// not payload: the payload itself carries only `userId` and `sid`.
 const ISSUER = "baylo"
 const AUDIENCE = "baylo-native"
 
@@ -42,9 +44,19 @@ function secretKey(): Uint8Array {
 
 // ── Access tokens ────────────────────────────────────────────────────────────
 
-/** Signs a 15-minute access token. The payload carries the user id only. */
-export async function signAccessToken(userId: string): Promise<string> {
-  return new SignJWT({ userId })
+/**
+ * Signs a 15-minute access token. The payload carries the user id and `sid`,
+ * the refresh family it was minted from.
+ *
+ * `sid` is what makes a per-device logout immediate: resolveSession() refuses
+ * an access token whose family has been revoked, instead of letting it run out
+ * its fifteen minutes. issueTokenPair() always passes it. It is optional only
+ * so the acceptance harnesses can keep minting a bare token for a fixture
+ * user; a token without one is accepted on userId alone, exactly as every
+ * token was before `sid` existed, and lives at most fifteen minutes.
+ */
+export async function signAccessToken(userId: string, sid?: string): Promise<string> {
+  return new SignJWT(sid ? { userId, sid } : { userId })
     .setProtectedHeader({ alg: "HS256" })
     .setIssuedAt()
     .setIssuer(ISSUER)
@@ -53,21 +65,28 @@ export async function signAccessToken(userId: string): Promise<string> {
     .sign(secretKey())
 }
 
+export interface AccessClaims {
+  userId: string
+  /** The refresh family this token came from. null on a pre-`sid` token. */
+  sid: string | null
+}
+
 /**
- * Returns the user id carried by a valid access token, or null.
+ * Returns the claims of a valid access token, or null.
  *
  * Null for every failure mode there is — bad signature, expired, wrong issuer
  * or audience, malformed — and the caller must not distinguish between them.
  * jose enforces `exp` itself, so an expired token lands here as null.
  */
-export async function verifyAccessToken(token: string): Promise<string | null> {
+export async function verifyAccessToken(token: string): Promise<AccessClaims | null> {
   try {
     const { payload } = await jwtVerify(token, secretKey(), {
       issuer: ISSUER,
       audience: AUDIENCE,
     })
-    const userId = payload.userId
-    return typeof userId === "string" && userId.length > 0 ? userId : null
+    const { userId, sid } = payload
+    if (typeof userId !== "string" || userId.length === 0) return null
+    return { userId, sid: typeof sid === "string" && sid.length > 0 ? sid : null }
   } catch {
     return null
   }
@@ -106,16 +125,17 @@ export interface TokenPair {
  */
 export async function issueTokenPair(userId: string, familyId?: string): Promise<TokenPair> {
   const raw = newRefreshToken()
+  const family = familyId ?? randomUUID()
   await prisma.authToken.create({
     data: {
       type: "REFRESH",
       userId,
       tokenHash: hashRefreshToken(raw),
-      familyId: familyId ?? randomUUID(),
+      familyId: family,
       expiresAt: new Date(Date.now() + REFRESH_TOKEN_TTL_MS),
     },
   })
-  return { accessToken: await signAccessToken(userId), refreshToken: raw }
+  return { accessToken: await signAccessToken(userId, family), refreshToken: raw }
 }
 
 /**
@@ -130,6 +150,27 @@ export async function issueTokenPair(userId: string, familyId?: string): Promise
 export async function revokeTokenFamily(familyId: string): Promise<number> {
   const res = await prisma.authToken.updateMany({
     where: { type: "REFRESH", familyId, revokedAt: null },
+    data: { revokedAt: new Date() },
+  })
+  return res.count
+}
+
+/**
+ * Revokes every live family the user has, except `keepFamilyId` when given.
+ *
+ * "Log out all other devices" keeps the caller's own family; a password reset
+ * keeps none, because whoever asked for the reset is not holding a session we
+ * can vouch for. `keepFamilyId` null (a cookie session, or a pre-`sid` token)
+ * keeps nothing either: there is no family to recognise as "this device".
+ */
+export async function revokeUserFamilies(userId: string, keepFamilyId: string | null = null): Promise<number> {
+  const res = await prisma.authToken.updateMany({
+    where: {
+      userId,
+      type: "REFRESH",
+      revokedAt: null,
+      ...(keepFamilyId ? { familyId: { not: keepFamilyId } } : {}),
+    },
     data: { revokedAt: new Date() },
   })
   return res.count
