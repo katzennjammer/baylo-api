@@ -3,6 +3,7 @@ import bcrypt from "bcryptjs"
 import prisma from "@/lib/prisma"
 import { parseBody, resetPasswordSchema } from "@/lib/validation"
 import { hashResetToken } from "@/lib/reset-token"
+import { revokeUserFamilies } from "@/lib/auth-tokens"
 
 export async function POST(req: NextRequest) {
   // resetPasswordSchema applies the same 8-character minimum as registration.
@@ -29,6 +30,12 @@ export async function POST(req: NextRequest) {
   })
 
   await prisma.authToken.delete({ where: { id: record.id } })
+
+  // Every device is signed out. A reset is what someone does when they think
+  // the password is known to someone else, and a session that person already
+  // holds would otherwise outlive the new password by up to thirty days. The
+  // caller here holds no session to keep: they came in through an email link.
+  await revokeUserFamilies(record.userId)
 
   return NextResponse.json({ ok: true })
 }
