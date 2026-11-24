@@ -116,7 +116,7 @@ Generated 11/24/2026. 117 cases, 117 passed, 0 failed.
 | — | Admin: Reporting and Utilities | Report Window | 11/24/2026 | Case-108 | Report page is opened with an unsupported window (?days=13) | Falls back to the default of 30 days | Performed as expected | PASSED |
 | — | Admin: Reporting and Utilities | Report Window | 11/24/2026 | Case-109 | Report page is opened with garbage or nothing | Falls back to the default of 30 days | Performed as expected | PASSED |
 | — | Admin: Reporting and Utilities | Report Window | 11/24/2026 | Case-110 | ?days is repeated in the URL | The first value is used | Performed as expected | PASSED |
-| — | Admin: Reporting and Utilities | Report Dates | 11/24/2026 | Case-111 | A date at 20:00 UTC on 21 Sep is shown | Shown in Manila time, as the next day (Sep 22, 2026) | Performed as expected | PASSED |
+| — | Admin: Reporting and Utilities | Report Dates | 11/24/2026 | Case-111 | A date at 20:00 UTC on 21 Sep is shown | Shown in Philippine time (Asia/Manila), as the next day (Sep 22, 2026) | Performed as expected | PASSED |
 | — | Admin: Reporting and Utilities | Rate Limit | 11/24/2026 | Case-112 | Client makes requests up to the limit of 3 | All three requests are allowed | Performed as expected | PASSED |
 | — | Admin: Reporting and Utilities | Rate Limit | 11/24/2026 | Case-113 | Client makes a 4th request inside the window | Refused with a Retry-After of at most the window length | Performed as expected | PASSED |
 | — | Admin: Reporting and Utilities | Rate Limit | 11/24/2026 | Case-114 | Two different clients use the same endpoint | Each has its own allowance | Performed as expected | PASSED |

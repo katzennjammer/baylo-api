@@ -179,7 +179,7 @@ util("Report Window", "Report page is opened with garbage or nothing", "Falls ba
 util("Report Window", "?days is repeated in the URL", "The first value is used", () => {
   assert.equal(normaliseWindowDays(["90", "7"]), 90)
 })
-util("Report Dates", "A date at 20:00 UTC on 21 Sep is shown", "Shown in Manila time, as the next day (Sep 22, 2026)", () => {
+util("Report Dates", "A date at 20:00 UTC on 21 Sep is shown", "Shown in Philippine time (Asia/Manila), as the next day (Sep 22, 2026)", () => {
   assert.equal(formatReportDate(new Date("2026-09-21T20:00:00Z")), "Sep 22, 2026")
 })
 

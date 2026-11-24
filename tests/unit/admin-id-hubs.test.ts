@@ -28,8 +28,8 @@ const createHub = async (body: unknown) => {
   return { status: res.status, json: await res.json() }
 }
 const HUB = {
-  name: "City Hall Lobby", type: "BARANGAY_HALL", address: "Rizal St", latitude: 7.07, longitude: 125.61,
-  city: "Davao", landmark: "Front desk", reason: "New partner site",
+  name: "City Hall Lobby", type: "BARANGAY_HALL", address: "Osmena Blvd", latitude: 10.3157, longitude: 123.8854,
+  city: "Cebu City", landmark: "Front desk", reason: "New partner site",
 }
 
 // ── ID verification ─────────────────────────────────────────────────────────
@@ -96,7 +96,7 @@ c("Create Hub", "Admin leaves coordinates at (0, 0)", "Refused (400) NULL_ISLAND
 })
 
 // ── Hub form (screen rules) ─────────────────────────────────────────────────
-const form = { name: "Plaza", address: "Rizal St", city: "Davao", latitude: 7.07, longitude: 125.6 }
+const form = { name: "Plaza", address: "Osmena Blvd", city: "Cebu City", latitude: 10.3157, longitude: 123.8854 }
 c("Hub Form", "Admin fills in every required field", "Save is allowed", () => {
   assert.equal(canSaveHub(form), true)
 })
