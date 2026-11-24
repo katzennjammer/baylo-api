@@ -7,6 +7,7 @@ import { awardTaskAsync } from "@/lib/tasks"
 import { parseBody, updateUserSchema, deleteUserSchema } from "@/lib/validation"
 import { deleteAccount } from "./delete-account"
 import { destroyIdImage } from "@/lib/id-verification-image"
+import { isAllowedImageUrl } from "@/lib/safe-image-url"
 
 export async function PATCH(req: NextRequest) {
   const session = await resolveSession()
@@ -32,7 +33,16 @@ export async function PATCH(req: NextRequest) {
   // unreachable for credentials users: the award below requires a non-empty
   // avatar, and no request could ever set one. Google users got theirs from the
   // OAuth profile and so were the only ones who could complete the task.
-  if (typeof avatar === "string") data.avatar = avatar.trim() || null
+  if (typeof avatar === "string") {
+    const next = avatar.trim() || null
+    // A new avatar must be one of our Cloudinary uploads -- not an arbitrary URL
+    // every viewer's phone would fetch (a tracking pixel, an internal host).
+    // Unchanged is allowed, so a Google user's existing photo still round-trips.
+    if (next && next !== user.avatar && !isAllowedImageUrl(next).ok) {
+      return NextResponse.json({ error: "Avatar must be an uploaded image" }, { status: 400 })
+    }
+    data.avatar = next
+  }
 
   if (newPassword) {
     // Length is enforced by passwordSchema before we get here.

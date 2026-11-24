@@ -2,11 +2,14 @@ import { NextRequest } from "next/server"
 import { z } from "zod"
 import { resolveSession } from "@/lib/api-auth"
 import prisma from "@/lib/prisma"
+import { expirePerishableItems } from "@/lib/perishable"
 import { preciseAccessItemIds } from "@/lib/item-visibility"
 import { blockDirection } from "@/lib/blocking"
 import { getLeafRank } from "@/lib/task-constants"
 import { loadTrustTiers } from "@/lib/trust-tiers"
 import { ORG_PUBLIC_SELECT, orgBadge } from "@/lib/organizations"
+import { isIdVerified } from "@/lib/id-verification"
+import { SUBSCRIPTION_SELECT, hasPremiumAccess } from "@/lib/premium"
 import { ok, unauthenticated, invalid, notFound } from "@/lib/v1/envelope"
 import { parseQuery, paginationShape } from "@/lib/v1/query"
 import { decodeCursor, encodeCursor, olderThan, paginate } from "@/lib/v1/cursor"
@@ -68,6 +71,10 @@ export async function GET(
     return notFound("Profile not found")
   }
 
+  // A perishable whose window ran out is not a listing: move it out of
+  // AVAILABLE before it is counted or shown, as profile/me and browse do.
+  await expirePerishableItems(prisma, { userId: id })
+
   // ── 1 ──
   const user = await prisma.user.findUnique({
     where: { id },
@@ -76,6 +83,9 @@ export async function GET(
       rating: true, totalTrades: true, lifetimeLeaves: true,
       isVerified: true, createdAt: true, deletedAt: true,
       isOrgAccount: true,
+      // For the PREMIUM tag beside the name: this account's own term, so a
+      // shop's storefront reads the shop's Premium, not its owner's.
+      subscriptions: SUBSCRIPTION_SELECT,
       /**
        * The organisation this profile IS, when it is one. Null for a person.
        */
@@ -111,8 +121,9 @@ export async function GET(
   // 404 here matches resolveSession(), which refuses to authenticate one.
   if (!user || user.deletedAt) return notFound("Profile not found")
 
-  const [tiers, displayedAchievements] = await Promise.all([
+  const [tiers, idVerified, displayedAchievements] = await Promise.all([
     loadTrustTiers(prisma, [{ id: user.id, rating: user.rating }]),
+    isIdVerified(user.id),
     prisma.$queryRaw<Array<{
       id: string
       name: string
@@ -210,6 +221,8 @@ export async function GET(
         // badge REPLACES the trust-tier badge rather than sitting beside it,
         // and a shape that can carry both is one where a client renders both.
         trustTier: user.organization ? null : tiers.get(user.id) ?? null,
+        /** A live Premium or VIP term. Drives the PREMIUM tag beside the name. */
+        premium: hasPremiumAccess(user.subscriptions),
         /**
          * The organisation block, or null for a person. THE CLIENT BRANCHES ON
          * THIS and on nothing else: a square logo instead of a round avatar, a
@@ -235,6 +248,12 @@ export async function GET(
             }
           : null,
         isVerified: user.isVerified,
+        /**
+         * Government ID approved (or grandfathered) -- NOT `isVerified`, which
+         * only means the email was confirmed. The profile's trust-tier pill
+         * shows its checkmark only when this is true.
+         */
+        idVerified,
         createdAt: user.createdAt,
         // NOT returned, and deliberately: email, leaves, tasks, impact.
       },

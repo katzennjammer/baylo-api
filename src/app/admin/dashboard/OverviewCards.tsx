@@ -66,7 +66,8 @@ export function OverviewCards({ metrics }: { metrics: OverviewMetric[] }) {
                 >
                   {metric.label}
                 </span>
-                {active && metric.tone === "queue" ? (
+                {/* Nothing at zero: a dot on every tile says nothing about any of them. */}
+                {!active ? null : metric.tone === "queue" ? (
                   <PulsingDot color={accent} />
                 ) : (
                   <span style={{ width: 8, height: 8, borderRadius: 999, background: accent, flexShrink: 0 }} aria-hidden="true" />

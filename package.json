@@ -9,9 +9,10 @@
     "dev:v2": "node scripts/v2.mjs dev",
     "v2:tsx": "node scripts/v2.mjs tsx",
     "v2:prisma": "node scripts/v2.mjs prisma",
-    "build": "next build",
+    "build": "prisma generate && next build",
     "start": "next start",
     "start:lan": "next start -H 0.0.0.0",
+    "present": "next build && next start -H 0.0.0.0",
     "lint": "eslint",
     "seed": "tsx prisma/seed.ts"
   },
@@ -28,7 +29,7 @@
     "leaflet": "^1.9.4",
     "lucide-react": "^1.47.0",
     "mariadb": "^3.5.3",
-    "next": "16.2.9",
+    "next": "^16.3.8",
     "next-auth": "^5.0.0-beta.32",
     "nodemailer": "^7.0.13",
     "pg": "^8.23.0",
@@ -38,7 +39,7 @@
     "react": "19.2.4",
     "react-dom": "19.2.4",
     "react-hot-toast": "^2.6.0",
-    "sharp": "^0.34.5",
+    "sharp": "^0.35.5",
     "zod": "^4.4.3"
   },
   "devDependencies": {
@@ -50,7 +51,7 @@
     "@types/react-dom": "^19",
     "dotenv": "^17.4.2",
     "eslint": "^9",
-    "eslint-config-next": "16.2.9",
+    "eslint-config-next": "^16.3.8",
     "tailwindcss": "^4",
     "tsx": "^4.20.3",
     "typescript": "^5"

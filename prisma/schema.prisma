@@ -52,6 +52,20 @@ model User {
   avatar      String?
   bio         String?  @db.Text
   location    String?
+
+  /// The Expo push token of the phone this account last signed in on, set by
+  /// POST /api/v1/push-token and cleared on sign-out or when Expo reports the
+  /// device gone. ONE PHONE PER ACCOUNT, deliberately: a column rather than a
+  /// device table, to keep the schema under its table budget. See @/lib/push.
+  pushToken   String?  @db.Text
+  /// People whose chat messages send this account no push (owner-approved
+  /// column, 4 Nov 2026). Their messages still arrive; only the alert is off.
+  mutedChatUserIds String[] @default([])
+  /// "Delete chat" for this account only: partnerId -> ISO time. Messages with
+  /// that partner up to then are hidden from this account; the other person
+  /// keeps theirs. Owner-approved column, 4 Nov 2026.
+  clearedChats     Json?
+
   rating      Float    @default(0)
   totalTrades Int      @default(0)
   createdAt   DateTime @default(now())
@@ -916,6 +930,12 @@ model Message {
   tradeId String?
   trade   Trade?  @relation(fields: [tradeId], references: [id])
 
+  /// The message this one answers (swipe to reply). Owner-approved column,
+  /// 4 Nov 2026. SetNull: deleting the original leaves the reply standing.
+  replyToId String?
+  replyTo   Message?  @relation("MessageReply", fields: [replyToId], references: [id], onDelete: SetNull)
+  replies   Message[] @relation("MessageReply")
+
   // FK-backing indexes. MySQL/InnoDB created these implicitly for every
   // foreign key; Postgres does not, and neither does Prisma on Postgres.
   // Declared so the migration to Postgres keeps every index the live
@@ -923,6 +943,7 @@ model Message {
   @@index([senderId])
   @@index([receiverId])
   @@index([tradeId])
+  @@index([replyToId])
 }
 
 model Notification {

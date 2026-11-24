@@ -39,8 +39,12 @@ export async function POST(req: NextRequest) {
     let sanitized
     try {
       sanitized = await sanitizeImage(buffer)
-    } catch {
-      return NextResponse.json({ error: "File must be a valid image" }, { status: 415 })
+    } catch (err) {
+      const heic = err instanceof Error && err.message === "heic_unsupported"
+      return NextResponse.json(
+        { error: heic ? "HEIC photos can't be uploaded yet. Send it as a JPEG or PNG." : "File must be a valid image", ...(heic && { code: "HEIC_UNSUPPORTED" }) },
+        { status: 415 },
+      )
     }
 
     const result = await new Promise<{ secure_url: string; width: number; height: number }>((resolve, reject) => {

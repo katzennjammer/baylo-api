@@ -204,7 +204,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         if (!consent?.accepted) {
           return NextResponse.json(
             {
-              error: `Accepting a Bracket ${offer.offeredBracket} item for your Bracket ${offer.targetBracket} one costs ${fee} Leaves. You have to agree to the bridging fee and the trading policy before this can be accepted.`,
+              error: `Accepting a Bracket ${offer.offeredBracket} item for your Bracket ${offer.targetBracket} one costs ${fee} points. You have to agree to the bridging fee and the trading policy before this can be accepted.`,
               code: "CONSENT_REQUIRED",
               fee,
               policyVersion: TRADING_POLICY_VERSION,
@@ -289,10 +289,12 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         if (!held.ok) throw new ReceiverShort(fee, held.have)
       }
 
-      const [offeredItem, requestedItem] = await Promise.all([
-        tx.item.findUnique({ where: { id: offeredItemId as string }, select: { title: true, status: true } }),
-        tx.item.findUnique({ where: { id: offer.requestedItemId }, select: { title: true, status: true } }),
-      ])
+      // One after the other, not Promise.all: an interactive transaction runs
+      // on ONE connection, and two queries at once on it is what pg logs as
+      // "client.query() when the client is already executing a query" --
+      // deprecated now, an error in pg 9.
+      const offeredItem = await tx.item.findUnique({ where: { id: offeredItemId as string }, select: { title: true, status: true } })
+      const requestedItem = await tx.item.findUnique({ where: { id: offer.requestedItemId }, select: { title: true, status: true } })
 
       if (offeredItem?.status !== "AVAILABLE" || requestedItem?.status !== "AVAILABLE") {
         throw new Error("item_unavailable")
@@ -384,7 +386,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       if (e instanceof ReceiverShort) {
         return NextResponse.json(
           {
-            error: `Accepting this costs ${e.need} Leaves and you have ${e.have}. You need ${e.need - e.have} more.`,
+            error: `Accepting this costs ${e.need} points and you have ${e.have}. You need ${e.need - e.have} more.`,
             code: "INSUFFICIENT_LEAVES",
             need: e.need,
             have: e.have,
@@ -425,7 +427,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
             ? `accepted your offer on "${offer.requestedItem.title}"`
             : `declined your offer on "${offer.requestedItem.title}"` +
               (fee > 0 && proposerPays
-                ? ` — your ${fee}-Leaf bridging fee is back in your balance`
+                ? ` — your ${fee}-point bridging fee is back in your balance`
                 : ""),
         link: `/dashboard/messages?partner=${myId}`,
         actorId: myId,
@@ -459,7 +461,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         offeredItemForCard?.title ??
         tradeRecord?.offeredItemTitle ??
         ((offer.offeredLeaves ?? 0) > 0
-          ? `${offer.offeredLeaves} ${offer.offeredLeaves === 1 ? "Leaf" : "Leaves"}`
+          ? `${offer.offeredLeaves} ${offer.offeredLeaves === 1 ? "point" : "points"}`
           : "Item"),
       requestedItemTitle: offer.requestedItem.title,
       offeredItemImage: firstImage(offeredItemForCard?.images),
@@ -523,8 +525,20 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
         receiverId: offer.receiverId,
       }),
     })
+    // An ACCEPT made a trade. Both phones' trade lists listen for
+    // trade-status-changed (useTradeRealtime); without it the proposer's cached
+    // list still held the row under offers[], and tapping the "accepted" push
+    // opened /trade?id=… on a list with no such trade: "That trade is not open
+    // any more", for a trade that was.
+    const tradeChanged = tradeRecord
+      ? [
+          notifyUser(offer.senderId, "trade-status-changed", { tradeId: tradeRecord.id, newStatus: "ACCEPTED" }),
+          notifyUser(offer.receiverId, "trade-status-changed", { tradeId: tradeRecord.id, newStatus: "ACCEPTED" }),
+        ]
+      : []
     await Promise.all([
       bellNotified,
+      ...tradeChanged,
       notifyUser(offer.senderId, "new-message", senderSystemPayload),
       ...(receiverSystemPayload ? [
         notifyUser(offer.receiverId, "new-message", receiverSystemPayload),

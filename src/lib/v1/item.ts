@@ -11,6 +11,7 @@ import {
 } from "@/lib/safe-zones"
 import { categoryLabel, conditionLabel } from "./taxonomy"
 import { ORG_PUBLIC_SELECT, orgBadge, type OrgBadge, type OrgPublicRow } from "@/lib/organizations"
+import { SUBSCRIPTION_SELECT, hasPremiumAccess, type SubscriptionRow } from "@/lib/premium"
 
 /**
  * The one Item shape, rendered by /home, /browse, /items/[id] and both profile
@@ -100,6 +101,13 @@ export const V1_ITEM_OWNER_SELECT = {
    * of twenty human owners is twenty index probes that find nothing.
    */
   organization: { select: ORG_PUBLIC_SELECT },
+  /**
+   * The owner's subscription rows, for the PREMIUM tag beside their name
+   * (`owner.premium` below). A nested select on the same join as the owner
+   * itself, so no extra query per page -- and a handful of rows per owner, as a
+   * grant ends the old term and starts a new one rather than stacking them.
+   */
+  subscriptions: SUBSCRIPTION_SELECT,
 } as const
 
 /**
@@ -220,6 +228,13 @@ export interface V1Owner {
    */
   trustTier: TrustTier | null
   featuredAchievement: { id: string; name: string; icon: string } | null
+  /**
+   * A live Premium or VIP term, for the tag beside the name. A SHOP's own
+   * Premium for a shop (the backing account holds it), the person's for a
+   * person. False -- never absent -- where the route did not load the rows:
+   * a caller that forgot under-claims rather than asserting a subscription.
+   */
+  premium: boolean
   /**
    * The organisation this owner IS, or null for a person.
    *
@@ -357,6 +372,8 @@ export interface V1ItemRow {
     lifetimeLeaves: number
     /** Present only where V1_ITEM_OWNER_SELECT was used. Null for a person. */
     organization?: OrgPublicRow | null
+    /** Present only where V1_ITEM_OWNER_SELECT was used. Absent reads as no Premium. */
+    subscriptions?: SubscriptionRow[]
   }
   _count?: { likes: number; comments: number }
   likes?: { id: string }[]
@@ -438,6 +455,7 @@ export function v1Item(
       // caller that forgets renders a trust rung on a business.
       trustTier: row.user.organization ? null : tiers?.get(row.user.id) ?? null,
       featuredAchievement: featuredAchievements?.get(row.user.id) ?? null,
+      premium: hasPremiumAccess(row.user.subscriptions),
       org: row.user.organization ? orgBadge(row.user.organization) : null,
     },
     stats: v1Stats(row),

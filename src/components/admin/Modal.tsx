@@ -50,14 +50,21 @@ export function Modal({
 
   if (!open) return null
 
+  // The portal lands on <body>, outside .admin-root, where none of the
+  // --adm-* tokens (or the admin fonts) are defined. Wrapping it in a copy of
+  // the shell's class list and theme gives the dialog the same tokens without
+  // putting it back under an animated ancestor.
+  const shell = document.querySelector<HTMLElement>(".admin-root")
+
   return createPortal(
+    <div className={shell?.className ?? "admin-root"} data-theme={shell?.dataset.theme} style={{ background: "transparent" }}>
     <div
       role="presentation"
       onClick={onClose}
       style={{
         position: "fixed",
         inset: 0,
-        background: "rgba(15,20,17,.45)",
+        background: "var(--adm-scrim)",
         display: "flex",
         alignItems: "center",
         justifyContent: "center",
@@ -77,6 +84,7 @@ export function Modal({
       >
         {children}
       </div>
+    </div>
     </div>,
     document.body,
   )

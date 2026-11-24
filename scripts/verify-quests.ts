@@ -252,7 +252,7 @@ async function main() {
     check("the matching kind pays it", right.find((q) => q.quest === "SEND_OFFER")?.completed === true)
   }
 
-  head("10  settleQuestsAsync: people yes, org accounts no")
+  head("10  settleQuestsAsync: people yes, UNVERIFIED org accounts no (verified shops earn since 16 Nov 2026)")
   // Real clock from here: the event path always settles "now".
   const person = await userWithQuest("LIST_ITEM", new Date(), "person")
   if (!person) throw new Error("no LIST_ITEM fixture within 60 tries")
@@ -273,7 +273,7 @@ async function main() {
   settleQuestsAsync(orgRow.id, ["LIST_ITEM"])
   await new Promise((r) => setTimeout(r, 2500))
   const orgAssignments = await prisma.userProgress.count({ where: { userId: orgRow.id, type: "QUEST" } })
-  check("an org account gets no quest assignments from the event path", orgAssignments === 0, String(orgAssignments))
+  check("an unverified org account (no verified Organization) gets no quest assignments from the event path", orgAssignments === 0, String(orgAssignments))
   const orgBal = await prisma.user.findUniqueOrThrow({ where: { id: orgRow.id }, select: { leaves: true } })
   check("...and no Leaves", orgBal.leaves === 0, String(orgBal.leaves))
 

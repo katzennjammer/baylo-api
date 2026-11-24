@@ -1,10 +1,11 @@
-import { NextRequest, NextResponse } from "next/server"
+import { NextRequest, NextResponse, after } from "next/server"
 import { resolveSession } from "@/lib/api-auth"
 import prisma from "@/lib/prisma"
 import bcrypt from "bcryptjs"
 import { randomInt } from "crypto"
 import { sendSwapConfirmationCode } from "@/lib/mailer"
 import { MAX_CODE_ATTEMPTS } from "@/lib/swap-code"
+import { arrivals } from "@/lib/arrival"
 import { sealCode } from "@/lib/swap-code-seal"
 import {
   isShopMemberPair, legacyParticipantRefusal, resolveTradeParticipant, shopMemberSelfTradeRefusal,
@@ -83,6 +84,27 @@ export async function POST(
       return NextResponse.json({ started: true, alreadyStarted: true })
     }
 
+    // BOTH AT THE HUB FIRST (7 Nov 2026). New codes are issued only once each
+    // side has said "I'm here" (POST /api/v1/trades/:id/arrived) within the
+    // last two hours. Before, the first person to open the codes started both
+    // 15-minute windows while the other was still on the way. Codes already
+    // live are returned above, untouched.
+    const here = await arrivals(tradeId, trade.senderId, trade.receiverId)
+    if (!here.sender || !here.receiver) {
+      const waitingOn = !here.sender ? trade.sender : trade.receiver
+      const mine = myId === trade.senderId ? here.sender : here.receiver
+      return NextResponse.json(
+        {
+          error: mine
+            ? `Waiting for ${waitingOn?.name?.split(/\s+/)[0] ?? "your trading partner"} to arrive. The codes start when you're both at the hub.`
+            : "Tap \"I'm here\" when you reach the hub. The codes start when you're both there.",
+          code: "PARTNER_NOT_ARRIVED",
+          arrival: { me: mine, partner: myId === trade.senderId ? here.receiver : here.sender },
+        },
+        { status: 409 },
+      )
+    }
+
     // Generate a 6-digit code for each participant, hash with bcrypt.
     const senderCode   = randomDigits(6)
     const receiverCode = randomDigits(6)
@@ -129,9 +151,11 @@ export async function POST(
       }),
     ])
 
-    // Email each participant their own code.
-    // Use allSettled so an SMTP failure doesn't crash the response — codes are
-    // already saved in the DB, so the flow can still proceed.
+    // Email each participant their own code -- AFTER the response (7 Nov
+    // 2026). Waiting on Gmail SMTP added one to three seconds to opening the
+    // codes, which are already on screen (sealed copy, confirm/status); the
+    // email is the backup. allSettled so an SMTP failure is only logged.
+    const sendEmails = async () => {
     const emailResults = await Promise.allSettled([
       sendSwapConfirmationCode(
         trade.sender.email,
@@ -150,6 +174,13 @@ export async function POST(
     ])
     for (const r of emailResults) {
       if (r.status === "rejected") console.error("[confirm/start] email error:", r.reason)
+    }
+    }
+    try {
+      after(sendEmails)
+    } catch {
+      // Outside a request (a script): send now.
+      await sendEmails()
     }
 
     return NextResponse.json({ started: true })

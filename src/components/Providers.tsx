@@ -13,7 +13,10 @@ export default function Providers({ children }: { children: React.ReactNode }) {
   const isAdmin = pathname?.startsWith("/admin") ?? false
 
   return (
-    <SessionProvider>
+    // Nothing under /admin reads the client session (the layout checks the
+    // role on the server), so re-fetching it on every window focus there was
+    // a request per alt-tab for nothing.
+    <SessionProvider refetchOnWindowFocus={!isAdmin}>
       {children}
       <Toaster position={isAdmin ? "bottom-right" : "top-right"} toastOptions={isAdmin ? { duration: 4000 } : undefined} />
     </SessionProvider>

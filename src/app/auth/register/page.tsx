@@ -3,6 +3,9 @@ import { asTrades } from "@/lib/trade-row"
 import RegisterClient, { type SwapDisplay } from "./RegisterClient"
 import { ITEM_IMAGES, toImageUrls, type ImagesLike } from "@/lib/item-images"
 
+// Live counts and recent swaps: render per request, never at `next build`.
+export const dynamic = "force-dynamic"
+
 function formatRelativeTime(date: Date): string {
   const diffMs = Date.now() - date.getTime()
   const diffMins = Math.floor(diffMs / 60_000)

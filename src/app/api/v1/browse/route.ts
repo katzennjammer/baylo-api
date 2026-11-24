@@ -1,3 +1,4 @@
+import { escapeLike } from "@/lib/like"
 import { NextRequest } from "next/server"
 import { resolveSession } from "@/lib/api-auth"
 import prisma from "@/lib/prisma"
@@ -19,6 +20,7 @@ import {
   type V1ItemRow,
 } from "@/lib/v1/item"
 import { categoryLabel } from "@/lib/v1/taxonomy"
+import { ITEM_IMAGES, imageUrls } from "@/lib/item-images"
 
 export const dynamic = "force-dynamic"
 
@@ -167,15 +169,15 @@ export async function GET(req: NextRequest) {
     ...(q
       ? {
           OR: [
-            { title: { contains: q, mode: "insensitive" as const } },
-            { description: { contains: q, mode: "insensitive" as const } },
+            { title: { contains: escapeLike(q), mode: "insensitive" as const } },
+            { description: { contains: escapeLike(q), mode: "insensitive" as const } },
             {
               user: {
                 is: {
                   isOrgAccount: true,
                   organization: {
                     is: {
-                      name: { contains: q, mode: "insensitive" as const },
+                      name: { contains: escapeLike(q), mode: "insensitive" as const },
                       verificationStatus: { not: "REJECTED" as const },
                     },
                   },
@@ -334,6 +336,9 @@ export async function GET(req: NextRequest) {
   // them; a blocked user's listings are not a filter the viewer is toggling,
   // they are content that does not exist for this viewer, and a chip counting
   // them sends the user to an empty result.
+  /** How many categories get a cover photo: Home shows six tiles. */
+  const FACET_COVERS = 6
+
   function readFacets() {
     return prisma.item.groupBy({
       by: ["category"],
@@ -362,7 +367,7 @@ export async function GET(req: NextRequest) {
     return q && !cursor
       ? prisma.organization.findMany({
           where: {
-            name: { contains: q, mode: "insensitive" },
+            name: { contains: escapeLike(q), mode: "insensitive" },
             verificationStatus: { not: "REJECTED" },
             ...(businessCategory ? { businessCategory: { in: businessCategory } } : {}),
             orgUser: { is: { ...userNotBlocked(viewerId), ...notSuspendedWhere() } },
@@ -445,6 +450,27 @@ export async function GET(req: NextRequest) {
       : []
   }
 
+  // A cover photo for the biggest categories: the newest visible listing in
+  // each that has a photo. First page only -- Home's tiles read it once, and
+  // later pages would repeat the same lookups. Same visibility rules as the
+  // facet counts, so a cover is never from a blocked or hidden listing.
+  const covers = new Map<string, string>()
+  if (!cursor) {
+    const found = await Promise.all(
+      facetRows.slice(0, FACET_COVERS).map((f) =>
+        prisma.item.findFirst({
+          where: { status: "AVAILABLE", category: f.category, images: { some: {} }, ...visibleItemWhere(viewerId) },
+          orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+          select: { category: true, images: ITEM_IMAGES },
+        }),
+      ),
+    )
+    for (const row of found) {
+      const url = row ? imageUrls(row.images)[0] : undefined
+      if (row && url) covers.set(row.category, url)
+    }
+  }
+
   return ok(
     {
       items: rowsOut.map((r) => v1Item(r, viewerId, access)),
@@ -454,6 +480,7 @@ export async function GET(req: NextRequest) {
           category: f.category,
           label: categoryLabel(f.category),
           count: f._count.id,
+          coverImage: covers.get(f.category) ?? null,
         })),
         businessCategories: businessFacetRows.map((f) => ({
           businessCategory: f.businessCategory,

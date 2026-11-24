@@ -4,14 +4,17 @@ import { resolveSession } from "@/lib/api-auth"
 import prisma from "@/lib/prisma"
 import { leafBalances } from "@/lib/leaves"
 import { expireStaleOffers } from "@/lib/offers"
+import { loadTrustTiers } from "@/lib/trust-tiers"
 import { ok, unauthenticated, invalid, fail } from "@/lib/v1/envelope"
 import { resolveTradeViewer } from "@/lib/trade-participant"
 import { parseQuery, paginationShape, MAX_LIMIT } from "@/lib/v1/query"
 import { decodeCursor, encodeCursor, paginate, cursorDate } from "@/lib/v1/cursor"
 import { SAFE_ZONE_HUB_SELECT, v1Hub, type SafeZoneHubRow } from "@/lib/safe-zones"
+import { ARRIVAL_WINDOW_MS } from "@/lib/arrival"
 import { MEETUP_SELECT, v1MeetupPlan } from "@/lib/meetup"
 import { MAX_CODE_ATTEMPTS } from "@/lib/swap-code"
 import { ITEM_IMAGES, toImageUrls, type ImagesLike } from "@/lib/item-images"
+import { SUBSCRIPTION_SELECT, hasPremiumAccess } from "@/lib/premium"
 
 export const dynamic = "force-dynamic"
 
@@ -49,6 +52,13 @@ const HISTORY_STATES = ["COMPLETED", "REJECTED", "CANCELLED"] as const
 const querySchema = z.strictObject({
   ...paginationShape,
   tab: z.enum(["active", "history"]).optional().default("active"),
+  /**
+   * One listing's incoming offers, for its offer inbox. Narrows the `offers`
+   * block to PENDING offers this viewer RECEIVED on that item, so a busy
+   * listing is not squeezed out by the 50-row cap shared with every other
+   * listing and every sent offer. Everything else in the response is unchanged.
+   */
+  offersFor: z.string().trim().min(1).max(64).optional(),
 })
 
 /** First image of an item, or null. Stored as a JSON string. */
@@ -79,6 +89,8 @@ const ITEM_BRIEF = {
   valueLeaves: true,
 } as const
 const USER_BRIEF = { id: true, name: true, avatar: true } as const
+/** USER_BRIEF plus what decides the PREMIUM tag; the rows never reach the wire. */
+const USER_BRIEF_PREMIUM = { ...USER_BRIEF, subscriptions: SUBSCRIPTION_SELECT } as const
 
 export async function GET(req: NextRequest) {
   const session = await resolveSession()
@@ -96,7 +108,7 @@ export async function GET(req: NextRequest) {
 
   const parsed = parseQuery(req, querySchema)
   if (!parsed.ok) return parsed.response
-  const { limit, tab } = parsed.data
+  const { limit, tab, offersFor } = parsed.data
   const cursor = decodeCursor(parsed.data.cursor)
   if (parsed.data.cursor && !cursor) return invalid("Malformed cursor")
 
@@ -159,11 +171,12 @@ export async function GET(req: NextRequest) {
       ...MEETUP_SELECT,
       // When the deal became a trade; the wire's `createdAt` (see below).
       tradeCreatedAt: true,
+      completedAt: true,
       updatedAt: true,
       senderId: true,
       receiverId: true,
-      sender: { select: USER_BRIEF },
-      receiver: { select: USER_BRIEF },
+      sender: { select: USER_BRIEF_PREMIUM },
+      receiver: { select: USER_BRIEF_PREMIUM },
       // The two ids as well as the rows. A pure-Leaves trade stores the LISTING
       // in both columns as a placeholder, and comparing them is the only way to
       // tell that apart from a real item offered alongside Leaves. See the note
@@ -192,15 +205,18 @@ export async function GET(req: NextRequest) {
   // cursor on `trades`, and a screen showing more than 50 live offers has a
   // different problem than pagination.
   const offerRows = await prisma.trade.findMany({
-    where: { OR: [{ senderId: viewerId }, { receiverId: viewerId }], offerStatus: "PENDING" },
+    where: offersFor
+      ? { receiverId: viewerId, requestedItemId: offersFor, offerStatus: "PENDING" }
+      : { OR: [{ senderId: viewerId }, { receiverId: viewerId }], offerStatus: "PENDING" },
     select: {
       id: true, offerStatus: true, offeredLeaves: true,
       bridgeFeeLeaves: true, offeredBracket: true, targetBracket: true,
       message: true, createdAt: true, senderId: true, receiverId: true,
-      offeredItem: { select: { id: true, title: true, valueLeaves: true } },
+      offeredItem: { select: { id: true, title: true, valueLeaves: true, images: ITEM_IMAGES } },
       requestedItem: { select: ITEM_BRIEF },
-      sender: { select: USER_BRIEF },
-      receiver: { select: USER_BRIEF },
+      // `rating` rides along for the trust tier; see `offerTiers` below.
+      sender: { select: { ...USER_BRIEF_PREMIUM, rating: true, idVerifiedGrandfatheredAt: true, _count: { select: { reviewsReceived: true } } } },
+      receiver: { select: { ...USER_BRIEF_PREMIUM, rating: true, idVerifiedGrandfatheredAt: true, _count: { select: { reviewsReceived: true } } } },
     },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take: MAX_LIMIT,
@@ -212,15 +228,87 @@ export async function GET(req: NextRequest) {
   })
 
   const now = Date.now()
+  // EVERY reward this trade earned the viewer: the trade reward AND the task
+  // rewards filed under the same trade (Safe-Zone meetup, First trade). Only
+  // TRADE_REWARD was read before, so a paid Safe-hub bonus showed as "None".
+  // A 0-Leaf TASK_REWARD row is a recorded denial (repeat partner, weekly
+  // cap) and is returned with its reason so the summary can say why.
   const rewardRows = await prisma.leafTransaction.findMany({
     where: {
       tradeId: { in: page.map((trade) => trade.id) },
       userId: viewerId,
-      type: "TRADE_REWARD",
+      type: { in: ["TRADE_REWARD", "TASK_REWARD"] },
     },
-    select: { tradeId: true, amount: true },
+    select: { tradeId: true, amount: true, type: true, task: true, description: true },
+    orderBy: { createdAt: "asc" },
   })
-  const rewards = new Map(rewardRows.map((row) => [row.tradeId, row.amount]))
+  const rewardLines = new Map<
+    string,
+    { kind: string; leaves: number; note: string | null; reason: "repeat_partner" | "weekly_cap" | null }[]
+  >()
+  for (const row of rewardRows) {
+    if (!row.tradeId) continue
+    const kind = row.type === "TRADE_REWARD" ? "TRADE" : String(row.task ?? "TASK")
+    const list = rewardLines.get(row.tradeId) ?? []
+    list.push({ kind, leaves: row.amount, note: row.amount === 0 ? row.description : null, reason: null })
+    rewardLines.set(row.tradeId, list)
+  }
+
+  // WHICH RULE DENIED A 0-LEAF TASK LINE. The ledger records "denied" but not
+  // why, and the two rules need different words. Re-ask the partner question
+  // awardTask() asked (same 30-day window, same completedAt anchor): another
+  // completed trade with this partner shortly before this one means
+  // repeat_partner; otherwise it was the weekly cap.
+  for (const t of page) {
+    const lines = rewardLines.get(t.id)
+    if (!lines?.some((l) => l.leaves === 0 && l.kind !== "TRADE")) continue
+    const partnerId = t.senderId === viewerId ? t.receiverId : t.senderId
+    const at = t.completedAt ?? t.updatedAt
+    const prior = await prisma.trade.findFirst({
+      where: {
+        id: { not: t.id },
+        status: "COMPLETED",
+        AND: [
+          { OR: [{ senderId: viewerId, receiverId: partnerId }, { senderId: partnerId, receiverId: viewerId }] },
+          {
+            OR: [
+              { completedAt: { gte: new Date(at.getTime() - 30 * 86_400_000), lt: at } },
+              { completedAt: null, updatedAt: { gte: new Date(at.getTime() - 30 * 86_400_000), lt: at } },
+            ],
+          },
+        ],
+      },
+      select: { id: true },
+    })
+    for (const l of lines) {
+      if (l.leaves === 0 && l.kind !== "TRADE") l.reason = prior ? "repeat_partner" : "weekly_cap"
+    }
+  }
+
+  // "I'm here" at the hub, per live trade, within the arrival window. See
+  // @/lib/arrival; the key is arrived:<tradeId>:<userId>:<bucket>.
+  const liveIds = page.filter((t) => t.status === "ACCEPTED" || t.status === "CONFIRMING").map((t) => t.id)
+  const arrivalRows = liveIds.length
+    ? await prisma.message.findMany({
+        where: {
+          tradeId: { in: liveIds },
+          systemEventKey: { startsWith: "arrived:" },
+          createdAt: { gte: new Date(Date.now() - ARRIVAL_WINDOW_MS) },
+        },
+        select: { systemEventKey: true },
+      })
+    : []
+  const arrivedSet = new Set(arrivalRows.map((r) => (r.systemEventKey ?? "").split(":").slice(1, 3).join(":")))
+  const arrivalFor = (tradeId: string, partnerId: string) => ({
+    me: arrivedSet.has(`${tradeId}:${viewerId}`),
+    partner: arrivedSet.has(`${tradeId}:${partnerId}`),
+  })
+  const rewardTotal = (id: string) => {
+    const list = rewardLines.get(id)
+    if (!list) return null
+    const sum = list.reduce((n, r) => n + Math.max(0, r.leaves), 0)
+    return sum > 0 ? sum : null
+  }
 
   const trades = page.map((t) => {
     const isSender = t.senderId === viewerId
@@ -267,14 +355,24 @@ export async function GET(req: NextRequest) {
       offeredLeaves: t.offeredLeaves,
       bridgeFeeLeaves: t.bridgeFeeLeaves,
       bridgeFeePaidBySender: t.bridgeFeePaidBySender,
-      counterparty,
+      // Built explicitly so the subscription rows stay on the server.
+      counterparty: {
+        id: counterparty.id,
+        name: counterparty.name,
+        avatar: counterparty.avatar,
+        premium: hasPremiumAccess(counterparty.subscriptions),
+      },
       myReview: t.reviews.find((review) => review.reviewerId === viewerId)
         ? { rating: t.reviews.find((review) => review.reviewerId === viewerId)!.rating }
         : null,
       receivedReview: t.reviews.find((review) => review.reviewerId !== viewerId)
         ? { rating: t.reviews.find((review) => review.reviewerId !== viewerId)!.rating }
         : null,
-      rewardLeaves: rewards.get(t.id) ?? null,
+      rewardLeaves: rewardTotal(t.id),
+      /** Each reward line for this trade, including 0-Leaf denials with their reason. */
+      rewards: rewardLines.get(t.id) ?? [],
+      /** Who has tapped "I'm here" at the hub in the last two hours. See @/lib/arrival. */
+      arrival: arrivalFor(t.id, t.senderId === viewerId ? t.receiverId : t.senderId),
       codesMatchedAt: t.status === "COMPLETED" ? t.updatedAt : null,
       /*
        * ── SUPPRESSED ONLY WHEN IT IS ACTUALLY A PLACEHOLDER ────────────────
@@ -328,15 +426,31 @@ export async function GET(req: NextRequest) {
     }
   })
 
+  // The other person's standing, so an offer inbox can rank and badge traders.
+  // One batched lookup for every counterparty on the page.
+  const offerCounterparties = offerRows.map((o) => (o.senderId === viewerId ? o.receiver : o.sender))
+  // Whose government ID is approved, in one read. Same rule as
+  // isIdVerified(): an APPROVED IdVerification row, or the grandfather stamp.
+  const [offerTiers, approvedIds] = await Promise.all([
+    loadTrustTiers(prisma, offerCounterparties),
+    prisma.idVerification.findMany({
+      where: { userId: { in: offerCounterparties.map((u) => u.id) }, status: "APPROVED" },
+      select: { userId: true },
+    }),
+  ])
+  const idVerifiedIds = new Set(approvedIds.map((r) => r.userId))
+
   const offers = offerRows.map((o) => {
     const isSender = o.senderId === viewerId
+    const other = isSender ? o.receiver : o.sender
     /*
      * `offeredItems` keeps its list shape on the wire, built from the real
      * relation (schema v2) where it used to be parsed out of a client-written
-     * JSON blob. `valueLeaves` comes from the Item row, as it always did.
-     * `image` stays null: the blob every offer since 16 Sep 2026 wrote held
-     * only `{ id, title }`, so null is what this field has always carried, and
-     * the app draws offered items from their own records.
+     * JSON blob. `valueLeaves` and `image` come from the Item row. `image` was
+     * hard-coded null until 19 Oct 2026, from when the blob held only
+     * `{ id, title }` -- but the app's offer cards (chat, Trades tab, the trade
+     * screen) DO draw this field, so every pending offer showed a grey
+     * placeholder for the offered item while the requested one had its photo.
      */
     const offeredItems: {
       id: string
@@ -344,7 +458,7 @@ export async function GET(req: NextRequest) {
       image: string | null
       valueLeaves: number | null
     }[] = o.offeredItem
-      ? [{ id: o.offeredItem.id, title: o.offeredItem.title, image: null, valueLeaves: o.offeredItem.valueLeaves }]
+      ? [{ id: o.offeredItem.id, title: o.offeredItem.title, image: firstImage(o.offeredItem.images), valueLeaves: o.offeredItem.valueLeaves }]
       : []
     return {
       id: o.id,
@@ -354,7 +468,20 @@ export async function GET(req: NextRequest) {
       offeredItems,
       offeredLeaves: o.offeredLeaves,
       message: o.message,
-      counterparty: isSender ? o.receiver : o.sender,
+      counterparty: {
+        id: other.id,
+        name: other.name,
+        avatar: other.avatar,
+        rating: other.rating,
+        // How many reviews that rating is an average of, so the card can say
+        // "4.5 · 4 reviews" like the profile header does.
+        reviewCount: other._count.reviewsReceived,
+        trustTier: offerTiers.get(other.id) ?? null,
+        // Government ID approved: the tier pill carries its checkmark only then.
+        idVerified: !!other.idVerifiedGrandfatheredAt || idVerifiedIds.has(other.id),
+        // Premium or VIP now: the gold PREMIUM tag beside the name.
+        premium: hasPremiumAccess(other.subscriptions),
+      },
       /**
        * THE BRIDGE, as the trades screen needs it.
        *

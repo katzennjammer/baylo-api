@@ -51,13 +51,23 @@ export function rateLimit(key: string, limit: number, windowMs: number): RateLim
 /**
  * Returns the client address used for abuse throttling.
  *
- * Forwarding headers are only trusted when the deployment explicitly enables
- * Cloudflare proxy mode. Otherwise a caller can forge them and evade a limit.
+ * Forwarding headers are only trusted when the deployment explicitly names the
+ * proxy in front of it (TRUST_PROXY=cloudflare | vercel). Otherwise a caller
+ * can forge them and evade a limit. Unset, every caller shares one bucket.
  * This limiter remains a speed bump, never an authorization boundary.
  */
 export function clientIp(req: Request): string {
   if (process.env.TRUST_PROXY === "cloudflare") {
     return req.headers.get("cf-connecting-ip")?.trim()
+      || req.headers.get("x-forwarded-for")?.split(",")[0].trim()
+      || "unknown"
+  }
+
+  // Vercel overwrites x-real-ip / x-forwarded-for at its edge with the address
+  // it saw, so a caller cannot forge them there. It does NOT strip
+  // cf-connecting-ip, which is why "cloudflare" mode must never be used on it.
+  if (process.env.TRUST_PROXY === "vercel") {
+    return req.headers.get("x-real-ip")?.trim()
       || req.headers.get("x-forwarded-for")?.split(",")[0].trim()
       || "unknown"
   }

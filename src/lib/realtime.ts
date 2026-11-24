@@ -40,9 +40,13 @@ export async function notifyUser(userId: string, event: string, payload: unknown
     await pusher.trigger(channel, event, payload)
   } catch (e) {
     const status = (e as { status?: unknown } | null)?.status
+    // Pusher says WHY in the response body ("Message quota exceeded",
+    // "Invalid channel name"...). Without it every refusal reads the same.
+    const body = (e as { body?: unknown } | null)?.body
     console.warn(
       `[realtime] ${event} -> ${channel} failed${typeof status === "number" ? ` (HTTP ${status})` : ""}: ` +
-        (e instanceof Error ? e.message : String(e)),
+        (e instanceof Error ? e.message : String(e)) +
+        (typeof body === "string" && body.trim() ? ` -- ${body.trim().slice(0, 200)}` : ""),
     )
   }
 }

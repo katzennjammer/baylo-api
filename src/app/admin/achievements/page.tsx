@@ -80,19 +80,19 @@ export default async function AdminAchievementsPage() {
           </p>
         </div>
         {canDefine ? <AchievementForm mode="create" /> : (
-          <span style={{ fontSize: 13, color: "#888" }}>Admin-only definition controls.</span>
+          <span style={{ fontSize: 13, color: "var(--adm-text-muted)" }}>Admin-only definition controls.</span>
         )}
       </div>
 
       {achievements.length === 0 ? (
-        <p style={{ padding: 32, textAlign: "center", background: "#fff", borderRadius: 14, color: "#888" }}>
+        <p style={{ padding: 32, textAlign: "center", background: "var(--adm-panel)", borderRadius: 14, color: "var(--adm-text-muted)" }}>
           No achievements defined yet. Create one to start awarding badges.
         </p>
       ) : (
-        <div style={{ background: "#fff", borderRadius: 14, border: "1px solid rgba(0,0,0,.08)", overflowX: "auto" }}>
+        <div style={{ background: "var(--adm-panel)", borderRadius: 14, border: "1px solid var(--adm-border)", overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1000, fontSize: 13 }}>
             <thead>
-              <tr style={{ textAlign: "left", color: "#888", fontSize: 12 }}>
+              <tr style={{ textAlign: "left", color: "var(--adm-text-muted)", fontSize: 12 }}>
                 <th style={{ padding: "12px 14px" }}>Badge</th>
                 <th style={{ padding: "12px 14px" }}>Key</th>
                 <th style={{ padding: "12px 14px" }}>Earned when</th>
@@ -109,11 +109,11 @@ export default async function AdminAchievementsPage() {
                   index={index}
                   key={achievement.id}
                   className="admin-row-hover"
-                  style={{ borderTop: "1px solid rgba(0,0,0,.06)", verticalAlign: "top" }}
+                  style={{ borderTop: "1px solid var(--adm-border)", verticalAlign: "top" }}
                 >
                   <td style={{ padding: "14px" }}>
                     <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
-                      <div style={{ width: 42, height: 42, borderRadius: 12, display: "grid", placeItems: "center", background: "#E1F1E5", overflow: "hidden", flexShrink: 0 }}>
+                      <div style={{ width: 42, height: 42, borderRadius: 12, display: "grid", placeItems: "center", background: "var(--adm-good-bg)", overflow: "hidden", flexShrink: 0 }}>
                         {achievement.imageUrl ? (
                           // eslint-disable-next-line @next/next/no-img-element
                           <img src={achievement.imageUrl} alt="" style={{ width: "100%", height: "100%", objectFit: "cover" }} />
@@ -123,16 +123,16 @@ export default async function AdminAchievementsPage() {
                       </div>
                       <div>
                         <strong>{achievement.name}</strong>
-                        <div style={{ color: "#777", maxWidth: 260, marginTop: 2 }}>{achievement.description}</div>
+                        <div style={{ color: "var(--adm-text-muted)", maxWidth: 260, marginTop: 2 }}>{achievement.description}</div>
                       </div>
                     </div>
                   </td>
-                  <td style={{ padding: "14px", fontFamily: "monospace", color: "#555" }}>{achievement.key}</td>
+                  <td style={{ padding: "14px", fontFamily: "monospace", color: "var(--adm-text-secondary)" }}>{achievement.key}</td>
                   <td style={{ padding: "14px" }}>{describeCriterion(achievement.criterion, achievement.threshold)}</td>
                   <td style={{ padding: "14px", fontWeight: 700 }}>{achievement.points.toLocaleString()}</td>
                   <td style={{ padding: "14px", fontWeight: 700 }}>{achievement._count.unlocks.toLocaleString()}</td>
                   <td style={{ padding: "14px" }}>
-                    <span style={{ color: achievement.isActive ? "#15803d" : "#b91c1c", fontWeight: 700 }}>
+                    <span style={{ color: achievement.isActive ? "var(--adm-good)" : "var(--adm-warn)", fontWeight: 700 }}>
                       {achievement.isActive ? "Active" : "Inactive"}
                     </span>
                   </td>
@@ -161,7 +161,7 @@ export default async function AdminAchievementsPage() {
                         />
                       </div>
                     ) : (
-                      <span style={{ color: "#888" }}>Admin-only</span>
+                      <span style={{ color: "var(--adm-text-muted)" }}>Admin-only</span>
                     )}
                   </td>
                 </StaggerItem>

@@ -29,10 +29,10 @@ export const revalidate = 0
  */
 
 const card: React.CSSProperties = {
-  background: "#fff", borderRadius: 14, border: "1px solid rgba(0,0,0,.08)",
+  background: "var(--adm-panel)", borderRadius: 14, border: "1px solid var(--adm-border)",
   padding: 20, display: "flex", flexDirection: "column", gap: 10,
 }
-const label: React.CSSProperties = { fontSize: 12, color: "#999", fontWeight: 600 }
+const label: React.CSSProperties = { fontSize: 12, color: "var(--adm-text-muted)", fontWeight: 600 }
 
 function parseImages(raw: ImagesLike): string[] {
   return toImageUrls(raw)
@@ -194,7 +194,7 @@ export default async function ReportDetailPage({
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
-      <Link href="/admin" style={{ fontSize: 13, color: "#4CAF50" }}>← Back to queue</Link>
+      <Link href="/admin" style={{ fontSize: 13, color: "var(--adm-good)" }}>← Back to queue</Link>
 
       <div style={{ display: "grid", gridTemplateColumns: "minmax(0,2fr) minmax(0,1fr)", gap: 18, alignItems: "start" }}>
         <div style={{ display: "flex", flexDirection: "column", gap: 18, minWidth: 0 }}>
@@ -209,12 +209,12 @@ export default async function ReportDetailPage({
             </div>
             <div style={label}>Filed {report.createdAt.toLocaleString()}</div>
             {report.notes && (
-              <p style={{ fontSize: 14, lineHeight: 1.6, whiteSpace: "pre-wrap", background: "#f7f7f8", padding: 12, borderRadius: 10 }}>
+              <p style={{ fontSize: 14, lineHeight: 1.6, whiteSpace: "pre-wrap", background: "var(--adm-panel-flat)", padding: 12, borderRadius: 10 }}>
                 {report.notes}
               </p>
             )}
             {report.resolvedAt && (
-              <p style={{ fontSize: 13, color: "#666" }}>
+              <p style={{ fontSize: 13, color: "var(--adm-text-secondary)" }}>
                 Resolved {report.resolvedAt.toLocaleString()}
                 {report.resolvedBy ? ` by ${report.resolvedBy.name}` : ""} — “{report.resolutionNote}”
               </p>
@@ -236,7 +236,7 @@ export default async function ReportDetailPage({
                 {parseImages(listing.images).length > 0 && (
                   <ReportImageViewer images={parseImages(listing.images)} title={listing.title} />
                 )}
-                <p style={{ fontSize: 14, color: "#555", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>
+                <p style={{ fontSize: 14, color: "var(--adm-text-secondary)", lineHeight: 1.6, whiteSpace: "pre-wrap" }}>
                   {listing.description}
                 </p>
                 <div style={label}>
@@ -245,7 +245,7 @@ export default async function ReportDetailPage({
                 </div>
               </>
             ) : (
-              <p style={{ fontSize: 13, color: "#999" }}>
+              <p style={{ fontSize: 13, color: "var(--adm-text-muted)" }}>
                 This listing no longer exists. The report survives it deliberately — see the
                 other reports and the history below.
               </p>
@@ -254,7 +254,7 @@ export default async function ReportDetailPage({
             {targetType === "user" && (subjectUser ? (
               <>
                 <p style={{ fontSize: 15, fontWeight: 700 }}>
-                  {subjectUser.name} <span style={{ color: "#999", fontWeight: 400 }}>({subjectUser.email})</span>
+                  {subjectUser.name} <span style={{ color: "var(--adm-text-muted)", fontWeight: 400 }}>({subjectUser.email})</span>
                 </p>
                 <div style={label}>
                   Joined {subjectUser.createdAt.toLocaleDateString()} · {subjectUser.totalTrades} trades ·
@@ -264,26 +264,26 @@ export default async function ReportDetailPage({
                   {subjectUser.deletedAt && " · DELETED"}
                 </div>
                 {subjectUser.bio && (
-                  <p style={{ fontSize: 14, color: "#555", lineHeight: 1.6 }}>{subjectUser.bio}</p>
+                  <p style={{ fontSize: 14, color: "var(--adm-text-secondary)", lineHeight: 1.6 }}>{subjectUser.bio}</p>
                 )}
                 <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 4 }}>
-                  <p style={{ ...label, color: "#555" }}>Recent listings</p>
+                  <p style={{ ...label, color: "var(--adm-text-secondary)" }}>Recent listings</p>
                   {subjectUser.items.length === 0 ? (
-                    <p style={{ fontSize: 13, color: "#999" }}>This user has no listings.</p>
+                    <p style={{ fontSize: 13, color: "var(--adm-text-muted)" }}>This user has no listings.</p>
                   ) : (
                     subjectUser.items.map((item) => {
                       const images = parseImages(item.images)
                       return (
-                        <div key={item.id} style={{ display: "flex", gap: 10, alignItems: "center", padding: 8, borderRadius: 9, background: "#f7f7f8" }}>
+                        <div key={item.id} style={{ display: "flex", gap: 10, alignItems: "center", padding: 8, borderRadius: 9, background: "var(--adm-panel-flat)" }}>
                           {images[0] ? (
                             // eslint-disable-next-line @next/next/no-img-element
                             <img src={images[0]} alt="" style={{ width: 54, height: 54, objectFit: "cover", borderRadius: 7 }} />
                           ) : (
-                            <div style={{ width: 54, height: 54, borderRadius: 7, background: "#e5e7eb" }} />
+                            <div style={{ width: 54, height: 54, borderRadius: 7, background: "var(--adm-placeholder-a)" }} />
                           )}
                           <div>
                             <strong style={{ fontSize: 13 }}>{item.title}</strong>
-                            <div style={{ color: "#888", fontSize: 11, marginTop: 3 }}>
+                            <div style={{ color: "var(--adm-text-muted)", fontSize: 11, marginTop: 3 }}>
                               {item.status}{item.moderationHiddenAt ? " · Hidden" : ""}
                             </div>
                           </div>
@@ -294,7 +294,7 @@ export default async function ReportDetailPage({
                 </div>
               </>
             ) : (
-              <p style={{ fontSize: 13, color: "#999" }}>That account no longer exists.</p>
+              <p style={{ fontSize: 13, color: "var(--adm-text-muted)" }}>That account no longer exists.</p>
             ))}
 
             {targetType === "message" && (message ? (
@@ -311,11 +311,11 @@ export default async function ReportDetailPage({
                         key={m.id}
                         style={{
                           fontSize: 13, padding: "8px 10px", borderRadius: 9, lineHeight: 1.5,
-                          background: isReported ? "rgba(229,72,77,.1)" : "#f7f7f8",
-                          border: isReported ? "1px solid rgba(229,72,77,.4)" : "1px solid transparent",
+                          background: isReported ? "var(--adm-warn-bg)" : "var(--adm-panel-flat)",
+                          border: isReported ? "1px solid var(--adm-warn-outline)" : "1px solid transparent",
                         }}
                       >
-                        <span style={{ color: "#999", fontSize: 11 }}>
+                        <span style={{ color: "var(--adm-text-muted)", fontSize: 11 }}>
                           {m.senderId === message.sender.id ? message.sender.name : message.receiver.name} ·{" "}
                           {m.createdAt.toLocaleString()}
                           {isReported && " · REPORTED"}
@@ -327,7 +327,7 @@ export default async function ReportDetailPage({
                 </div>
               </>
             ) : (
-              <p style={{ fontSize: 13, color: "#999" }}>That message no longer exists.</p>
+              <p style={{ fontSize: 13, color: "var(--adm-text-muted)" }}>That message no longer exists.</p>
             ))}
 
             {targetType === "story" && (story ? (
@@ -341,7 +341,7 @@ export default async function ReportDetailPage({
                       : `live until ${story.expiresAt.toLocaleString()}`}
                 </div>
                 {story.caption && (
-                  <p style={{ fontSize: 14, lineHeight: 1.6, whiteSpace: "pre-wrap", background: "#f7f7f8", padding: 12, borderRadius: 10 }}>
+                  <p style={{ fontSize: 14, lineHeight: 1.6, whiteSpace: "pre-wrap", background: "var(--adm-panel-flat)", padding: 12, borderRadius: 10 }}>
                     {story.caption}
                   </p>
                 )}
@@ -357,14 +357,14 @@ export default async function ReportDetailPage({
                     )}
                   </>
                 ) : (
-                  <p style={{ fontSize: 13, color: "#999" }}>The shared listing no longer exists.</p>
+                  <p style={{ fontSize: 13, color: "var(--adm-text-muted)" }}>The shared listing no longer exists.</p>
                 )}
-                <p style={{ fontSize: 12, color: "#888" }}>
+                <p style={{ fontSize: 12, color: "var(--adm-text-muted)" }}>
                   A story has no takedown of its own yet: suspending the author removes it from every row.
                 </p>
               </>
             ) : (
-              <p style={{ fontSize: 13, color: "#999" }}>That story no longer exists.</p>
+              <p style={{ fontSize: 13, color: "var(--adm-text-muted)" }}>That story no longer exists.</p>
             ))}
           </div>
 
@@ -374,17 +374,17 @@ export default async function ReportDetailPage({
               Other reports about this target ({otherReports.length})
             </p>
             {otherReports.length === 0 ? (
-              <p style={{ fontSize: 13, color: "#999" }}>None. This is the first.</p>
+              <p style={{ fontSize: 13, color: "var(--adm-text-muted)" }}>None. This is the first.</p>
             ) : (
               otherReports.map((r) => (
-                <div key={r.id} style={{ fontSize: 13, borderTop: "1px solid rgba(0,0,0,.06)", paddingTop: 8 }}>
-                  <Link href={`/admin/reports/${r.id}`} style={{ color: "#4CAF50", fontWeight: 600 }}>
+                <div key={r.id} style={{ fontSize: 13, borderTop: "1px solid var(--adm-border)", paddingTop: 8 }}>
+                  <Link href={`/admin/reports/${r.id}`} style={{ color: "var(--adm-good)", fontWeight: 600 }}>
                     {CATEGORY_LABEL[toWireCategory(r.category)]}
                   </Link>{" "}
-                  <span style={{ color: "#999" }}>
+                  <span style={{ color: "var(--adm-text-muted)" }}>
                     · {r.status} · {r.reporter.name} · {r.createdAt.toLocaleDateString()}
                   </span>
-                  {r.notes && <div style={{ color: "#666", marginTop: 2 }}>{r.notes}</div>}
+                  {r.notes && <div style={{ color: "var(--adm-text-secondary)", marginTop: 2 }}>{r.notes}</div>}
                 </div>
               ))
             )}
@@ -395,15 +395,15 @@ export default async function ReportDetailPage({
               Moderation history for this target ({targetHistory.length})
             </p>
             {targetHistory.length === 0 ? (
-              <p style={{ fontSize: 13, color: "#999" }}>Nothing has been done to it yet.</p>
+              <p style={{ fontSize: 13, color: "var(--adm-text-muted)" }}>Nothing has been done to it yet.</p>
             ) : (
               targetHistory.map((a) => (
-                <div key={a.id} style={{ fontSize: 13, borderTop: "1px solid rgba(0,0,0,.06)", paddingTop: 8 }}>
+                <div key={a.id} style={{ fontSize: 13, borderTop: "1px solid var(--adm-border)", paddingTop: 8 }}>
                   <strong>{a.action}</strong>{" "}
-                  <span style={{ color: "#999" }}>
+                  <span style={{ color: "var(--adm-text-muted)" }}>
                     · {a.actor.name} · {a.createdAt.toLocaleString()}
                   </span>
-                  <div style={{ color: "#666", marginTop: 2 }}>{a.reason}</div>
+                  <div style={{ color: "var(--adm-text-secondary)", marginTop: 2 }}>{a.reason}</div>
                 </div>
               ))
             )}
@@ -424,7 +424,7 @@ export default async function ReportDetailPage({
               A reporter whose reports are mostly dismissed is itself a signal,
               and one nothing else in this system would ever surface.
             */}
-            <div style={{ fontSize: 12, color: "#777", marginTop: 4 }}>
+            <div style={{ fontSize: 12, color: "var(--adm-text-muted)", marginTop: 4 }}>
               {(repHistory.ACTIONED ?? 0)} upheld · {(repHistory.DISMISSED ?? 0)} dismissed ·{" "}
               {(repHistory.OPEN ?? 0) + (repHistory.REVIEWING ?? 0)} open
             </div>

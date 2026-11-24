@@ -1,7 +1,8 @@
 import { Prisma, type PrismaClient } from "@/generated/prisma/client"
 import { userNotBlocked, visibleItemWhere } from "@/lib/blocking"
 import { notSuspendedWhere } from "@/lib/moderation"
-import { notAnOrgWhere } from "@/lib/organizations"
+import { ORG_PUBLIC_SELECT, orgBadge, type OrgBadge } from "@/lib/organizations"
+import { SUBSCRIPTION_SELECT, hasPremiumAccess } from "@/lib/premium"
 import {
   V1_ITEM_OWNER_SELECT,
   V1_ITEM_SAFEZONE_SELECT,
@@ -49,7 +50,9 @@ export function liveStoryWhere(viewerId: string, now: Date = new Date()): Prisma
     user: {
       is: {
         deletedAt: null,
-        ...notAnOrgWhere(),
+        // A shop may post stories since 16 Nov 2026, as a VERIFIED shop only
+        // (the same rule as posting); a person always may.
+        OR: [{ isOrgAccount: false }, { organization: { is: { verificationStatus: "VERIFIED" } } }],
         ...userNotBlocked(viewerId),
         ...notSuspendedWhere(now),
       },
@@ -82,9 +85,12 @@ export async function createListingStory(
 ): Promise<CreateStoryResult> {
   const author = await db.user.findUnique({
     where: { id: authorId },
-    select: { isOrgAccount: true },
+    select: { isOrgAccount: true, organization: { select: { verificationStatus: true } } },
   })
-  if (!author || author.isOrgAccount) return { ok: false, reason: "PERSONAL_ONLY" }
+  // A shop posts its own stories (16 Nov 2026), verified shops only.
+  if (!author || (author.isOrgAccount && author.organization?.verificationStatus !== "VERIFIED")) {
+    return { ok: false, reason: "PERSONAL_ONLY" }
+  }
 
   // Your own, AVAILABLE, not hidden. A shop's listing is owned by the shop's
   // backing row, so it can never pass `userId: authorId` for a person.
@@ -137,12 +143,16 @@ export interface StoryWire {
   createdAt: Date
   expiresAt: Date
   seen: boolean
+  /** People who have seen it. Sent on the author's own stories only. */
+  seenBy?: number
   /** The shared listing, in the same shape the feed sends. */
   item: V1Item
 }
 
 export interface StoryAuthorWire {
-  user: { id: string; name: string; avatar: string | null }
+  /** `premium`: Premium or VIP now, for the gold tag beside the name. */
+  /** `org`: set when the author is a shop (16 Nov 2026), for its logo and name. */
+  user: { id: string; name: string; avatar: string | null; premium: boolean; org: OrgBadge | null }
   isOwn: boolean
   /** Every story seen (always true for your own). Drives the grey ring. */
   allSeen: boolean
@@ -150,8 +160,16 @@ export interface StoryAuthorWire {
   stories: StoryWire[]
 }
 
-/** Enough rows for any realistic day; the cap keeps one author at 10. */
-const ROW_TAKE = 500
+/**
+ * Enough rows for any realistic day; the cap keeps one author at 10.
+ *
+ * WHEN THERE ARE MORE LIVE STORIES THAN THIS, THE OLDEST ARE THE ONES LEFT
+ * OUT (12 Nov 2026). The row used to be fetched oldest first, so the cut fell
+ * on the NEWEST: past the limit, somebody could share a story that nobody was
+ * ever shown, and nothing told them. A story near the end of its 24 hours
+ * falling off a full row is a limit; a new one vanishing is a bug.
+ */
+export const STORY_ROW_TAKE = 500
 
 /**
  * The stories row: grouped by author, YOU first, then authors with anything
@@ -161,34 +179,48 @@ export async function listStoryRow(
   db: StoryDb,
   viewerId: string,
   now: Date = new Date(),
+  /** How many live stories to load. A parameter so the cut can be checked. */
+  take: number = STORY_ROW_TAKE,
+  /**
+   * Whose stories are "yours" (16 Nov 2026): the acting shop in shop mode, so
+   * the shop's circle leads the row. Blocks and visibility still follow the
+   * person (`viewerId`).
+   */
+  ownId: string = viewerId,
 ): Promise<StoryAuthorWire[]> {
-  const rows = await db.story.findMany({
+  const newestFirst = await db.story.findMany({
     where: liveStoryWhere(viewerId, now),
     select: {
       id: true,
       caption: true,
       createdAt: true,
       expiresAt: true,
-      user: { select: { id: true, name: true, avatar: true } },
+      user: { select: { id: true, name: true, avatar: true, subscriptions: SUBSCRIPTION_SELECT, organization: { select: ORG_PUBLIC_SELECT } } },
       item: {
         select: { ...V1_ITEM_SELECT, user: { select: V1_ITEM_OWNER_SELECT }, ...V1_ITEM_SAFEZONE_SELECT },
       },
       views: { where: { viewerId }, select: { id: true }, take: 1 },
+      _count: { select: { views: true } },
     },
-    orderBy: [{ createdAt: "asc" }, { id: "asc" }],
-    take: ROW_TAKE,
+    // Newest first FOR THE CUT, so `take` drops the oldest. See STORY_ROW_TAKE.
+    orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+    take,
   })
+  // ...and back to oldest first for everything below: it is the order a
+  // viewer plays one author's stories in, and the exact reverse of the sort
+  // above, so within the kept rows nothing about the row changes.
+  const rows = newestFirst.reverse()
 
   const byAuthor = new Map<string, StoryAuthorWire & { latest: number }>()
   for (const r of rows) {
     // liveStoryWhere() requires the item, so this is never null; the guard
     // is for the type, which cannot see the WHERE clause.
     if (!r.item) continue
-    const isOwn = r.user.id === viewerId
+    const isOwn = r.user.id === ownId
     const seen = isOwn || r.views.length > 0
     let group = byAuthor.get(r.user.id)
     if (!group) {
-      group = { user: r.user, isOwn, allSeen: true, stories: [], latest: 0 }
+      group = { user: { id: r.user.id, name: r.user.name, avatar: r.user.avatar, premium: hasPremiumAccess(r.user.subscriptions), org: r.user.organization ? orgBadge(r.user.organization) : null }, isOwn, allSeen: true, stories: [], latest: 0 }
       byAuthor.set(r.user.id, group)
     }
     group.stories.push({
@@ -198,6 +230,8 @@ export async function listStoryRow(
       createdAt: r.createdAt,
       expiresAt: r.expiresAt,
       seen,
+      // How many people have seen it -- the author's own stories only.
+      ...(isOwn ? { seenBy: r._count.views } : {}),
       item: v1Item(r.item as unknown as V1ItemRow, viewerId),
     })
     group.allSeen = group.allSeen && seen

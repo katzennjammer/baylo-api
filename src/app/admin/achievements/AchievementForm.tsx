@@ -224,7 +224,7 @@ export default function AchievementForm({
           type="button"
           onClick={() => setOpen(true)}
           className="admin-btn-press"
-          style={{ padding: "9px 14px", border: 0, borderRadius: 9, background: "#17201b", color: "#fff", fontWeight: 700 }}
+          style={{ padding: "9px 14px", border: 0, borderRadius: 9, background: "var(--adm-text)", color: "var(--adm-shell)", fontWeight: 700 }}
         >
           {mode === "create" ? "Create achievement" : "Edit"}
         </button>
@@ -274,7 +274,7 @@ function AchievementFormPanel({
     <div
       style={{
         display: "grid", gap: 10, padding: 20, borderRadius: 14,
-        background: "#f7f9f7", width: "min(92vw, 560px)",
+        background: "var(--adm-panel-flat)", width: "min(92vw, 560px)",
         boxShadow: "0 24px 60px rgba(15,20,17,.28)",
       }}
     >
@@ -306,7 +306,7 @@ function AchievementFormPanel({
           <div
             style={{
               width: 56, height: 56, borderRadius: 16, display: "grid", placeItems: "center",
-              background: "#E1F1E5", overflow: "hidden", flexShrink: 0,
+              background: "var(--adm-good-bg)", overflow: "hidden", flexShrink: 0,
             }}
           >
             {values.imageUrl ? (
@@ -328,7 +328,7 @@ function AchievementFormPanel({
             style={{ fontSize: 12 }}
           />
           {values.imageUrl ? (
-            <button type="button" onClick={() => update("imageUrl", null)} style={{ ...smallButton, color: "#991b1b" }}>
+            <button type="button" onClick={() => update("imageUrl", null)} style={{ ...smallButton, color: "var(--adm-warn)" }}>
               Remove
             </button>
           ) : null}
@@ -358,7 +358,7 @@ function AchievementFormPanel({
           />
         </Field>
       ) : (
-        <p style={{ fontSize: 12, color: "#888" }}>
+        <p style={{ fontSize: 12, color: "var(--adm-text-muted)" }}>
           Earned or not — no threshold applies to this criterion.
         </p>
       )}
@@ -388,7 +388,7 @@ function AchievementFormPanel({
           <input type="checkbox" checked={backfill} onChange={(e) => setBackfill(e.target.checked)} style={{ marginTop: 3 }} />
           <span>
             Grant to users who already qualify.
-            <span style={{ display: "block", color: "#888", fontSize: 11 }}>
+            <span style={{ display: "block", color: "var(--adm-text-muted)", fontSize: 11 }}>
               Runs the criteria engine over recent users now. Leave off for a badge that should only be earned from now on.
             </span>
           </span>
@@ -409,7 +409,7 @@ function AchievementFormPanel({
           onClick={submit}
           disabled={busy || uploading}
           className="admin-btn-press"
-          style={{ ...smallButton, background: "#4CAF50", color: "#fff", opacity: busy || uploading ? 0.6 : 1 }}
+          style={{ ...smallButton, background: "var(--adm-accent)", color: "var(--adm-text-on-accent)", opacity: busy || uploading ? 0.6 : 1 }}
         >
           {busy ? "Saving…" : mode === "create" ? "Create" : "Save"}
         </button>
@@ -424,7 +424,7 @@ function AchievementFormPanel({
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <label style={{ display: "grid", gap: 4 }}>
-      <span style={{ fontSize: 11, color: "#888", textTransform: "uppercase", fontWeight: 700 }}>{label}</span>
+      <span style={{ fontSize: 11, color: "var(--adm-text-muted)", textTransform: "uppercase", fontWeight: 700 }}>{label}</span>
       {children}
     </label>
   )
@@ -435,10 +435,10 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
 // grid column widens to fit a sibling (the description textarea), leaving a
 // dead strip beside every short field.
 const input: React.CSSProperties = {
-  width: "100%", padding: "8px 9px", borderRadius: 7, border: "1px solid rgba(0,0,0,.16)",
-  fontSize: 12, background: "#fff", color: "#111", fontFamily: "inherit",
+  width: "100%", padding: "8px 9px", borderRadius: 7, border: "1px solid var(--adm-border-control)",
+  fontSize: 12, background: "var(--adm-panel)", color: "var(--adm-text)", fontFamily: "inherit",
 }
 const smallButton: React.CSSProperties = {
-  padding: "8px 12px", border: "1px solid rgba(0,0,0,.12)", borderRadius: 7,
-  background: "#fff", color: "#17201b", fontWeight: 700, cursor: "pointer", fontSize: 12,
+  padding: "8px 12px", border: "1px solid var(--adm-border-input)", borderRadius: 7,
+  background: "var(--adm-panel)", color: "var(--adm-text)", fontWeight: 700, cursor: "pointer", fontSize: 12,
 }

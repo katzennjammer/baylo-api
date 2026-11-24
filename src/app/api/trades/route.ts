@@ -142,7 +142,7 @@ export async function POST(req: NextRequest) {
     if (pair.fee > 0) {
       return NextResponse.json(
         {
-          error: `Offering a Bracket ${pair.offeredBracket} item for a Bracket ${pair.targetBracket} item costs ${pair.fee} Leaves. Send it as an offer so you can agree to the bridging fee first.`,
+          error: `Offering a Bracket ${pair.offeredBracket} item for a Bracket ${pair.targetBracket} item costs ${pair.fee} points. Send it as an offer so you can agree to the bridging fee first.`,
           code: "BRIDGE_NEEDS_OFFER",
           fee: pair.fee,
         },
@@ -360,6 +360,10 @@ export async function PATCH(req: NextRequest) {
           message: `accepted your trade request for "${trade.requestedItem.title}"`,
           link:    `/dashboard/trades`,
           actorId: myId,
+          // Without the pair the phone had nowhere to route the tap (push-target
+          // returned null and the app just opened). Same pair the offer path writes.
+          entityType: "trade",
+          entityId: tradeId,
         },
       })
 

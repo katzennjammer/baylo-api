@@ -1,4 +1,5 @@
 import prisma from "@/lib/prisma"
+import { revokeUserFamilies } from "@/lib/auth-tokens"
 import { SIGNUP_GRANT_LEAVES } from "@/lib/task-constants"
 import { awardTask } from "@/lib/tasks"
 import type { PrismaClient } from "@/generated/prisma/client"
@@ -84,8 +85,16 @@ export async function markVerified(
     // still there to catch a miss. Verification itself must not fail over it.
   }
 
-  // 3. The signup grant.
-  const grantAwarded = await claimSignupGrant(userId, at)
+  // 3. The signup grant. Best-effort like step 2 (18 Nov 2026): if it fails
+  //    -- a busy database timing the transaction out -- the account is still
+  //    verified, and settleVerificationRewards() pays it on the next app open
+  //    instead of the verify link erroring after the flag already flipped.
+  let grantAwarded = 0
+  try {
+    grantAwarded = await claimSignupGrant(userId, at)
+  } catch {
+    // Left for settleVerificationRewards().
+  }
 
   return { flipped, grantAwarded, taskAwarded }
 }
@@ -138,4 +147,60 @@ async function claimSignupGrant(userId: string, at: Date): Promise<number> {
 
     return SIGNUP_GRANT_LEAVES
   })
+}
+
+/**
+ * Google proved this person owns the address; the account it matched may not
+ * have. An unverified account with a password is one somebody registered by
+ * typing an email, never proving it -- possibly an attacker squatting on the
+ * victim's address before the victim ever arrived. Linking the Google sign-in
+ * to it as-is would leave the squatter's password working on the victim's
+ * account. So, before markVerified(): drop that password and end every session
+ * it opened. The real owner can set a new one from the profile screen.
+ *
+ * Called by both Google paths (web signIn callback, native /api/auth/google/token).
+ * A no-op on a verified account, which is every returning user.
+ */
+export async function claimUnverifiedForGoogle(userId: string): Promise<void> {
+  const cleared = await prisma.user.updateMany({
+    where: { id: userId, isVerified: false, password: { not: null } },
+    data: { password: null },
+  })
+  if (cleared.count > 0) await revokeUserFamilies(userId)
+}
+
+/**
+ * Pays a VERIFIED account's welcome points if verification left them unpaid
+ * (18 Nov 2026).
+ *
+ * markVerified() flips the flag first and pays afterwards, in separate
+ * statements, so a failure between them (a busy database timing out a
+ * transaction) left an account showing "Verified" with no points. The email
+ * link is single use, so nothing ever retried. GET /api/v1/home calls this
+ * for a verified account whose `signupGrantClaimed` is still false, so the
+ * points arrive the next time the app opens.
+ *
+ * Safe to call any number of times: the grant is claimed by a conditional
+ * update and VERIFY_ACCOUNT by the task's unique ledger row, so each pays
+ * once per account. Never throws. Returns the points paid on this call.
+ */
+export async function settleVerificationRewards(userId: string, at: Date = new Date()): Promise<number> {
+  let paid = 0
+  try {
+    const res = await prisma.$transaction(async (tx) =>
+      awardTask(tx as TaskDb, userId, "VERIFY_ACCOUNT", "", {
+        description: "Task reward: verified your account",
+        eventAt: at,
+      }),
+    )
+    paid += res.awarded
+  } catch {
+    // Tried again on the next open.
+  }
+  try {
+    paid += await claimSignupGrant(userId, at)
+  } catch {
+    // Tried again on the next open.
+  }
+  return paid
 }

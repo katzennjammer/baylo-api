@@ -4,6 +4,7 @@ import { Plus_Jakarta_Sans, JetBrains_Mono } from "next/font/google"
 import { auth } from "@root/auth"
 import prisma from "@/lib/prisma"
 import { suspensionState, activeSuspension } from "@/lib/moderation"
+import { getQueueCounts } from "@/lib/admin-queues"
 import AdminShell from "./AdminShell"
 import "./admin-theme.css"
 
@@ -46,7 +47,7 @@ export const revalidate = 0
  */
 export default async function AdminLayout({ children }: { children: ReactNode }) {
   const session = await auth()
-  if (!session?.user?.id) redirect("/auth/login?callbackUrl=/admin")
+  if (!session?.user?.id) redirect("/auth/login?callbackUrl=/admin/home")
 
   const me = await prisma.user.findUnique({
     where: { id: session.user.id },
@@ -58,8 +59,20 @@ export default async function AdminLayout({ children }: { children: ReactNode })
   if (!me || me.deletedAt || suspensionState(me).suspended) redirect("/api/auth/clear-session")
   if (me.role !== "ADMIN") redirect("/dashboard")
 
+  // The rail's queue badges. Counted here, not in the shell, because the shell
+  // is a client component; an action's router.refresh() re-runs this layout,
+  // so a badge drops as soon as its item is decided.
+  // getQueueCounts() is request-cached, so the Overview page reuses these.
+  const queues = await getQueueCounts()
+  const counts = {
+    reports: queues.openReports,
+    documents: queues.pendingIds + queues.pendingOrgs,
+    reviewQueue: queues.valuesInReview,
+    appeals: queues.openAppeals,
+  }
+
   return (
-    <AdminShell name={me.name} role={me.role} fontVariables={`${admSans.variable} ${admMono.variable}`}>
+    <AdminShell name={me.name} role={me.role} counts={counts} fontVariables={`${admSans.variable} ${admMono.variable}`}>
       {children}
     </AdminShell>
   )

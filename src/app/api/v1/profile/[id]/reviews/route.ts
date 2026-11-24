@@ -4,6 +4,7 @@ import { resolveSession } from "@/lib/api-auth"
 import { blockDirection } from "@/lib/blocking"
 import { bracketOf } from "@/lib/brackets"
 import prisma from "@/lib/prisma"
+import { SUBSCRIPTION_SELECT, hasPremiumAccess } from "@/lib/premium"
 import { loadTrustTiers } from "@/lib/trust-tiers"
 import { notFound, unauthenticated, invalid, ok } from "@/lib/v1/envelope"
 import { decodeCursor, encodeCursor, olderThan, paginate } from "@/lib/v1/cursor"
@@ -52,7 +53,7 @@ export async function GET(
         rating: true,
         comment: true,
         createdAt: true,
-        reviewer: { select: { id: true, name: true, avatar: true } },
+        reviewer: { select: { id: true, name: true, avatar: true, subscriptions: SUBSCRIPTION_SELECT } },
         trade: {
           select: {
             senderId: true,
@@ -94,7 +95,12 @@ export async function GET(
           rating: review.rating,
           comment: review.comment,
           createdAt: review.createdAt,
-          reviewer: review.reviewer,
+          reviewer: {
+            id: review.reviewer.id,
+            name: review.reviewer.name,
+            avatar: review.reviewer.avatar,
+            premium: hasPremiumAccess(review.reviewer.subscriptions),
+          },
           item: item
             ? {
                 id: item.id,

@@ -1,5 +1,5 @@
 import { BUSINESS_CATEGORIES, BUSINESS_CATEGORY_LABEL } from "@/app/api/v1/organizations/route"
-import { BRACKET_CEILINGS, BRACKET_COUNT, PREMIUM_MIN_BRACKET, VIP_MIN_BRACKET } from "@/lib/brackets"
+import { BRACKET_CEILINGS, BRACKET_COUNT, PREMIUM_MIN_BRACKET } from "@/lib/brackets"
 import { CATEGORY_VALUES } from "@/lib/validation"
 import { CATEGORY_LABELS } from "@/lib/v1/taxonomy"
 
@@ -40,7 +40,7 @@ Your only job is to turn what the user is looking for into search filters for Ba
 - Leaves are Baylo's trade credit. They are not money and have no peso value. Never convert Leaves to pesos, and never suggest what something is worth.
 - Every listing sits in a value bracket from 1 to ${BRACKET_COUNT}. Upper limit of each bracket, in Leaves: ${brackets}.
 - You express value ONLY as brackets, through minBracket and maxBracket. "Under 50 Leaves" means maxBracket 1. "Around 300 Leaves" means bracket 3, so minBracket 3 and maxBracket 3. "Cheap" or "budget" means maxBracket 2. Never state an exact Leaves value for a listing.
-- Brackets ${PREMIUM_MIN_BRACKET} and up need a Premium subscription to acquire, and ${VIP_MIN_BRACKET} and up need VIP. Everyone can still see and search them, so never filter them out on that basis.
+- Brackets ${PREMIUM_MIN_BRACKET} and up need a Premium subscription to acquire. Everyone can still see and search them, so never filter them out on that basis.
 
 ## Categories
 Use only these values (value = label shown in the app). Choose up to 5.

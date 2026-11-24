@@ -14,8 +14,9 @@
 #   ./scripts/set-premium.ps1                                        # list current subscribers
 #   ./scripts/set-premium.ps1 jmjumuad2@gmail.com -Live              # confirm writing to LIVE
 #
-# This is the ONLY writer of the Subscription table. When a real subscription
-# lands, the Play Billing verifier replaces it and nothing else has to change:
+# set-tier.ts and the admin Users page (Grant Premium) are the two writers of
+# the Subscription table. When a real subscription lands, the Play Billing
+# verifier replaces them and nothing else has to change:
 # every reader goes through isPremium()/isVip() in src/lib/premium.ts.
 #
 # PROVISIONAL -- BETA PRICING (30 Sep 2026): Premium is a one-time ₱199

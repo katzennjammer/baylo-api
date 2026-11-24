@@ -1,6 +1,7 @@
 import type { ReactNode } from "react"
 import Link from "next/link"
 import type { Metadata } from "next"
+import { SUPPORT_EMAIL } from "@/lib/support"
 
 export const metadata: Metadata = {
   title: "Trust & Safety — Baylo",
@@ -260,7 +261,7 @@ export default function TrustPage() {
 
           <p style={{ marginTop: 20, fontSize: 13, color: "var(--muted)", lineHeight: 1.6 }}>
             Items not listed above are evaluated case-by-case. When in doubt,{" "}
-            <a href="mailto:hello@baylo.ph" style={{ color: "var(--accent)", textDecoration: "underline", textUnderlineOffset: 3 }}>
+            <a href={`mailto:${SUPPORT_EMAIL}`} style={{ color: "var(--accent)", textDecoration: "underline", textUnderlineOffset: 3 }}>
               email us
             </a>{" "}
             before listing. Prohibited listings are removed without notice and may result in account suspension.

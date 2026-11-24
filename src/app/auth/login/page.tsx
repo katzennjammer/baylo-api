@@ -4,6 +4,9 @@ import LoginClient, { type SwapDisplay } from "./LoginClient"
 import { isLeavesOnlyTrade } from "@/lib/trade-format"
 import { ITEM_IMAGES, toImageUrls, type ImagesLike } from "@/lib/item-images"
 
+// Live counts and recent swaps: render per request, never at `next build`.
+export const dynamic = "force-dynamic"
+
 function formatRelativeTime(date: Date): string {
   const diffMs = Date.now() - date.getTime()
   const diffMins = Math.floor(diffMs / 60_000)

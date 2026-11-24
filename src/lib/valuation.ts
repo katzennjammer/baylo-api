@@ -127,29 +127,32 @@ const conditionMultiplier = (c: string): number =>
 // ── Category bands ───────────────────────────────────────────────────────────
 
 /**
- * Typical secondhand worth per category, in Pasa Leaves, for an item in GOOD
- * condition.
+ * Typical secondhand worth per category for an item in GOOD condition, in
+ * Leaves on the peso scale (1 Leaf = ₱1; a unit, not an exchange rate).
  *
- * Leaves are a non-monetary trade unit — these are relative worth, not prices.
- * This table is the SINGLE source of truth for the bands. It used to live in
- * the route handler; it lives here so that the route, the item-create guard and
- * the verification harness all read the same numbers, and so that there is
- * exactly one file to point at when asked where the numbers come from.
+ * Moved onto the peso scale on 5 Nov 2026, when the online price check began
+ * suggesting the median peso price itself. The old table was on a smaller,
+ * older scale, so the same laptop came out Bracket 10 with an online price and
+ * Bracket 6 without one. The suggestion is the band's midpoint times the
+ * condition multiplier, so each band is chosen for a sensible midpoint (a
+ * typical used item in the category), not for its extremes.
  *
- * No client keeps a copy. The web wizard reads the endpoint.
+ * This table is the SINGLE source of truth for the bands: the route, the
+ * item-create guard and the verification harness all read it. No client keeps
+ * a copy. Existing listings keep the values they were posted with.
  */
 export const CATEGORY_BANDS: Record<Category, readonly [number, number]> = {
-  ELECTRONICS:  [100, 4000],  CLOTHING:    [30, 600],    BAGS:      [40, 1600],
-  BEAUTY:       [20, 1000],   ACCESSORIES: [40, 2000],   FURNITURE: [100, 3000],
-  BOOKS:        [15, 200],    GAMING:      [100, 4000],  SPORTS:    [60, 3000],
-  BIKES:        [200, 6000],  TOYS:        [20, 600],    TOOLS:     [40, 2000],
-  MUSIC:        [100, 6000],  ART:         [40, 1000],   COLLECTIBLES: [20, 2000],
-  PETS:         [20, 600],    PLANTS:      [20, 400],    FOOD:      [10, 100],
-  OTHER:        [20, 1000],
+  ELECTRONICS:  [500, 10000],  CLOTHING:    [100, 1000],   BAGS:      [200, 2000],
+  BEAUTY:       [100, 1000],   ACCESSORIES: [100, 1500],   FURNITURE: [500, 6000],
+  BOOKS:        [50, 500],     GAMING:      [500, 8000],   SPORTS:    [200, 3000],
+  BIKES:        [1500, 12000], TOYS:        [100, 1000],   TOOLS:     [200, 3000],
+  MUSIC:        [500, 8000],   ART:         [100, 2000],   COLLECTIBLES: [100, 3000],
+  PETS:         [100, 1000],   PLANTS:      [50, 600],     FOOD:      [50, 300],
+  OTHER:        [100, 2000],
 }
 
 /** For a category outside the enum. Should be unreachable; not a crash if not. */
-export const FALLBACK_BAND: readonly [number, number] = [1, 40]
+export const FALLBACK_BAND: readonly [number, number] = [50, 1000]
 
 const bandFor = (category: string): readonly [number, number] =>
   CATEGORY_BANDS[category as Category] ?? FALLBACK_BAND

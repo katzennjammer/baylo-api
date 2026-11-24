@@ -2,6 +2,7 @@ import prisma from "@/lib/prisma"
 import {
   valueItem,
   comparablesWhere,
+  overrideBounds,
   COMPARABLE_SELECT,
   MAX_COMPARABLES,
   type Valuation,
@@ -24,6 +25,10 @@ import { classifyValue, valueCap, type ValueDecision } from "@/lib/trade-rules"
  * the endpoint that shows the user a suggestion and the handler that judges
  * their own value were to compute the suggestion differently, the server would
  * route to review values its own wizard said were fine.
+ *
+ * /api/ai/valuation also starts here: valuate() gives the range Claude's
+ * answer must fall inside, and the deterministic suggestion that stands in
+ * when there is no AI answer.
  */
 
 /** Comparables for a category, in a stable order. See the orderBy note. */
@@ -57,7 +62,7 @@ export interface ValuationDecision {
     valueSetByUser: boolean
   }
   /** The valuation that produced them, for the caller's response or logging. */
-  valuation: Valuation
+  valuation: Omit<Valuation, "valuationSource"> & { valuationSource: string }
   /** Which of the four cases the request fell in. */
   decision: ValueDecision
   /**
@@ -73,14 +78,35 @@ export interface ValuationDecision {
 export type ValuationOutcome = { ok: true } & ValuationDecision
 
 /**
+ * A suggestion the server already holds, used INSTEAD of recomputing one.
+ *
+ * Two sources, both server-side and neither taken from a request body:
+ *
+ *   - a verified AI valuation ticket (@/lib/ai-valuation), on create;
+ *   - the listing's own stored suggestion, on an edit that changes only the
+ *     value, when that suggestion came from AI.
+ *
+ * The AI suggestion cannot be recomputed -- asking Claude again gives another
+ * number -- so these are the only ways the write path can judge a value
+ * against the AI suggestion the owner was actually shown.
+ */
+export interface FixedSuggestion {
+  suggestedLeaves: number
+  min: number
+  max: number
+  valuationSource: string
+}
+
+/**
  * Decide what value a listing gets, and whether it can go live with it.
  *
- * THE SERVER RECOMPUTES THE SUGGESTION. It does not accept one from the client
+ * THE SERVER DECIDES THE SUGGESTION. It does not accept one from the client
  * and judge the request against that — a client that supplies both the
  * suggestion and the "override" of it has not been bounded by anything.
- * Because the model is deterministic, the server can derive the same
- * suggestion the client was shown from the same two labels, so there is
- * nothing the client needs to be trusted about.
+ * Without `fixed`, the deterministic model derives the same suggestion the
+ * client was shown from the same two labels. With `fixed`, the suggestion is
+ * one the server itself produced earlier: a signed AI valuation ticket it has
+ * just verified, or the listing's own stored AI suggestion. See FixedSuggestion.
  *
  * ── THE RULES (16 Sep 2026) ─────────────────────────────────────────────────
  *
@@ -110,8 +136,22 @@ export async function decideItemValue(
   category: string,
   condition: string,
   requestedValue: number | null | undefined,
+  fixed?: FixedSuggestion,
 ): Promise<ValuationOutcome> {
-  const valuation = await valuate(category, condition)
+  const valuation: ValuationDecision["valuation"] = fixed
+    ? { ...fixed, sampleSize: 0, allowed: overrideBounds(fixed.suggestedLeaves) }
+    : await valuate(category, condition)
+  return judgeValue(valuation, requestedValue)
+}
+
+/**
+ * The bracket rules applied to a suggestion. Pure; split out of
+ * decideItemValue() so the AI path can be checked without a database.
+ */
+export function judgeValue(
+  valuation: ValuationDecision["valuation"],
+  requestedValue: number | null | undefined,
+): ValuationOutcome {
   const { suggestedLeaves, valuationSource } = valuation
   const cap = valueCap(suggestedLeaves)
   const decision = classifyValue(requestedValue, suggestedLeaves)

@@ -83,21 +83,7 @@ export function valueNeedsPremium(valueLeaves: number | null): boolean {
   return valueLeaves !== null && bracketNeedsPremium(bracketOf(valueLeaves))
 }
 
-/**
- * The first bracket that needs a VIP subscription to ACQUIRE from, same rules
- * as PREMIUM_MIN_BRACKET otherwise: visible to everyone, gated only on taking
- * one in. Brackets [PREMIUM_MIN_BRACKET, VIP_MIN_BRACKET) need Premium (or
- * VIP, which is a superset); VIP_MIN_BRACKET and above need VIP specifically
- * -- a live Premium subscription alone does not clear it. See
- * enforcePremiumForListing() in @/lib/reputation-gate for the ordering.
- */
-export const VIP_MIN_BRACKET: Bracket = 9
-
-export function bracketNeedsVip(bracket: Bracket): boolean {
-  return bracket >= VIP_MIN_BRACKET
-}
-
-/** `valueNeedsVip(null)` is false: an unvalued listing has no bracket. */
-export function valueNeedsVip(valueLeaves: number | null): boolean {
-  return valueLeaves !== null && bracketNeedsVip(bracketOf(valueLeaves))
-}
+// No VIP-only bracket since 22 Oct 2026. Brackets 9 and 10 used to need VIP,
+// a tier nobody could buy, which left them untradeable for everyone. Premium
+// now unlocks every bracket from PREMIUM_MIN_BRACKET up; VIP stays a superset
+// of Premium (isVip() in @/lib/premium) but gates nothing of its own.

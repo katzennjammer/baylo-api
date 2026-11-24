@@ -9,8 +9,9 @@
 //   npx tsx --env-file=.env scripts/set-tier.ts jmjumuad2@gmail.com --clear            # back to not subscribed
 //   npx tsx --env-file=.env scripts/set-tier.ts                                        # list current subscribers
 //
-// This is the ONLY writer of the Subscription table. When a real subscription lands,
-// the Play Billing verifier replaces it and nothing else has to change: every
+// One of two writers of the Subscription table; the other is the admin Users
+// page (POST /api/admin/users/[id]/premium), which does the same write. When a
+// real subscription lands, the Play Billing verifier replaces both and nothing else has to change: every
 // reader goes through isPremium()/isVip() in src/lib/premium.ts.
 //
 // PROVISIONAL -- BETA PRICING (30 Sep 2026): Premium is a one-time ₱199

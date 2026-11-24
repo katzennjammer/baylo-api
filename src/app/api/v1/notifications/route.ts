@@ -3,7 +3,7 @@ import { z } from "zod"
 import { resolveSession } from "@/lib/api-auth"
 import prisma from "@/lib/prisma"
 import { ok, fail, unauthenticated, invalid } from "@/lib/v1/envelope"
-import { resolveInbox, shopBellWhere } from "@/lib/inbox"
+import { excludeDirectMessageNotifications, resolveInbox, shopBellWhere } from "@/lib/inbox"
 import { parseQuery, paginationShape } from "@/lib/v1/query"
 import { decodeCursor, encodeCursor, paginate, olderThan } from "@/lib/v1/cursor"
 import { ITEM_IMAGES, toImageUrls, type ImagesLike } from "@/lib/item-images"
@@ -86,6 +86,7 @@ export async function GET(req: NextRequest) {
       userId: viewerId,
       ...(parsed.data.unread === "1" ? { read: false } : {}),
       ...(olderThan(cursor) ?? {}),
+      ...excludeDirectMessageNotifications(),
       AND: bellFilter,
     },
     select: {
@@ -142,7 +143,7 @@ export async function GET(req: NextRequest) {
   // shows a page; the count has to describe the whole list or it disagrees with
   // the bell the moment there are more unread rows than fit on one page.
   const unreadCount = await prisma.notification.count({
-    where: { userId: viewerId, read: false, AND: bellFilter },
+    where: { userId: viewerId, read: false, ...excludeDirectMessageNotifications(), AND: bellFilter },
   })
 
   return ok(

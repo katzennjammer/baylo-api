@@ -1,4 +1,5 @@
 import prisma from "@/lib/prisma"
+import { runInBackground } from "@/lib/background"
 
 /**
  * Daily quests: five a day -- 2 Easy, 2 Medium, 1 Hard -- refreshed every
@@ -27,14 +28,14 @@ import prisma from "@/lib/prisma"
  * Both callers take the same claim guard in completeQuest(), so an event and
  * a read racing each other pay once.
  *
- * ── NOT FOR ORGANISATION ACCOUNTS ───────────────────────────────────────────
+ * ── VERIFIED SHOPS HAVE DAILY QUESTS TOO (16 Nov 2026) ──────────────────────
  *
- * The event side skips org-backed User rows (`isOrgAccount`), so a staff
- * member's listing posted for an org, which lands on the org's row, does not
- * start paying daily quests into an account no person controls. The same
- * reasoning sends FIRST_LISTING to the human in POST /api/items. Whether orgs
- * should have quests at all is an open product decision, not a default. See
- * settleQuestsAsync().
+ * Decided: a shop pays its bridging fees from its own balance, and quests are
+ * how it earns. A VERIFIED shop's backing row gets the same daily quests,
+ * paid into the shop's balance, read in shop mode (GET /api/v1/quests acts as
+ * the shop). Unverified shops still get none. Shops cannot follow anyone, so
+ * "Follow a trader" is left out of a shop's pool (see SHOP_EXCLUDED). Task
+ * rewards and trade rewards stay person-only (decision E).
  *
  * ── EVERY QUEST IS A REAL ACTION ─────────────────────────────────────────────
  *
@@ -120,7 +121,7 @@ export const QUEST_POOL: Record<QuestTier, readonly QuestDef[]> = {
   ],
   HARD: [
     { quest: "COMPLETE_TRADE", label: "Complete a trade", description: "See a trade all the way through to completion." },
-    { quest: "COMPLETE_BRIDGE_TRADE", label: "Complete a bridge trade", description: "Complete a trade that bridges a value gap with Leaves." },
+    { quest: "COMPLETE_BRIDGE_TRADE", label: "Complete a bridge trade", description: "Complete a trade that pays a bridging fee." },
     { quest: "COMPLETE_SAFEZONE_TRADE", label: "Meet at a Safe-Zone Hub", description: "Complete a trade you met for at a Safe-Zone Hub." },
   ],
 } as const
@@ -150,8 +151,11 @@ function poolSeed(userId: string, periodStart: Date, tier: QuestTier): number {
  * `count` consecutive entries from a hashed start, wrapping around, can never
  * repeat an entry within the same day.
  */
-function pickQuests(userId: string, periodStart: Date, tier: QuestTier): QuestDef[] {
-  const pool = QUEST_POOL[tier]
+/** Quests a shop cannot do: a shop never follows anyone. */
+const SHOP_EXCLUDED: ReadonlySet<QuestKind> = new Set(["FOLLOW_TRADER"])
+
+function pickQuests(userId: string, periodStart: Date, tier: QuestTier, forShop = false): QuestDef[] {
+  const pool = forShop ? QUEST_POOL[tier].filter((d) => !SHOP_EXCLUDED.has(d.quest)) : QUEST_POOL[tier]
   const count = Math.min(QUEST_TIER_COUNT[tier], pool.length)
   const start = poolSeed(userId, periodStart, tier) % pool.length
   return Array.from({ length: count }, (_, i) => pool[(start + i) % pool.length])
@@ -280,9 +284,11 @@ export async function reconcileQuests(
   only?: readonly QuestKind[],
 ): Promise<QuestView[]> {
   const periodStart = dayStartUtc(at)
+  const account = await prisma.user.findUnique({ where: { id: userId }, select: { isOrgAccount: true } })
+  const forShop = account?.isOrgAccount === true
 
   const wanted = QUEST_TIERS.flatMap((tier) =>
-    pickQuests(userId, periodStart, tier).map((def) => ({ tier, def })),
+    pickQuests(userId, periodStart, tier, forShop).map((def) => ({ tier, def })),
   )
 
   // QUEST rows of UserProgress (schema v2). The quest columns are NOT NULL on
@@ -346,17 +352,17 @@ export const TRADE_QUESTS: readonly QuestKind[] = [
  * reconcileQuests() reads through the global client, so it cannot see rows a
  * still-open transaction has written, and would find the quest unsatisfied.
  *
- * Organisation accounts are skipped. See "NOT FOR ORGANISATION ACCOUNTS" in the
- * header. The check is one indexed lookup, and it is the only thing standing
- * between a staff member's org listing and a daily Leaf allowance on the org's
- * row.
+ * UNVERIFIED shops are skipped; verified shops earn (see the header).
  */
 export function settleQuestsAsync(userId: string, kinds: readonly QuestKind[]): void {
-  void (async () => {
-    const user = await prisma.user.findUnique({ where: { id: userId }, select: { isOrgAccount: true } })
-    if (!user || user.isOrgAccount) return
+  runInBackground((async () => {
+    const user = await prisma.user.findUnique({
+      where: { id: userId },
+      select: { isOrgAccount: true, organization: { select: { verificationStatus: true } } },
+    })
+    if (!user || (user.isOrgAccount && user.organization?.verificationStatus !== "VERIFIED")) return
     await reconcileQuests(userId, new Date(), kinds)
   })().catch((err) => {
     console.error("[quests] event settle failed; GET /api/v1/quests will backfill", err)
-  })
+  }))
 }

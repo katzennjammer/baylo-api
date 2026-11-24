@@ -2,7 +2,7 @@
 
 # 🌿 Baylo
 
-**Barter, not buy.**
+**Buy less, Baylo.**
 
 A mobile marketplace where people trade what they no longer use for what they actually need — no money, anywhere in the app.
 
@@ -29,17 +29,19 @@ It exists because the two things that kill local bartering are trust and matchin
 
 ## How trading works
 
-**Pasa Leaves** are the unit of account. They cannot be bought, sold, or withdrawn — they exist only inside the app, and every Leaf in circulation traces to a ledger entry.
+**Pasa Leaves** are the unit of account. They cannot be bought, sold, or withdrawn — they exist only inside the app, and every Leaf in circulation traces to a ledger entry. Item values are counted on the peso scale (1 Leaf = ₱1 of value), which is not an exchange rate.
 
-When two items are unequal in value, the difference can be settled three ways:
+Every listing sits in one of **10 value brackets**, from Bracket 1 (up to 100 Leaves) to Bracket 10 (above 12,000). Listings show the bracket, not the exact figure.
 
 | | |
 |---|---|
-| **Even swap** | Nothing to settle |
-| **Leaves** | The lower-value party covers the gap from their balance |
-| **Deferred Points Agreement** | A recorded promise to settle the difference by a deadline |
+| **Same bracket** | An even swap. Nothing to settle |
+| **One bracket apart** | Allowed. The person moving **up** pays a small **bridging fee** in Leaves: 10 per bracket of their own item (8 with Premium). It goes to the other trader when the swap completes |
+| **Two or more apart** | Not allowed. You trade up one bracket at a time |
 
-The **DPA** is the platform's core mechanism — an in-system IOU that lets an unequal trade happen fairly without money changing hands. Both parties agree before the swap finalises, and the creditor sees the proposer's full record first.
+**Bracket 7 and above** needs a Premium subscription to acquire.
+
+> Deferred Points Agreements (an IOU for settling the difference later) were retired on 16 Sep 2026. Their endpoints now answer `410 Gone`.
 
 ---
 
@@ -47,10 +49,10 @@ The **DPA** is the platform's core mechanism — an in-system IOU that lets an u
 
 Trading with strangers means meeting strangers. Baylo is built around that.
 
-- **Safe-Zone Hubs** — 22 curated public meetup points across Lapu-Lapu and Mandaue: malls, barangay halls, police stations, plazas
+- **Safe-Zone Hubs** — curated public meetup points across Lapu-Lapu and Mandaue: malls, barangay halls, police stations, plazas
 - **Two-sided confirmation codes** — both traders exchange 6-digit codes in person before a swap settles
-- **ID verification** — a government ID, manually reviewed, required before posting or proposing a DPA. One ID, one account.
-- **Multi-layered reputation** — trust tiers derived from completed trades and ratings, which gate trade value and DPA eligibility
+- **ID verification** — a government ID, manually reviewed, required before posting. One ID, one account. Verified traders carry a checkmark on their trust tier
+- **Reputation** — a trust tier (New, Rising, Trusted, Top) earned from completed trades and review ratings, shown on profiles and offers and used to rank offers. Since Nov 2026 it no longer caps which items a trader may trade for
 - **Report, block, and moderation** — with a full admin audit trail
 - **Duplicate photo detection** — perceptual hashing catches reposted listings
 - **18+** — a declared age gate, checked on both client and server
@@ -63,9 +65,9 @@ Seller pickup locations are never published at full precision, and uploaded phot
 
 Claude handles **image classification**: it reads a listing photo and suggests a category and condition, which the seller confirms or corrects. It also acts as a second stage in duplicate detection.
 
-Item **valuation is not AI**. It's a deterministic statistical model — comparable completed trades where enough exist, a fixed per-category band where they don't, scaled by a condition multiplier. Every listing records which path produced its figure.
+Item **valuation is AI-assisted**. Claude looks up current online listings for the item and the median of their peso prices (at least two verified sources) becomes the suggested value. The server signs that suggestion, so the app cannot submit a value the server did not produce, and the listing records where its value came from (`valuationSource`).
 
-This is deliberate. A language model gives a different answer to the same question on different days; the valuation needs to be consistent and auditable.
+A seller can set a different value; one far from the suggestion is held for a moderator's review before the listing goes live.
 
 ---
 

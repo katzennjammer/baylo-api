@@ -51,6 +51,7 @@ import { ledgerInvariant } from "./lib/ledger-invariant"
 import { createTradeRow } from "./lib/deal-rows"
 import { bracketOf } from "../src/lib/brackets"
 import { loadStanding } from "../src/lib/reputation-gate"
+import { dayStartUtc, reconcileQuests } from "../src/lib/quests"
 
 const BASE = process.env.ACCEPT_BASE ?? "http://127.0.0.1:3001"
 const P = "ZZBRKHTTP_"
@@ -105,7 +106,24 @@ async function mkUser(tag: string, leaves = 0) {
     data: { name: `${P}${tag}`, email: `${P}${tag}@example.com`, isVerified: true, leaves: 0 },
   })
   if (leaves > 0) await grant(u.id, leaves)
+  await retireTodaysQuests(u.id)
   return { ...u, token: await signAccessToken(u.id) }
+}
+
+/**
+ * POST /api/offers pays daily quests in the background (settleQuestsAsync):
+ * +2/+3 Leaves to the sender or receiver, landing a moment after the response,
+ * and only on days the user's random picks include an offer quest. Every
+ * balance check here is exact, so that read as fee bugs in random places.
+ * Quests have their own harness (verify-quests); here today's are assigned
+ * and marked done up front, so none can pay out mid-run.
+ */
+async function retireTodaysQuests(userId: string) {
+  await reconcileQuests(userId)
+  await prisma.userProgress.updateMany({
+    where: { userId, type: "QUEST", periodStart: dayStartUtc(new Date()), completedAt: null },
+    data: { completedAt: new Date() },
+  })
 }
 
 async function mkItem(userId: string, tag: string, valueLeaves: number) {
@@ -213,7 +231,10 @@ async function main() {
   const alice = await mkUser("alice", 200)   // proposer
   const bob = await mkUser("bob", 200)       // receiver
   const b1 = await mkItem(alice.id, "a-b1", 50)     // bracket 1
-  const a2 = await mkItem(alice.id, "a-b2", 200)    // bracket 2
+  const a2 = await mkItem(alice.id, "a-b2", 200)    // bracket 2, section 2's offer: stays PENDING to the end
+  // Bracket 2 too, for sections 5, 7 and 8. An item may back only one pending
+  // offer (OFFERED_ITEM_ALREADY_PENDING), and a2 is held by section 2's.
+  const a2b = await mkItem(alice.id, "a-b2b", 210)
   const a3 = await mkItem(alice.id, "a-b3", 300)    // bracket 3
   const a3b = await mkItem(alice.id, "a-b3b", 320)  // bracket 3
   const a4 = await mkItem(alice.id, "a-b4", 700)    // bracket 4
@@ -349,7 +370,7 @@ async function main() {
 
     // The receiver cannot decide for themselves that a bridge is free.
     const freeloader = await post("/api/offers", alice.token, {
-      postId: t3c.id, offeredItemId: a2.id, consent: { accepted: true, policyVersion: TRADING_POLICY_VERSION },
+      postId: t3c.id, offeredItemId: a2b.id, consent: { accepted: true, policyVersion: TRADING_POLICY_VERSION },
     })
     check("a legitimate bridge still charges the quoted fee, not what the client says",
       freeloader.status === 201 && freeloader.json.chargedLeaves === 20, freeloader.json)
@@ -393,7 +414,7 @@ async function main() {
   // ═══ 7 refunds ═══
   head("7  decline, withdraw and expiry all return a proposer-paid fee")
   {
-    const dec = await post("/api/offers", alice.token, { postId: t3c.id, offeredItemId: a2.id, consent: CONSENT })
+    const dec = await post("/api/offers", alice.token, { postId: t3c.id, offeredItemId: a2b.id, consent: CONSENT })
     check("held", (await balance(alice.id)) === 160, await balance(alice.id))
     const r = await patch(`/api/offers/${dec.json.offerId}`, bob.token, { action: "decline" })
     check("decline returns it", r.status === 200 && r.json.releasedLeaves === 20, r.json)
@@ -402,14 +423,14 @@ async function main() {
     check("HOLD then RELEASE, and nothing else", rows.length === 2 && rows[1].type === "BRIDGE_FEE_RELEASE" && rows[1].amount === 20, rows)
     await invariant("after a decline")
 
-    const wd = await post("/api/offers", alice.token, { postId: t3c.id, offeredItemId: a2.id, consent: CONSENT })
+    const wd = await post("/api/offers", alice.token, { postId: t3c.id, offeredItemId: a2b.id, consent: CONSENT })
     const w = await post(`/api/v1/offers/${wd.json.offerId}/withdraw`, alice.token, {})
     check("withdraw returns it", w.status === 200 && (w.json.meta as Json)?.releasedLeaves === 20, w.json)
     check("balance restored", (await balance(alice.id)) === 180)
     await invariant("after a withdraw")
 
     // Expiry: backdate a live offer past the window and touch a read path.
-    const exp = await post("/api/offers", alice.token, { postId: t3c.id, offeredItemId: a2.id, consent: CONSENT })
+    const exp = await post("/api/offers", alice.token, { postId: t3c.id, offeredItemId: a2b.id, consent: CONSENT })
     await prisma.trade.update({
       where: { id: exp.json.offerId as string },
       data: { createdAt: new Date(Date.now() - 4 * 86_400_000) },
@@ -426,7 +447,7 @@ async function main() {
   // ═══ 8 completion: the fee moves, the reward is issued ═══
   head("8  completion pays the fee to the other side and issues both rewards")
   {
-    const r = await post("/api/offers", alice.token, { postId: t3e.id, offeredItemId: a2.id, consent: CONSENT })
+    const r = await post("/api/offers", alice.token, { postId: t3e.id, offeredItemId: a2b.id, consent: CONSENT })
     const acc = await patch(`/api/offers/${r.json.offerId}`, bob.token, { action: "accept" })
     check("accepted", acc.status === 200 && !!acc.json.tradeId, acc.json)
     const tradeId = acc.json.tradeId as string
@@ -464,7 +485,7 @@ async function main() {
       })
       await awardTradeRewards(tx, {
         id: tradeId, senderId: alice.id, receiverId: bob.id,
-        offeredItemId: a2.id, requestedItemId: t3e.id, completedAt,
+        offeredItemId: a2b.id, requestedItemId: t3e.id, completedAt,
       })
     })
 

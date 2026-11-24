@@ -52,21 +52,21 @@ const btn: React.CSSProperties = {
   borderRadius: 9,
   fontSize: 13,
   fontWeight: 700,
-  border: "1px solid rgba(0,0,0,.14)",
-  background: "#fff",
-  color: "#333",
+  border: "1px solid var(--adm-border-control)",
+  background: "var(--adm-panel)",
+  color: "var(--adm-text-secondary)",
   cursor: "pointer",
 }
-const solid: React.CSSProperties = { ...btn, background: "#4CAF50", color: "#1A3520", border: 0 }
-const danger: React.CSSProperties = { ...btn, background: "#e5484d", color: "#fff", border: 0 }
+const solid: React.CSSProperties = { ...btn, background: "var(--adm-accent)", color: "var(--adm-text)", border: 0 }
+const danger: React.CSSProperties = { ...btn, background: "var(--adm-danger)", color: "var(--adm-text-on-accent)", border: 0 }
 
 const input: React.CSSProperties = {
   padding: "10px 12px",
   borderRadius: 10,
   fontSize: 13,
-  border: "1.5px solid rgba(0,0,0,.15)",
-  background: "#fff",
-  color: "#111",
+  border: "1.5px solid var(--adm-border-control)",
+  background: "var(--adm-panel)",
+  color: "var(--adm-text)",
   width: "100%",
   fontFamily: "inherit",
 }
@@ -110,9 +110,9 @@ export default function OrgDecisionActions({
   return (
     <div
       style={{
-        background: "#fff",
+        background: "var(--adm-panel)",
         borderRadius: 14,
-        border: "1px solid rgba(0,0,0,.08)",
+        border: "1px solid var(--adm-border)",
         padding: 20,
         display: "flex",
         flexDirection: "column",
@@ -121,7 +121,7 @@ export default function OrgDecisionActions({
     >
       <div>
         <p style={{ fontSize: 15, fontWeight: 800 }}>Decide</p>
-        <p style={{ fontSize: 12, color: "#888", marginTop: 3 }}>
+        <p style={{ fontSize: 12, color: "var(--adm-text-muted)", marginTop: 3 }}>
           Either decision destroys the document and writes an audit row naming you. Every active
           owner is notified. {organizationName} keeps trading either way.
         </p>
@@ -136,7 +136,7 @@ export default function OrgDecisionActions({
           placeholder="What you checked and what you concluded."
           style={{ ...input, resize: "vertical" }}
         />
-        <p style={{ fontSize: 12, color: "#888" }}>
+        <p style={{ fontSize: 12, color: "var(--adm-text-muted)" }}>
           Goes to the audit log, not to the applicant — they read the reason below. Required on
           both decisions: this row is the only durable record, because the document is destroyed
           by the same transaction that writes it.
@@ -149,7 +149,7 @@ export default function OrgDecisionActions({
           display: "flex",
           flexDirection: "column",
           gap: 8,
-          borderTop: "1px solid rgba(0,0,0,.07)",
+          borderTop: "1px solid var(--adm-border)",
           paddingTop: 16,
         }}
       >
@@ -174,7 +174,7 @@ export default function OrgDecisionActions({
           display: "flex",
           flexDirection: "column",
           gap: 8,
-          borderTop: "1px solid rgba(0,0,0,.07)",
+          borderTop: "1px solid var(--adm-border)",
           paddingTop: 16,
         }}
       >
@@ -191,7 +191,7 @@ export default function OrgDecisionActions({
             </option>
           ))}
         </select>
-        <p style={{ fontSize: 12, color: "#888" }}>
+        <p style={{ fontSize: 12, color: "var(--adm-text-muted)" }}>
           This is what the owners read, with a sentence telling them how to fix it. There is no
           attempt cap — they can correct the document and apply again.
         </p>

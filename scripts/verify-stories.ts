@@ -7,7 +7,7 @@
 //
 // Covers, in order:
 //   1  sharing: own AVAILABLE listing only; not someone else's, not TRADED,
-//      not moderation-hidden; one live story per listing; shops refused;
+//      not moderation-hidden; one live story per listing; unverified shops refused (verified shops post since 16 Nov 2026);
 //      caption trimmed and capped
 //   2  the row: own first, then unseen, then seen; seen is per viewer and
 //      idempotent
@@ -124,7 +124,7 @@ async function main() {
   await prisma.item.update({ where: { id: aLamp.id }, data: { moderationHiddenAt: null } })
 
   const shopTry = await createListingStory(prisma, shop.id, { itemId: shopItem.id })
-  check("a shop's backing account is refused (PERSONAL_ONLY)", !shopTry.ok && shopTry.reason === "PERSONAL_ONLY")
+  check("an unverified shop (no verified Organization) is refused (PERSONAL_ONLY)", !shopTry.ok && shopTry.reason === "PERSONAL_ONLY")
 
   const long = await createListingStory(prisma, carol.id, { itemId: cChair.id, caption: "x".repeat(250) })
   const longRow = long.ok ? await prisma.story.findUnique({ where: { id: long.storyId } }) : null
@@ -147,6 +147,12 @@ async function main() {
   check("marking it again is idempotent", await markStorySeen(prisma, alice.id, b1id))
   const views = await prisma.storyView.count({ where: { storyId: b1id, viewerId: alice.id } })
   check("exactly one StoryView row after two marks", views === 1, `got ${views}`)
+
+  // The cut (12 Nov 2026). Bob's story is the newest one live, so a row with
+  // room for ONE story must be his -- before the fix it was the oldest.
+  const cut = await listStoryRow(prisma, alice.id, new Date(), 1)
+  const kept = cut.flatMap((g) => g.stories.map((st) => st.id))
+  check("a full row keeps the NEWEST story and drops older ones", kept.length === 1 && kept[0] === b1id, JSON.stringify(kept))
 
   row = await listStoryRow(prisma, alice.id)
   const order = row.map((g) => g.user.id)

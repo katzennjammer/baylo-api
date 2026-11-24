@@ -3,6 +3,7 @@ import { z } from "zod"
 import { resolveSession } from "@/lib/api-auth"
 import { blockDirection } from "@/lib/blocking"
 import prisma from "@/lib/prisma"
+import { SUBSCRIPTION_SELECT, hasPremiumAccess } from "@/lib/premium"
 import { loadTrustTiers } from "@/lib/trust-tiers"
 import { decodeCursor, encodeCursor, olderThan, paginate } from "@/lib/v1/cursor"
 import { invalid, notFound, ok, unauthenticated } from "@/lib/v1/envelope"
@@ -51,8 +52,8 @@ export async function GET(
     select: {
       id: true,
       createdAt: true,
-      follower: { select: { id: true, name: true, avatar: true, rating: true, deletedAt: true } },
-      followee: { select: { id: true, name: true, avatar: true, rating: true, deletedAt: true } },
+      follower: { select: { id: true, name: true, avatar: true, rating: true, deletedAt: true, subscriptions: SUBSCRIPTION_SELECT } },
+      followee: { select: { id: true, name: true, avatar: true, rating: true, deletedAt: true, subscriptions: SUBSCRIPTION_SELECT } },
     },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take: limit + 1,
@@ -95,6 +96,7 @@ export async function GET(
         id: user.id,
         name: user.name,
         avatar: user.avatar,
+        premium: hasPremiumAccess(user.subscriptions),
         trustTier: tiers.get(user.id) ?? null,
         follow: {
           status: viewerEdgeByFollowee.get(user.id) ?? "NONE",

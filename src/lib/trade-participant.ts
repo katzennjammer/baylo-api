@@ -158,3 +158,67 @@ export function shopMemberSelfTradeRefusal() {
     { status: 403 },
   )
 }
+
+// ── Offers SENT by a shop (16 Nov 2026) ─────────────────────────────────────
+//
+// Until now an offer made in shop mode went out as the PERSON: POST /api/offers
+// read session.user.id and ignored X-Baylo-Org, so the screen said "shop" while
+// the person's items, Leaves and Premium were used. An offer now goes out as
+// the ACTING identity (resolveActingIdentity), and these helpers hold the rules
+// that only matter once a shop can be a sender.
+
+/**
+ * Every account one person can send offers from: themselves and each shop they
+ * own (schema v2: the owner is a shop's only member). Used for the
+ * one-pending-offer-per-person rule. Names are only ever shown back to that
+ * same person, never to anybody else.
+ */
+export async function sendingAccountsOf(
+  db: Pick<PrismaClient, "organization" | "user">,
+  humanUserId: string,
+): Promise<{ id: string; name: string }[]> {
+  const [me, shops] = await Promise.all([
+    db.user.findUnique({ where: { id: humanUserId }, select: { name: true } }),
+    db.organization.findMany({ where: { ownerId: humanUserId }, select: { orgUserId: true, name: true } }),
+  ])
+  return [
+    { id: humanUserId, name: me?.name ?? "your personal profile" },
+    ...shops.map((s) => ({ id: s.orgUserId, name: s.name })),
+  ]
+}
+
+/**
+ * Two accounts behind the SAME person: a person and their own shop (either
+ * way), or two shops with one owner. A trade between them is one person on both
+ * sides, so it is refused like isShopMemberPair() -- which this extends to the
+ * shop-to-shop case that only exists once shops can send.
+ */
+export async function isSameOwnerPair(
+  db: Pick<PrismaClient, "organization">,
+  a: string,
+  b: string,
+): Promise<boolean> {
+  if (a === b) return true
+  const shops = await db.organization.findMany({
+    where: { orgUserId: { in: [a, b] } },
+    select: { orgUserId: true, ownerId: true },
+  })
+  const ownerOf = (id: string) => shops.find((s) => s.orgUserId === id)?.ownerId ?? id
+  return ownerOf(a) === ownerOf(b)
+}
+
+export const SAME_OWNER_TRADE_MESSAGE =
+  "You can't trade between your own accounts. Your personal profile and your shops count as one person."
+
+/** 403 for isSameOwnerPair(): the same code as the shop-member refusal. */
+export function sameOwnerTradeRefusal() {
+  return NextResponse.json(
+    { error: SAME_OWNER_TRADE_MESSAGE, code: SHOP_MEMBER_SELF_TRADE },
+    { status: 403 },
+  )
+}
+
+/** Only a VERIFIED shop may send offers; the same rule as posting. */
+export const SHOP_NOT_VERIFIED = "SHOP_NOT_VERIFIED"
+export const SHOP_NOT_VERIFIED_MESSAGE =
+  "Only verified shops can send offers. Your shop's verification isn't approved yet, so switch to your personal profile to send this offer."

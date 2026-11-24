@@ -313,7 +313,7 @@ export default function HubForm({ initial }: { initial?: Hub }) {
   return (
     <div>
       {!open ? (
-        <button type="button" onClick={() => setOpen(true)} className="admin-btn-press" style={{ padding: "9px 14px", border: 0, borderRadius: 9, background: "#17201b", color: "#fff", fontWeight: 700 }}>
+        <button type="button" onClick={() => setOpen(true)} className="admin-btn-press" style={{ padding: "9px 14px", border: 0, borderRadius: 9, background: "var(--adm-text)", color: "var(--adm-shell)", fontWeight: 700 }}>
           {initial ? "Edit" : "Create hub"}
         </button>
       ) : null}
@@ -371,7 +371,7 @@ function HubFormPanel({
     <div
       style={{
         display: "grid", gap: 10, padding: 20, borderRadius: 14,
-        background: "#f7f9f7", width: "min(92vw, 560px)",
+        background: "var(--adm-panel-flat)", width: "min(92vw, 560px)",
         boxShadow: "0 24px 60px rgba(15,20,17,.28)",
       }}
     >
@@ -391,8 +391,8 @@ function HubFormPanel({
         </button>
       </div>
       {candidates.length > 0 && (
-        <div style={{ display: "grid", gap: 6, padding: 8, borderRadius: 8, background: "#fff", border: "1px solid rgba(0,0,0,.10)" }}>
-          <small style={{ color: "#666" }}>Choose the exact result, then verify the pin and landmark.</small>
+        <div style={{ display: "grid", gap: 6, padding: 8, borderRadius: 8, background: "var(--adm-panel)", border: "1px solid var(--adm-border-input)" }}>
+          <small style={{ color: "var(--adm-text-secondary)" }}>Choose the exact result, then verify the pin and landmark.</small>
           {candidates.map((candidate) => (
             <div key={candidate.id} style={{ display: "grid", gap: 4 }}>
               <button
@@ -401,7 +401,7 @@ function HubFormPanel({
                 style={{ ...button, textAlign: "left", fontWeight: 500 }}
               >
                 <span style={{ display: "block" }}>{candidate.label}</span>
-                <span style={{ display: "block", marginTop: 3, color: "#777", fontSize: 11 }}>
+                <span style={{ display: "block", marginTop: 3, color: "var(--adm-text-muted)", fontSize: 11 }}>
                   {candidate.latitude.toFixed(5)}, {candidate.longitude.toFixed(5)} · OpenStreetMap
                 </span>
               </button>
@@ -423,11 +423,11 @@ function HubFormPanel({
         }}
       />
       <div style={{ display: "flex", gap: 8 }}>
-        <div style={{ ...input, flex: 1, color: "#555" }}>
+        <div style={{ ...input, flex: 1, color: "var(--adm-text-secondary)" }}>
           <span style={fieldLabel}>Latitude</span>
           {form.latitude === 0 && form.longitude === 0 ? "Not set" : form.latitude.toFixed(8)}
         </div>
-        <div style={{ ...input, flex: 1, color: "#555" }}>
+        <div style={{ ...input, flex: 1, color: "var(--adm-text-secondary)" }}>
           <span style={fieldLabel}>Longitude</span>
           {form.latitude === 0 && form.longitude === 0 ? "Not set" : form.longitude.toFixed(8)}
         </div>
@@ -456,7 +456,7 @@ function HubFormPanel({
           disabled={busy || !canSave}
           title={canSave ? undefined : "Name, address, city and coordinates are all required"}
           className="admin-btn-press"
-          style={{ ...button, background: "#4CAF50", opacity: busy || !canSave ? 0.55 : 1 }}
+          style={{ ...button, background: "var(--adm-accent)", opacity: busy || !canSave ? 0.55 : 1 }}
         >
           {busy ? "Saving…" : "Save"}
         </button>
@@ -473,6 +473,6 @@ function HubFormPanel({
 // input sits in a much wider box than its own content needs, leaving a
 // visibly empty strip beside Name, City and Landmark. Filling the column
 // removes that dead space without changing the layout's actual footprint.
-const input: React.CSSProperties = { width: "100%", padding: "8px 9px", borderRadius: 7, border: "1px solid rgba(0,0,0,.16)", fontSize: 12, background: "#fff", color: "#111" }
-const button: React.CSSProperties = { padding: "8px 12px", border: 0, borderRadius: 7, background: "#e5e7eb", color: "#17201b", fontWeight: 700 }
-const fieldLabel: React.CSSProperties = { display: "block", marginBottom: 3, color: "#888", fontSize: 10, textTransform: "uppercase" }
+const input: React.CSSProperties = { width: "100%", padding: "8px 9px", borderRadius: 7, border: "1px solid var(--adm-border-control)", fontSize: 12, background: "var(--adm-panel)", color: "var(--adm-text)" }
+const button: React.CSSProperties = { padding: "8px 12px", border: 0, borderRadius: 7, background: "var(--adm-placeholder-a)", color: "var(--adm-text)", fontWeight: 700 }
+const fieldLabel: React.CSSProperties = { display: "block", marginBottom: 3, color: "var(--adm-text-muted)", fontSize: 10, textTransform: "uppercase" }

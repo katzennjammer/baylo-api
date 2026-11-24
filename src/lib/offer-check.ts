@@ -95,17 +95,17 @@ export async function assessOffer(
   const offered = rows.find((r) => r.id === offeredItemId)
   const target = rows.find((r) => r.id === targetItemId)
 
-  if (!target || target.moderationHiddenAt) return refuse("ITEM_NOT_FOUND", "That listing is no longer available.")
-  if (!offered || offered.moderationHiddenAt) return refuse("ITEM_NOT_FOUND", "The item you are offering is no longer available.")
+  if (!target || target.moderationHiddenAt) return refuse("ITEM_NOT_FOUND", "This item is no longer available")
+  if (!offered || offered.moderationHiddenAt) return refuse("ITEM_NOT_FOUND", "This item is no longer available")
 
   if (target.userId === proposerId) return refuse("OWN_LISTING", "You cannot make an offer on your own listing.")
   if (offered.userId !== proposerId) return refuse("NOT_YOUR_ITEM", "You can only offer an item you own.")
 
   if (target.status !== "AVAILABLE") {
-    return refuse("ITEM_NOT_AVAILABLE", `"${target.title}" is not available to trade right now.`)
+    return refuse("ITEM_NOT_AVAILABLE", "This item is no longer available")
   }
   if (offered.status !== "AVAILABLE") {
-    return refuse("ITEM_NOT_AVAILABLE", `"${offered.title}" is not available to offer right now.`)
+    return refuse("ITEM_NOT_AVAILABLE", "This item is no longer available")
   }
 
   // An unvalued item has no bracket, and a rule about brackets cannot pass it.

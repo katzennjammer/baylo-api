@@ -440,7 +440,7 @@ export async function POST(
         return NextResponse.json({ error: "An item in this trade is no longer available" }, { status: 409 })
       }
       if (txErr instanceof Error && txErr.message === "insufficient_leaves") {
-        return NextResponse.json({ error: "Sender no longer has enough Leaves for this trade" }, { status: 400 })
+        return NextResponse.json({ error: "Sender no longer has enough points for this trade" }, { status: 400 })
       }
       throw txErr
     }
@@ -455,7 +455,7 @@ export async function POST(
     // whoever happened to submit the second code: the other party may not have
     // the app open, and the reward is the part they would want to know about.
     const earned = (o: RewardOutcome | undefined) =>
-      o && o.amount > 0 ? ` +${o.amount} Leaves earned.` : ""
+      o && o.amount > 0 ? ` +${o.amount} points earned.` : ""
 
     const completionMessages = await Promise.all([
       createSystemMessage({

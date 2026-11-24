@@ -208,6 +208,10 @@ export async function deleteAccount(
         // reach an account with no password and an unroutable address.
         dateOfBirth: null,
         isVerified: false,
+        // The phone's address for pushes (21 Oct 2026). Sign-out clears it;
+        // deletion did not, so a deleted account kept a live device id the
+        // privacy policy says is gone.
+        pushToken: null,
       },
     })
 

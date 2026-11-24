@@ -11,6 +11,61 @@ import RelistButton from "@/app/dashboard/shelf/RelistButton"
 import { CompactRepBadge, LeafRankBadge } from "@/components/RepBadge"
 import ReportBlockMenu from "@/components/ReportBlockMenu"
 import { ITEM_IMAGES, imageUrls, imagesJson } from "@/lib/item-images"
+import { bracketOf } from "@/lib/brackets"
+import type { Metadata } from "next"
+
+/**
+ * Link-preview tags, so a listing shared from the app shows up in a chat as a
+ * card -- photo, title, bracket -- instead of a bare URL. Chats read these
+ * tags when the link is pasted; nothing here needs the visitor signed in.
+ *
+ * A removed or moderator-hidden listing gets a plain "Baylo" card: the
+ * preview must not keep showing what a moderator took down.
+ */
+export async function generateMetadata({ params }: { params: Promise<{ id: string }> }): Promise<Metadata> {
+  const { id } = await params
+  const item = await prisma.item.findUnique({
+    where: { id },
+    select: {
+      title: true,
+      condition: true,
+      valueLeaves: true,
+      status: true,
+      moderationHiddenAt: true,
+      images: ITEM_IMAGES,
+      user: { select: { location: true } },
+    },
+  })
+  if (!item || item.status === "REMOVED" || item.moderationHiddenAt) {
+    return { title: "Baylo", description: "Trade item for item on Baylo." }
+  }
+  const parts = [
+    item.valueLeaves !== null ? `Bracket ${bracketOf(item.valueLeaves)}` : null,
+    formatCondition(item.condition),
+    item.user.location || null,
+  ].filter(Boolean)
+  const description = `${parts.join(" · ")}. Trade for it on Baylo.`
+  const photo = imageUrls(item.images)[0]
+  const image = photo ? cloudinaryUrl(photo, { w: 1200, crop: "limit" }) : undefined
+  return {
+    title: `${item.title} | Baylo`,
+    description,
+    openGraph: {
+      title: item.title,
+      description,
+      siteName: "Baylo",
+      type: "website",
+      ...(image ? { images: [{ url: image, alt: item.title }] } : {}),
+    },
+    twitter: {
+      card: image ? "summary_large_image" : "summary",
+      title: item.title,
+      description,
+      ...(image ? { images: [image] } : {}),
+    },
+  }
+}
+
 
 export default async function ItemDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params
@@ -42,6 +97,19 @@ export default async function ItemDetailPage({ params }: { params: Promise<{ id:
 
   return (
     <div className="max-w-5xl mx-auto px-4 py-8">
+      {/* For people who already have the app. Until the Play Store listing
+          exists, everyone else stays on this page, which works signed out. */}
+      <div className="mb-6 flex items-center gap-3 rounded-2xl border border-gray-200 bg-white px-4 py-3 md:hidden">
+        <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-[#3DBE5A] font-extrabold text-[#0B2A15]">B</span>
+        <span className="flex-1 leading-tight">
+          <span className="block text-sm font-bold">Baylo</span>
+          <span className="block text-xs text-gray-500">Android app coming soon</span>
+        </span>
+        <a href={`baylo://item?id=${encodeURIComponent(item.id)}`} className="rounded-full bg-gray-900 px-4 py-2 text-sm font-bold text-white">
+          Open in app
+        </a>
+      </div>
+
       <Link href="/listings" className="text-sm text-gray-500 hover:text-gray-700 mb-6 inline-flex items-center gap-1">
         ← Back to listings
       </Link>

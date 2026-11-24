@@ -1,18 +1,19 @@
-/* Scoped: applied via <div className="admin-root"> in src/app/admin/layout.tsx */
+/* Colors follow the Baylo app palette (baylo-app/src/theme/tokens.js).
+   Scoped: applied via <div className="admin-root"> in src/app/admin/layout.tsx */
 .admin-root {
   /* ---------- Color: surfaces ---------- */
-  --adm-bg: #070708;                 /* page canvas */
-  --adm-shell: #0d0d10;              /* outer rounded shell */
+  --adm-bg: #101310;                 /* page canvas */
+  --adm-shell: #171A17;              /* outer rounded shell */
   --adm-shell-border: rgba(255,255,255,0.04);
-  --adm-panel: linear-gradient(180deg, #16141c 0%, #1a1224 100%); /* cards/panels */
-  --adm-panel-solid: #1a1224;        /* fallback / contrast reference for --adm-panel */
-  --adm-panel-flat: #17161b;         /* rows, rail, tiles, filter bars, menus */
-  --adm-input: #111015;              /* inputs, selects, textareas */
-  --adm-placeholder-a: #1d1b23;      /* striped placeholder stripe A */
-  --adm-placeholder-b: #17161b;      /* striped placeholder stripe B */
-  --adm-thumb-a: #24212c;            /* thumbnail placeholder stripe A */
-  --adm-thumb-b: #1b1920;            /* thumbnail placeholder stripe B */
-  --adm-scrim: rgba(0,0,0,0.60);     /* drawer / palette backdrop */
+  --adm-panel: #1E221E; /* cards/panels */
+  --adm-panel-solid: #1E221E;        /* fallback / contrast reference for --adm-panel */
+  --adm-panel-flat: #252A25;         /* rows, rail, tiles, filter bars, menus */
+  --adm-input: #131613;              /* inputs, selects, textareas */
+  --adm-placeholder-a: #2A2F2A;      /* striped placeholder stripe A */
+  --adm-placeholder-b: #252A25;      /* striped placeholder stripe B */
+  --adm-thumb-a: #303630;            /* thumbnail placeholder stripe A */
+  --adm-thumb-b: #272C27;            /* thumbnail placeholder stripe B */
+  --adm-scrim: rgba(23,26,23,0.78);     /* drawer / palette backdrop */
 
   /* ---------- Color: borders & dividers ---------- */
   --adm-border: rgba(255,255,255,0.06);         /* default panel/row border */
@@ -27,43 +28,43 @@
   --adm-hover-fill: rgba(255,255,255,0.05);     /* menu item hover */
 
   /* ---------- Color: text ---------- */
-  --adm-text: #f5f4f7;          /* primary */
-  --adm-text-secondary: #c8c5d0;/* body-on-row, chart labels, meta values */
-  --adm-text-muted: #8d8a96;    /* sublines, micro-labels, placeholders */
-  --adm-text-dim: #5f5c68;      /* DISABLED ONLY (fails AA as text; see design spec §6) */
-  --adm-text-on-accent: #12081f;/* text on --adm-accent (solid violet) */
-  --adm-text-on-soft: #1a1024;  /* text on lavender, yellow, highlight gradient */
+  --adm-text: #F4F5F0;          /* primary */
+  --adm-text-secondary: #B6BDB3;/* body-on-row, chart labels, meta values */
+  --adm-text-muted: #929B91;    /* sublines, micro-labels, placeholders */
+  --adm-text-dim: #5F665F;      /* DISABLED ONLY (fails AA as text; see design spec §6) */
+  --adm-text-on-accent: #0B2A15;/* text on --adm-accent (solid green) */
+  --adm-text-on-soft: #0B2A15;  /* text on pale green, gold, highlight gradient */
 
   /* ---------- Color: accents ---------- */
-  --adm-accent: #a45cf0;          /* violet: primary buttons, active icons, chart primary */
-  --adm-accent-strong: #7b3fd1;   /* start of bar gradient */
-  --adm-accent-text: #c9a2f7;     /* violet used AS TEXT on dark (links, "View queue →") */
-  --adm-accent-icon-active: #b57bf5; /* active rail icon */
-  --adm-accent-soft: #dcc6fb;     /* lavender: selected chip/tile bg, focus ring */
-  --adm-accent-tint: rgba(164,92,240,0.16); /* avatar bg, active rail bg, violet pill bg */
-  --adm-accent-tint-hover: rgba(164,92,240,0.14); /* palette item hover */
-  --adm-accent-2: #f2cf3a;        /* yellow: secondary series, time/count pills */
-  --adm-bar-primary: linear-gradient(90deg, #7b3fd1 0%, #a45cf0 100%);
-  --adm-bar-secondary: #f2cf3a;
+  --adm-accent: #3DBE5A;          /* green: primary buttons, active icons, chart primary */
+  --adm-accent-strong: #2A833E;   /* start of bar gradient */
+  --adm-accent-text: #72D681;     /* green used AS TEXT on dark (links, "View queue →") */
+  --adm-accent-icon-active: #72D681; /* active rail icon */
+  --adm-accent-soft: #BFE8C7;     /* pale green: selected chip/tile bg, focus ring */
+  --adm-accent-tint: rgba(61,190,90,0.16); /* avatar bg, active rail bg, green pill bg */
+  --adm-accent-tint-hover: rgba(61,190,90,0.14); /* palette item hover */
+  --adm-accent-2: #D9A93A;        /* gold: secondary series, time/count pills */
+  --adm-bar-primary: linear-gradient(90deg, #2A833E 0%, #3DBE5A 100%);
+  --adm-bar-secondary: #D9A93A;
 
   /* ---------- Color: status tones (fg / 12% bg) ---------- */
-  --adm-queue: #f5b544;  --adm-queue-bg: rgba(245,181,68,0.12);   /* amber: pending/waiting */
-  --adm-warn:  #ff5a6e;  --adm-warn-bg:  rgba(255,90,110,0.12);   /* red: rejected/hidden/destructive */
-  --adm-good:  #3fcf8e;  --adm-good-bg:  rgba(63,207,142,0.12);   /* green: active/approved */
-  --adm-info:  #c9a2f7;  --adm-info-bg:  rgba(164,92,240,0.16);   /* violet: updated/in-trade/admin role */
-  --adm-neutral: #c8c5d0; --adm-neutral-bg: rgba(255,255,255,0.06); /* owned/user role/neutral */
-  --adm-warn-outline: rgba(255,90,110,0.50);   /* destructive button border */
-  --adm-warn-hover-bg: rgba(255,90,110,0.10);  /* destructive button hover fill */
-  --adm-badge: #ff5a6e;  --adm-badge-text: #1a0508; /* rail count badge */
-  --adm-tooltip-bg: #23212a;   /* rail tooltip background -- stays dark in both themes */
-  --adm-tooltip-text: #f5f4f7; /* rail tooltip text -- NOT overridden in light theme; it
+  --adm-queue: #E0B04A;  --adm-queue-bg: rgba(224,176,74,0.14);   /* amber: pending/waiting */
+  --adm-warn:  #E5826A;  --adm-warn-bg:  rgba(229,130,106,0.14);   /* red: rejected/hidden/destructive */
+  --adm-good:  #72D681;  --adm-good-bg:  rgba(114,214,129,0.14);   /* green: active/approved */
+  --adm-info:  #8FB8DA;  --adm-info-bg:  rgba(143,184,218,0.14);   /* sky: updated/in-trade/admin role */
+  --adm-neutral: #B6BDB3; --adm-neutral-bg: rgba(255,255,255,0.06); /* owned/user role/neutral */
+  --adm-warn-outline: rgba(229,130,106,0.50);   /* destructive button border */
+  --adm-warn-hover-bg: rgba(229,130,106,0.10);  /* destructive button hover fill */
+  --adm-badge: #E5826A;  --adm-badge-text: #2A0F08; /* rail count badge */
+  --adm-tooltip-bg: #252A25;   /* rail tooltip background -- stays dark in both themes */
+  --adm-tooltip-text: #F4F5F0; /* rail tooltip text -- NOT overridden in light theme; it
                                    pairs with --adm-tooltip-bg, which also never changes,
                                    not with the page canvas */
 
   /* ---------- Gradients ---------- */
-  --adm-highlight: linear-gradient(160deg, #9b5cf0 0%, #d98bd0 55%, #f0c24a 100%);
-  --adm-stripes: repeating-linear-gradient(135deg, #1d1b23 0 8px, #17161b 8px 16px);
-  --adm-stripes-thumb: repeating-linear-gradient(135deg, #24212c 0 6px, #1b1920 6px 12px);
+  --adm-highlight: linear-gradient(160deg, #3DBE5A 0%, #9BDDA6 55%, #E7C96A 100%);
+  --adm-stripes: repeating-linear-gradient(135deg, #2A2F2A 0 8px, #252A25 8px 16px);
+  --adm-stripes-thumb: repeating-linear-gradient(135deg, #303630 0 6px, #272C27 6px 12px);
 
   /* ---------- Typography ---------- */
   --adm-font-sans: var(--font-adm-sans), "Plus Jakarta Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
@@ -102,7 +103,7 @@
 
   /* ---------- Shadows & glows (panels have NO shadow) ---------- */
   --adm-shadow-none: none;
-  --adm-glow-active: 0 0 24px rgba(164,92,240,0.35);  /* active rail item */
+  --adm-glow-active: 0 0 24px rgba(61,190,90,0.28);  /* active rail item */
   --adm-shadow-overlay: 0 24px 64px rgba(0,0,0,0.55); /* menus, palette, drawer */
 
   /* ---------- Z-index ---------- */
@@ -132,31 +133,25 @@
 }
 
 /* ---------- Light theme ----------
-   Opt-in via data-theme="light" on .admin-root (default is dark, matching
-   DESIGN_SPEC.md, which only specifies a dark palette). Only surface,
-   border, divider and page-background text colors are overridden here --
-   accent/tone/badge/highlight/bar colors are left as-is because they're
-   always drawn on their own filled background (buttons, pills, tiles),
-   not the page canvas, so they don't need a light-mode variant. The two
-   exceptions are --adm-accent-text and --adm-accent-icon-active, which
-   ARE used as text/icon color directly on the page background and need a
-   darker, higher-contrast violet on a light canvas.
-   NOTE: this palette hasn't been through the same WCAG contrast audit as
-   DESIGN_SPEC.md §6.1 did for the dark palette -- do that alongside the
-   Step 6 accessibility pass before shipping. */
+   Opt-in via data-theme="light" on .admin-root (default is dark). Both
+   themes take their colors from the Baylo app (baylo-app/src/theme/tokens.js):
+   the `dark` set above, the cream/ink/green `color` set here. Tones are
+   overridden too, because a tone is drawn as text on its own pale wash and
+   the dark theme's bright tones do not read on a light one.
+   NOTE: not yet through a WCAG contrast audit. */
 .admin-root[data-theme="light"] {
-  --adm-bg: #f3f1f6;
-  --adm-shell: #ffffff;
+  --adm-bg: #F1EFE8;
+  --adm-shell: #FAFAF7;
   --adm-shell-border: rgba(0,0,0,0.06);
-  --adm-panel: linear-gradient(180deg, #ffffff 0%, #f8f6fb 100%);
-  --adm-panel-solid: #f8f6fb;
-  --adm-panel-flat: #f2eff5;
-  --adm-input: #ffffff;
-  --adm-placeholder-a: #ece8f1;
-  --adm-placeholder-b: #f2eff5;
-  --adm-thumb-a: #e6e1ed;
-  --adm-thumb-b: #eeeaf2;
-  --adm-scrim: rgba(20,16,26,0.45);
+  --adm-panel: #FFFFFF;
+  --adm-panel-solid: #FFFFFF;
+  --adm-panel-flat: #F5F3EC;
+  --adm-input: #FFFFFF;
+  --adm-placeholder-a: #EBE9E0;
+  --adm-placeholder-b: #F5F3EC;
+  --adm-thumb-a: #E2E0D6;
+  --adm-thumb-b: #EFEDE5;
+  --adm-scrim: rgba(20,20,15,0.45);
 
   --adm-border: rgba(0,0,0,0.08);
   --adm-border-hover: rgba(0,0,0,0.16);
@@ -169,19 +164,38 @@
   --adm-track: rgba(0,0,0,0.07);
   --adm-hover-fill: rgba(0,0,0,0.04);
 
-  --adm-text: #18151f;
-  --adm-text-secondary: #4a4653;
-  --adm-text-muted: #6f6c78;
-  --adm-text-dim: #a5a1ac;
+  --adm-text: #14140F;
+  --adm-text-secondary: #5C5B52;
+  --adm-text-muted: #6E6D62;
+  --adm-text-dim: #A8A69A;
 
-  --adm-accent-text: #7b3fd1;
-  --adm-accent-icon-active: #7b3fd1;
-  --adm-tooltip-bg: #232030;
+  --adm-accent-text: #1F6E33;
+  --adm-accent-icon-active: #1F6E33;
+  --adm-tooltip-bg: #252A25;
 
-  --adm-stripes: repeating-linear-gradient(135deg, #ece8f1 0 8px, #f2eff5 8px 16px);
-  --adm-stripes-thumb: repeating-linear-gradient(135deg, #e6e1ed 0 6px, #eeeaf2 6px 12px);
+  --adm-stripes: repeating-linear-gradient(135deg, #EBE9E0 0 8px, #F5F3EC 8px 16px);
+  --adm-stripes-thumb: repeating-linear-gradient(135deg, #E2E0D6 0 6px, #EFEDE5 6px 12px);
 
-  --adm-shadow-overlay: 0 24px 64px rgba(20,16,26,0.18);
+  --adm-shadow-overlay: 0 24px 64px rgba(20,20,15,0.18);
+  --adm-accent-soft: #C9E8D1;
+  --adm-accent-tint: rgba(61,190,90,0.18);
+  --adm-accent-2: #C99A2E;
+  --adm-bar-secondary: #C99A2E;
+  --adm-queue: #8A630B;
+  --adm-queue-bg: #F7F0E0;
+  --adm-warn: #A84C33;
+  --adm-warn-bg: #FBEEE9;
+  --adm-good: #23763A;
+  --adm-good-bg: #EAF6EC;
+  --adm-info: #23445F;
+  --adm-info-bg: #EAF1F7;
+  --adm-neutral: #5C5B52;
+  --adm-neutral-bg: rgba(20,20,15,0.06);
+  --adm-warn-outline: rgba(168,76,51,0.50);
+  --adm-warn-hover-bg: rgba(168,76,51,0.08);
+  --adm-badge: #B0553A;
+  --adm-badge-text: #FFFFFF;
+  --adm-glow-active: none;
 }
 
 /* Breakpoints (reference; CSS vars can't be used in media queries):
@@ -193,56 +207,34 @@
   background: var(--adm-bg);
   display: flex;
   justify-content: center;
-  padding: 24px;
+  padding: 12px;
 }
-@media (max-width: 1279px) { .admin-root .adm-canvas { padding: 20px; } }
+@media (max-width: 1279px) { .admin-root .adm-canvas { padding: 12px; } }
 @media (max-width: 1023px) { .admin-root .adm-canvas { padding: 12px; } }
 @media (max-width: 639px)  { .admin-root .adm-canvas { padding: 0; } }
 
 .admin-root .adm-shell {
   width: 100%;
-  max-width: 1440px;
+  max-width: 1920px;
   min-width: 0;
   background: var(--adm-shell);
   border: 1px solid var(--adm-shell-border);
-  border-radius: 36px;
-  padding: 28px;
+  border-radius: 28px;
+  padding: 18px;
   display: flex;
   flex-direction: column;
-  gap: 28px;
+  gap: 18px;
 }
-@media (max-width: 1279px) { .admin-root .adm-shell { padding: 24px; border-radius: 32px; gap: 24px; } }
-@media (max-width: 1023px) { .admin-root .adm-shell { padding: 20px; border-radius: 28px; gap: 24px; } }
+@media (max-width: 1279px) { .admin-root .adm-shell { padding: 16px; border-radius: 24px; gap: 16px; } }
+@media (max-width: 1023px) { .admin-root .adm-shell { padding: 16px; border-radius: 24px; gap: 16px; } }
 @media (max-width: 639px)  { .admin-root .adm-shell { padding: 16px; border-radius: 0; gap: 20px; } }
 
-.admin-root .adm-body { display: flex; gap: 28px; align-items: flex-start; min-width: 0; }
-@media (max-width: 1023px) { .admin-root .adm-body { gap: 24px; } }
+.admin-root .adm-body { display: flex; gap: 18px; align-items: flex-start; min-width: 0; }
+@media (max-width: 1023px) { .admin-root .adm-body { gap: 16px; } }
 
-/*
- * color: #17201b (NOT a --adm-* var, deliberately) restores the old
- * layout.tsx's hardcoded dark-text default for whatever a not-yet-redesigned
- * page leaves unstyled.
- *
- * Pages redesigned so far (dashboard, reports, audit, access) explicitly set
- * `color: var(--adm-text)` (or a tone token) on every piece of text, so this
- * never applies to them -- an element's own declared color always wins over
- * an inherited one, regardless of which selector is more specific.
- *
- * Pages NOT yet redesigned (id-verification, review-queue/anomalies,
- * appeals, users, listings, hubs, achievements) still have their original
- * hardcoded white cards/tables (`background: "#fff"`), and plenty of their
- * text relies on INHERITING the default color rather than setting its own.
- * Before this rule, that inherited default was `.admin-root`'s
- * `color: var(--adm-text)` -- correct for the redesigned dark shell, but
- * wrong for a page whose surfaces never stopped being white: in dark mode
- * that resolves to near-white, i.e. white text quietly landing on a still-
- * white card. It read fine in light mode by coincidence (dark-on-white),
- * which is why this only ever showed up after the theme toggle existed.
- * Fix as each page is redesigned, by giving its text explicit colors the
- * same way dashboard/reports/audit/access already do -- then this fallback
- * stops applying to it, the same way it already doesn't for those four.
- */
-.admin-root .adm-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 32px; overflow-x: hidden; color: #17201b; }
+/* The content area. Text with no colour of its own inherits the theme ink;
+   every admin page now draws its surfaces from the --adm-* tokens. */
+.admin-root .adm-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 20px; overflow-x: hidden; color: var(--adm-text); }
 
 .admin-root .adm-topbar { display: flex; align-items: center; gap: 16px; flex-wrap: nowrap; min-width: 0; }
 
@@ -356,7 +348,7 @@
 .admin-skeleton {
   position: relative;
   overflow: hidden;
-  background: var(--adm-panel-flat, #17161b);
+  background: var(--adm-panel-flat, #252A25);
   border-radius: var(--adm-radius-menu-item, 10px);
 }
 .admin-skeleton::after {
@@ -382,15 +374,15 @@
   font-weight: 600;
   text-decoration: none;
   border: 1px solid var(--adm-border-chip, rgba(255,255,255,0.08));
-  color: var(--adm-text, #f5f4f7);
-  background: var(--adm-panel-flat, #17161b);
+  color: var(--adm-text, #F4F5F0);
+  background: var(--adm-panel-flat, #252A25);
   overflow: hidden;
   transition: border-color var(--adm-dur-base, 200ms) var(--adm-ease-standard, cubic-bezier(0.2,0,0,1)), color var(--adm-dur-base, 200ms) var(--adm-ease-standard, cubic-bezier(0.2,0,0,1));
 }
 .admin-chip:hover { border-color: var(--adm-border-hover, rgba(255,255,255,0.12)); }
-.admin-chip[data-active="true"] { border-color: var(--adm-accent-soft, #dcc6fb); color: var(--adm-text-on-soft, #1a1024); }
-.admin-chip[data-active="true"]:hover { border-color: var(--adm-accent-soft, #dcc6fb); }
-.admin-chip-pill { position: absolute; inset: -1px; z-index: 0; background: var(--adm-accent-soft, #dcc6fb); border-radius: var(--adm-radius-pill, 999px); }
+.admin-chip[data-active="true"] { border-color: var(--adm-accent-soft, #BFE8C7); color: var(--adm-text-on-soft, #0B2A15); }
+.admin-chip[data-active="true"]:hover { border-color: var(--adm-accent-soft, #BFE8C7); }
+.admin-chip-pill { position: absolute; inset: -1px; z-index: 0; background: var(--adm-accent-soft, #BFE8C7); border-radius: var(--adm-radius-pill, 999px); }
 .admin-chip-label { position: relative; z-index: 1; }
 
 /* Admin nav: active item's indicator slides between items (layoutId, see AdminNav.tsx).
@@ -398,7 +390,7 @@
 .admin-nav-link {
   position: relative;
   display: inline-flex;
-  color: var(--adm-text-muted, #8d8a96);
+  color: var(--adm-text-muted, #929B91);
   font-size: 13px;
   font-weight: 700;
   padding: 12px 14px;
@@ -406,8 +398,8 @@
   white-space: nowrap;
   transition: color var(--adm-dur-base, 200ms) var(--adm-ease-standard, cubic-bezier(0.2,0,0,1)), background var(--adm-dur-base, 200ms) var(--adm-ease-standard, cubic-bezier(0.2,0,0,1));
 }
-.admin-nav-link:hover { color: var(--adm-text, #f5f4f7); background: var(--adm-hover-fill, rgba(255,255,255,0.05)); }
-.admin-nav-link[data-active="true"] { color: var(--adm-text, #f5f4f7); }
+.admin-nav-link:hover { color: var(--adm-text, #F4F5F0); background: var(--adm-hover-fill, rgba(255,255,255,0.05)); }
+.admin-nav-link[data-active="true"] { color: var(--adm-text, #F4F5F0); }
 .admin-nav-underline {
   position: absolute;
   left: 14px;
@@ -415,7 +407,7 @@
   bottom: 4px;
   height: 2px;
   border-radius: 2px;
-  background: var(--adm-accent, #a45cf0);
+  background: var(--adm-accent, #3DBE5A);
 }
 
 /* Pulsing "needs attention" dot -- one per card, not the whole card. */
@@ -448,7 +440,7 @@
   border: 1px solid var(--adm-border, rgba(255,255,255,0.06));
   border-radius: var(--adm-radius-input, 14px);
   overflow: hidden;
-  background: var(--adm-panel-flat, #17161b);
+  background: var(--adm-panel-flat, #252A25);
 }
 .admin-hub-marker-host {
   background: transparent;
@@ -471,14 +463,14 @@
 }
 .hub-location-help {
   margin-top: 6px;
-  color: var(--adm-text-muted, #8d8a96);
+  color: var(--adm-text-muted, #929B91);
   font-size: 11px;
   line-height: 1.35;
 }
 
 @keyframes adm-shimmer { 0% { background-position: -400px 0; } 100% { background-position: 400px 0; } }
 .adm-shimmer {
-  background: linear-gradient(90deg, #17161b 0%, #211a2c 40%, #2a1f3a 50%, #211a2c 60%, #17161b 100%);
+  background: linear-gradient(90deg, #252A25 0%, #211a2c 40%, #2a1f3a 50%, #211a2c 60%, #252A25 100%);
   background-size: 800px 100%;
   animation: adm-shimmer var(--adm-dur-shimmer, 1400ms) linear infinite;
 }
@@ -499,3 +491,21 @@
   .admin-card-hover:hover { transform: none; }
   .admin-skeleton::after { animation: none; }
 }
+
+/* Native controls (date pickers, selects, checkboxes, scrollbars) follow the
+   admin theme, not the OS. */
+.admin-root { color-scheme: dark; --adm-danger: #E07E63; /* solid destructive button; dark text on it in both themes */ }
+.admin-root[data-theme="light"] { color-scheme: light; }
+
+/* A field with no colours of its own takes the theme's. :where() keeps this at
+   zero specificity, so any class or inline style still wins. */
+:where(.admin-root) :where(input:not([type="checkbox"]):not([type="radio"]):not([type="file"]):not([type="range"]), select, textarea) {
+  background-color: var(--adm-input);
+  color: var(--adm-text);
+}
+
+/* Compact row spacing (Settings > Appearance). Table cells and list rows set
+   their padding inline, so these need !important to tighten them. */
+.admin-root[data-density="compact"] .adm-main { gap: 20px; }
+.admin-root[data-density="compact"] .adm-main :where(td, th) { padding-top: 5px !important; padding-bottom: 5px !important; }
+.admin-root[data-density="compact"] .adm-main .adm-row-hover:not(tr) { padding-top: 7px !important; padding-bottom: 7px !important; }

@@ -144,7 +144,7 @@ export default function NewListingPage() {
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-gray-700 mb-1.5">Estimated Value in Leaves <span className="text-gray-400 font-normal">optional — leave blank to use the suggested value</span></label>
+          <label className="block text-sm font-medium text-gray-700 mb-1.5">Estimated Value in Leaves <span className="text-gray-400 font-normal">optional — leave blank to use Baylo&apos;s standard estimate</span></label>
           <input
             type="number"
             min="0"

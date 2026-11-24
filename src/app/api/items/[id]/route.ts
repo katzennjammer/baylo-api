@@ -8,6 +8,7 @@ import { imageHashRows } from "@/lib/image-hashes"
 import { ITEM_IMAGES, imagesJson, replaceItemImages, setItemImageHashes } from "@/lib/item-images"
 import { replaceWantedCategories } from "@/lib/wanted-categories"
 import { decideItemValue, reviewNotice } from "@/lib/valuation-server"
+import { AI_VALUATION_SOURCE } from "@/lib/ai-valuation"
 import { isBlockedEitherWay } from "@/lib/blocking"
 import {
   ITEM_PUBLIC_SELECT,
@@ -117,6 +118,9 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
       where: { id },
       select: {
         userId: true, category: true, condition: true, valueLeaves: true, status: true,
+        // An AI-valued listing is judged against its stored suggestion on a
+        // value-only edit. See the valuation block below.
+        suggestedLeaves: true, valuationSource: true,
         // Compared against the incoming array to tell a real photo change from
         // the web wizard restating the images it already had. See the hash
         // block below. Ordered rows since schema v2; see @/lib/item-images.
@@ -203,7 +207,36 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
       // without being told.
       const requested = body.valueLeaves !== undefined ? body.valueLeaves : item.valueLeaves
 
-      const valued = await decideItemValue(category, condition, requested)
+      // AN AI SUGGESTION IS KEPT WHILE ITS LABELS ARE. A listing valued by
+      // /api/ai/valuation cannot have that suggestion recomputed — Claude asked
+      // again is a different number — so a value-only edit is judged against
+      // the stored one, and the listing keeps `ai_market` as its source.
+      // Re-deriving it deterministically here would quietly swap the owner's
+      // suggestion (and possibly their bracket cap) for one they never saw.
+      // Once the category or condition actually changes, the stored
+      // suggestion no longer describes the item and the deterministic model
+      // takes over, recorded as such.
+      const labelsUnchanged = category === item.category && condition === item.condition
+      const keepAi =
+        labelsUnchanged &&
+        item.valuationSource === AI_VALUATION_SOURCE &&
+        item.suggestedLeaves != null &&
+        item.suggestedLeaves > 0
+      const valued = await decideItemValue(
+        category,
+        condition,
+        requested,
+        keepAi
+          ? {
+              // Only suggestedLeaves is judged against; the stored row keeps no
+              // range, so the suggestion stands in for both ends.
+              suggestedLeaves: item.suggestedLeaves!,
+              min: item.suggestedLeaves!,
+              max: item.suggestedLeaves!,
+              valuationSource: AI_VALUATION_SOURCE,
+            }
+          : undefined,
+      )
       const inReview = item.status === "PENDING_REVIEW" || item.status === "VALUE_REJECTED"
       valuationData = {
         ...valued.data,

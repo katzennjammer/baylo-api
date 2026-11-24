@@ -39,16 +39,16 @@ function chipStyle(active: boolean): React.CSSProperties {
     fontSize: 13,
     fontWeight: 600,
     textDecoration: "none",
-    border: `1px solid ${active ? "#4CAF50" : "rgba(0,0,0,.14)"}`,
-    background: active ? "rgba(76,175,80,.12)" : "#fff",
-    color: active ? "#2e7d32" : "#555",
+    border: `1px solid ${active ? "var(--adm-accent)" : "var(--adm-border-control)"}`,
+    background: active ? "var(--adm-good-bg)" : "var(--adm-panel)",
+    color: active ? "var(--adm-good)" : "var(--adm-text-secondary)",
   }
 }
 
 const STATUS_COLOR: Record<string, string> = {
-  PENDING: "#b45309",
-  VERIFIED: "#15803d",
-  REJECTED: "#6b7280",
+  PENDING: "var(--adm-queue)",
+  VERIFIED: "var(--adm-good)",
+  REJECTED: "var(--adm-text-muted)",
 }
 
 function ageOf(d: Date): string {
@@ -119,12 +119,12 @@ export default async function OrganizationQueuePage({ searchParams }: Props) {
 
       <div style={{ display: "flex", alignItems: "baseline", gap: 12, flexWrap: "wrap" }}>
         <h1 style={{ fontSize: 20, fontWeight: 800 }}>Business documents</h1>
-        <span style={{ fontSize: 13, color: "#888" }}>
+        <span style={{ fontSize: 13, color: "var(--adm-text-muted)" }}>
           {countFor("PENDING")} waiting · oldest first
         </span>
       </div>
 
-      <p style={{ fontSize: 13, color: "#666", marginTop: 6, maxWidth: 760 }}>
+      <p style={{ fontSize: 13, color: "var(--adm-text-secondary)", marginTop: 6, maxWidth: 760 }}>
         Verifying puts the checkmark on that organisation&rsquo;s profile.{" "}
         <strong>Only a verified organisation can post as itself</strong>; pending and rejected ones
         can still trade, and a rejection removes no account. Either decision destroys the uploaded document and writes an audit row
@@ -137,10 +137,10 @@ export default async function OrganizationQueuePage({ searchParams }: Props) {
             marginTop: 14,
             padding: "12px 14px",
             borderRadius: 12,
-            background: "rgba(229,72,77,.08)",
-            border: "1px solid rgba(229,72,77,.3)",
+            background: "var(--adm-warn-bg)",
+            border: "1px solid var(--adm-warn-outline)",
             fontSize: 13,
-            color: "#991b1b",
+            color: "var(--adm-warn)",
           }}
         >
           <strong>
@@ -162,7 +162,7 @@ export default async function OrganizationQueuePage({ searchParams }: Props) {
       </div>
 
       {rows.length === 0 ? (
-        <p style={{ fontSize: 14, color: "#888", padding: "32px 0" }}>
+        <p style={{ fontSize: 14, color: "var(--adm-text-muted)", padding: "32px 0" }}>
           {status === "PENDING"
             ? "Nothing waiting. Every organisation that has applied has an answer."
             : "Nothing here."}
@@ -170,9 +170,9 @@ export default async function OrganizationQueuePage({ searchParams }: Props) {
       ) : (
         <div
           style={{
-            background: "#fff",
+            background: "var(--adm-panel)",
             borderRadius: 14,
-            border: "1px solid rgba(0,0,0,.08)",
+            border: "1px solid var(--adm-border)",
             overflow: "hidden",
           }}
         >
@@ -187,7 +187,7 @@ export default async function OrganizationQueuePage({ searchParams }: Props) {
                   gap: 14,
                   alignItems: "center",
                   padding: "14px 18px",
-                  borderTop: i === 0 ? "none" : "1px solid rgba(0,0,0,.06)",
+                  borderTop: i === 0 ? "none" : "1px solid var(--adm-border)",
                   textDecoration: "none",
                   color: "inherit",
                   flexWrap: "wrap",
@@ -207,13 +207,13 @@ export default async function OrganizationQueuePage({ searchParams }: Props) {
 
                 <span style={{ flex: "1 1 220px", minWidth: 0 }}>
                   <span style={{ fontSize: 14, fontWeight: 700, display: "block" }}>{r.name}</span>
-                  <span style={{ fontSize: 12, color: "#888" }}>
+                  <span style={{ fontSize: 12, color: "var(--adm-text-muted)" }}>
                     {BUSINESS_CATEGORY_LABEL[
                       r.businessCategory as keyof typeof BUSINESS_CATEGORY_LABEL
                     ] ?? r.businessCategory}
                     {owner ? ` · ${owner.name}` : " · no active owner"}
                   </span>
-                  <span style={{ fontSize: 12, color: "#555", display: "block" }}>
+                  <span style={{ fontSize: 12, color: "var(--adm-text-secondary)", display: "block" }}>
                     DTI no.{" "}
                     <span style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace", fontWeight: 700 }}>
                       {r.dtiRegistrationNumber ?? "—"}
@@ -221,12 +221,12 @@ export default async function OrganizationQueuePage({ searchParams }: Props) {
                   </span>
                 </span>
 
-                <span style={{ fontSize: 12, color: "#888", minWidth: 60, textAlign: "right" }}>
+                <span style={{ fontSize: 12, color: "var(--adm-text-muted)", minWidth: 60, textAlign: "right" }}>
                   {ageOf(r.createdAt)}
                 </span>
 
                 {r.reviewedBy && (
-                  <span style={{ fontSize: 12, color: "#aaa", minWidth: 120, textAlign: "right" }}>
+                  <span style={{ fontSize: 12, color: "var(--adm-text-muted)", minWidth: 120, textAlign: "right" }}>
                     by {r.reviewedBy.name}
                   </span>
                 )}

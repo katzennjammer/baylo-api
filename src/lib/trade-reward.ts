@@ -242,7 +242,7 @@ export function rewardDenialCopy(outcome: RewardOutcome, partnerName: string): s
     case "same_item":
       return `No trade reward this time — that item was traded in the last ${TRADE_REWARD_SAME_ITEM_DAYS} days.`
     case "daily_cap":
-      return `No trade reward this time — you've reached today's ${TRADE_REWARD_DAILY_CAP_LEAVES}-Leaf limit.`
+      return `No trade reward this time — you've reached today's ${TRADE_REWARD_DAILY_CAP_LEAVES}-point limit.`
     case "unvalued":
       return "No trade reward — the item you gave has no value on record."
     case "organization":

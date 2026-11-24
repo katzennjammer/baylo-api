@@ -49,23 +49,23 @@ interface Props {
 }
 
 const card: React.CSSProperties = {
-  background: "#fff",
+  background: "var(--adm-panel)",
   borderRadius: 14,
-  border: "1px solid rgba(0,0,0,.08)",
+  border: "1px solid var(--adm-border)",
   padding: 20,
 }
 
 const STATUS_COLOR: Record<string, string> = {
-  PENDING: "#b45309",
-  APPROVED: "#15803d",
-  REJECTED: "#6b7280",
+  PENDING: "var(--adm-queue)",
+  APPROVED: "var(--adm-good)",
+  REJECTED: "var(--adm-text-muted)",
 }
 
 function Field({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div style={{ display: "flex", gap: 10, fontSize: 13, padding: "5px 0" }}>
-      <span style={{ color: "#888", minWidth: 130 }}>{label}</span>
-      <span style={{ fontWeight: 600, color: "#222" }}>{value}</span>
+      <span style={{ color: "var(--adm-text-muted)", minWidth: 130 }}>{label}</span>
+      <span style={{ fontWeight: 600, color: "var(--adm-text)" }}>{value}</span>
     </div>
   )
 }
@@ -129,7 +129,7 @@ export default async function IdVerificationDetailPage({ params }: Props) {
 
   return (
     <div>
-      <Link href="/admin/id-verification" style={{ fontSize: 13, color: "#4CAF50" }}>
+      <Link href="/admin/id-verification" style={{ fontSize: 13, color: "var(--adm-good)" }}>
         ← Back to the queue
       </Link>
 
@@ -177,17 +177,17 @@ export default async function IdVerificationDetailPage({ params }: Props) {
                 style={{
                   width: "100%",
                   borderRadius: 10,
-                  border: "1px solid rgba(0,0,0,.1)",
-                  background: "#f2f2f2",
+                  border: "1px solid var(--adm-border-input)",
+                  background: "var(--adm-panel-flat)",
                 }}
               />
-              <p style={{ fontSize: 12, color: "#999", marginTop: 8 }}>
+              <p style={{ fontSize: 12, color: "var(--adm-text-muted)", marginTop: 8 }}>
                 This link expires in {Math.round(SIGNED_URL_TTL_S / 60)} minutes. Reload the page
                 for a fresh one. Do not save or forward it.
               </p>
             </>
           ) : (
-            <p style={{ fontSize: 13, color: "#888" }}>
+            <p style={{ fontSize: 13, color: "var(--adm-text-muted)" }}>
               {row.status === "PENDING"
                 ? "No image on this submission."
                 : row.imageDeletedAt
@@ -207,7 +207,7 @@ export default async function IdVerificationDetailPage({ params }: Props) {
             <Field
               label="ID number"
               value={
-                <span style={{ color: "#888", fontWeight: 500 }}>
+                <span style={{ color: "var(--adm-text-muted)", fontWeight: 500 }}>
                   not stored — read it off the photo
                 </span>
               }
@@ -248,7 +248,7 @@ export default async function IdVerificationDetailPage({ params }: Props) {
             {suspensionState(row.user).since && (
               <Field
                 label="Suspended"
-                value={<span style={{ color: "#b91c1c" }}>yes — since {suspensionState(row.user).since!.toLocaleDateString()}</span>}
+                value={<span style={{ color: "var(--adm-warn)" }}>yes — since {suspensionState(row.user).since!.toLocaleDateString()}</span>}
               />
             )}
             {row.user.idVerifiedGrandfatheredAt && (
@@ -276,7 +276,7 @@ export default async function IdVerificationDetailPage({ params }: Props) {
           <p style={{ fontSize: 15, fontWeight: 800, marginBottom: 4 }}>
             Their other submissions
           </p>
-          <p style={{ fontSize: 12, color: "#888", marginBottom: 10 }}>
+          <p style={{ fontSize: 12, color: "var(--adm-text-muted)", marginBottom: 10 }}>
             Three near-identical rejections in an hour reads very differently from one retry a
             week later.
           </p>
@@ -285,11 +285,11 @@ export default async function IdVerificationDetailPage({ params }: Props) {
               <span style={{ color: STATUS_COLOR[h.status], fontWeight: 700, minWidth: 74 }}>
                 {h.status}
               </span>
-              <span style={{ minWidth: 60, color: "#888" }}>#{h.attemptCount}</span>
+              <span style={{ minWidth: 60, color: "var(--adm-text-muted)" }}>#{h.attemptCount}</span>
               <span style={{ minWidth: 160 }}>{ID_TYPE_LABEL[toWireIdType(h.idType)]}</span>
-              <span style={{ color: "#888" }}>{h.submittedAt.toLocaleDateString()}</span>
+              <span style={{ color: "var(--adm-text-muted)" }}>{h.submittedAt.toLocaleDateString()}</span>
               {h.rejectionReason && (
-                <span style={{ color: "#888" }}>
+                <span style={{ color: "var(--adm-text-muted)" }}>
                   {REJECTION_LABEL[toWireRejectionReason(h.rejectionReason)]}
                 </span>
               )}

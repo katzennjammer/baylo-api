@@ -1,5 +1,6 @@
 import type { PrismaClient } from "@/generated/prisma/client"
 import prisma from "@/lib/prisma"
+import { runInBackground } from "@/lib/background"
 import { notifyUser } from "@/lib/realtime"
 import { categoryLabel } from "@/lib/v1/taxonomy"
 import { userNotBlocked } from "@/lib/blocking"
@@ -392,7 +393,7 @@ export function notifyCategoryMatchesAsync(input: {
 }): void {
   // Nothing to do for a listing whose category nobody could have asked for by
   // name, and nothing to do before the row is visible to the matcher's query.
-  void (async () => {
+  runInBackground((async () => {
     const matches: { ownerId: string; message: string }[] = input.isPerishable
       ? (await findPerishableMatches(prisma, input)).map((m) => ({
           ownerId: m.ownerId,
@@ -481,5 +482,5 @@ export function notifyCategoryMatchesAsync(input: {
     // about it. But it is LOGGED — until 2 Oct 2026 this catch was silent, and
     // a matcher that throws looked exactly like one that found nobody.
     console.error(`[category-match] notify failed for item ${input.itemId}`, e)
-  })
+  }))
 }

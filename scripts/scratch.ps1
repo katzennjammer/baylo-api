@@ -41,7 +41,7 @@ param(
   [switch] $Keep,
   [string] $Name  = "",
   [int]    $Port  = 3001,
-  [string] $ProjectDir = "D:\BAYLO\baylo"
+  [string] $ProjectDir = (Split-Path $PSScriptRoot -Parent)
 )
 
 $ErrorActionPreference = "Stop"
@@ -70,7 +70,10 @@ try {
     if (-not $Dev -or $Push) {
       Write-Host "  pushing prisma/schema.prisma to schema $Name"
       $env:DATABASE_URL = $url
-      npx prisma db push 2>&1 | Select-Object -Last 1
+      # No 2>&1: under Windows PowerShell 5.1 with ErrorActionPreference Stop,
+      # Prisma's ordinary stderr ("Loaded Prisma config...") becomes a
+      # terminating error. $LASTEXITCODE below is the real check.
+      npx prisma db push | Select-Object -Last 1
       if ($LASTEXITCODE -ne 0) { throw "db push failed" }
       # db push builds an EMPTY Category table, and every listing insert needs
       # one of its rows (foreign key). The migration seeds them on live; here

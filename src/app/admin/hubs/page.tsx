@@ -56,9 +56,9 @@ export default async function HubsPage({ searchParams }: Props) {
         />
       ) : null}
       {hubs.length === 0 ? (
-        <p style={{ padding: 32, textAlign: "center", background: "#fff", borderRadius: 14, color: "#888" }}>No hubs found.</p>
+        <p style={{ padding: 32, textAlign: "center", background: "var(--adm-panel)", borderRadius: 14, color: "var(--adm-text-muted)" }}>No hubs found.</p>
       ) : (
-        <div style={{ background: "#fff", borderRadius: 14, border: "1px solid rgba(0,0,0,.08)", overflowX: "auto" }}>
+        <div style={{ background: "var(--adm-panel)", borderRadius: 14, border: "1px solid var(--adm-border)", overflowX: "auto" }}>
           {/*
             Explicit <col> widths, not `width: "100%"` on the table alone.
             An auto-layout table with width 100% and short cell content
@@ -76,18 +76,18 @@ export default async function HubsPage({ searchParams }: Props) {
               <col style={{ width: "10%" }} />
               <col style={{ width: "22%" }} />
             </colgroup>
-            <thead><tr style={{ textAlign: "left", color: "#888", fontSize: 12 }}>
+            <thead><tr style={{ textAlign: "left", color: "var(--adm-text-muted)", fontSize: 12 }}>
               <th style={{ padding: "12px 14px" }}>Hub</th><th style={{ padding: "12px 14px" }}>Location</th>
               <th style={{ padding: "12px 14px" }}>Coordinates</th><th style={{ padding: "12px 14px" }}>Listings</th>
               <th style={{ padding: "12px 14px" }}>State / edit</th>
             </tr></thead>
             <StaggerGroup as="tbody">{hubs.map((hub, index) => (
-              <StaggerItem as="tr" index={index} key={hub.id} className="admin-row-hover" style={{ borderTop: "1px solid rgba(0,0,0,.06)", verticalAlign: "top" }}>
-                <td style={{ padding: "14px" }}><strong>{hub.name}</strong><div style={{ color: "#777", marginTop: 4 }}>{SAFE_ZONE_TYPE_LABELS[hub.type as SafeZoneTypeValue] ?? hub.type}</div></td>
-                <td style={{ padding: "14px" }}>{hub.city}<div style={{ color: "#777", marginTop: 4 }}>{hub.address}<br />{hub.landmark}</div></td>
-                <td style={{ padding: "14px", fontFamily: "monospace", color: "#555" }}>{hub.latitude}, {hub.longitude}</td>
+              <StaggerItem as="tr" index={index} key={hub.id} className="admin-row-hover" style={{ borderTop: "1px solid var(--adm-border)", verticalAlign: "top" }}>
+                <td style={{ padding: "14px" }}><strong>{hub.name}</strong><div style={{ color: "var(--adm-text-muted)", marginTop: 4 }}>{SAFE_ZONE_TYPE_LABELS[hub.type as SafeZoneTypeValue] ?? hub.type}</div></td>
+                <td style={{ padding: "14px" }}>{hub.city}<div style={{ color: "var(--adm-text-muted)", marginTop: 4 }}>{hub.address}<br />{hub.landmark}</div></td>
+                <td style={{ padding: "14px", fontFamily: "monospace", color: "var(--adm-text-secondary)" }}>{hub.latitude}, {hub.longitude}</td>
                 <td style={{ padding: "14px" }}>{hub._count.items}</td>
-                <td style={{ padding: "14px" }}><div style={{ color: hub.isActive ? "#15803d" : "#b91c1c", fontWeight: 700, marginBottom: 8 }}>{hub.isActive ? "Active" : "Inactive"}</div><HubForm initial={{ ...hub, type: hub.type as SafeZoneTypeValue }} /></td>
+                <td style={{ padding: "14px" }}><div style={{ color: hub.isActive ? "var(--adm-good)" : "var(--adm-warn)", fontWeight: 700, marginBottom: 8 }}>{hub.isActive ? "Active" : "Inactive"}</div><HubForm initial={{ ...hub, type: hub.type as SafeZoneTypeValue }} /></td>
               </StaggerItem>
             ))}</StaggerGroup>
           </table>

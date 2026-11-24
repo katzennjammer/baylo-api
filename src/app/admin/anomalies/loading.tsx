@@ -5,7 +5,7 @@ export default function Loading() {
     <div style={{ display: "flex", flexDirection: "column", gap: 20 }}>
       <div>
         <h1 style={{ fontSize: 24, fontWeight: 800, letterSpacing: "-.02em" }}>Review queue</h1>
-        <p style={{ fontSize: 13, color: "#777", marginTop: 4 }}>Loading…</p>
+        <p style={{ fontSize: 13, color: "var(--adm-text-muted)", marginTop: 4 }}>Loading…</p>
       </div>
       <AdminTableSkeleton columns={7} rows={5} rowHeight={64} />
       <AdminTableSkeleton columns={4} rows={4} rowHeight={54} />

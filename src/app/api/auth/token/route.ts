@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server"
 import bcrypt from "bcryptjs"
 import prisma from "@/lib/prisma"
-import { issueTokenPair, toTokenUser } from "@/lib/auth-tokens"
+import { DUMMY_HASH, issueTokenPair, toTokenUser } from "@/lib/auth-tokens"
 import { clientIp, enforceRateLimit } from "@/lib/rate-limit-config"
 import { suspensionState, activeSuspension, suspendedBody, notifySuspensionEnded } from "@/lib/moderation"
 
@@ -55,10 +55,14 @@ export async function POST(req: NextRequest) {
   // login-able account with no human owner and no recovery path. Two reasons
   // to refuse, one of which is about what the row IS rather than about what
   // happens to be stored on it. See @/lib/organizations.
+  // Always pay for one bcrypt compare, so "no such account" is not answered
+  // measurably faster than "wrong password" -- a timing oracle for which
+  // emails are registered.
+  const passwordOk = await bcrypt.compare(password, user?.password ?? DUMMY_HASH)
   if (
     !user?.password ||
     user.isOrgAccount ||
-    !(await bcrypt.compare(password, user.password))
+    !passwordOk
   ) {
     return NextResponse.json({ error: "Invalid email or password" }, { status: 401 })
   }

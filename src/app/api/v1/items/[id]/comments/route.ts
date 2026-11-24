@@ -2,6 +2,7 @@ import { NextRequest } from "next/server"
 import { z } from "zod"
 import { resolveSession } from "@/lib/api-auth"
 import prisma from "@/lib/prisma"
+import { SUBSCRIPTION_SELECT, hasPremiumAccess, type SubscriptionRow } from "@/lib/premium"
 import { visibleItemWhere, userNotBlocked } from "@/lib/blocking"
 import { notSuspendedWhere } from "@/lib/moderation"
 import { ok, unauthenticated, notFound, invalid } from "@/lib/v1/envelope"
@@ -74,20 +75,25 @@ const createSchema = z.strictObject({
 })
 
 /** Exactly the author fields a comment row renders. */
-const COMMENT_AUTHOR_SELECT = { id: true, name: true, avatar: true } as const
+const COMMENT_AUTHOR_SELECT = { id: true, name: true, avatar: true, subscriptions: SUBSCRIPTION_SELECT } as const
+
+type AuthorRow = { id: string; name: string; avatar: string | null; subscriptions: SubscriptionRow[] }
+
+/** The author as the phone sees it: the PREMIUM tag flag, never the rows. */
+const wireAuthor = (u: AuthorRow) => ({ id: u.id, name: u.name, avatar: u.avatar, premium: hasPremiumAccess(u.subscriptions) })
 
 interface CommentRow {
   id: string
   parentId: string | null
   content: string
   createdAt: Date
-  user: { id: string; name: string; avatar: string | null }
+  user: AuthorRow
   _count?: { replies: number }
   replies?: Array<{
     id: string
     content: string
     createdAt: Date
-    user: { id: string; name: string; avatar: string | null }
+    user: AuthorRow
   }>
 }
 
@@ -97,13 +103,13 @@ function wireComment(row: CommentRow) {
     parentId: row.parentId,
     content: row.content,
     createdAt: row.createdAt,
-    user: row.user,
+    user: wireAuthor(row.user),
     replyCount: row._count?.replies ?? 0,
     replies: row.replies?.map((reply) => ({
       id: reply.id,
       content: reply.content,
       createdAt: reply.createdAt,
-      user: reply.user,
+      user: wireAuthor(reply.user),
       replyCount: 0,
     })) ?? [],
   }

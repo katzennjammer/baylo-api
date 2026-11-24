@@ -177,9 +177,9 @@ export async function expireStaleOffers(
           message:
             `Your offer on "${offer.requestedItem.title}" expired after ${OFFER_EXPIRY_DAYS} days` +
             (fee > 0
-              ? ` — your ${fee}-Leaf bridging fee is back in your balance`
+              ? ` — your ${fee}-point bridging fee is back in your balance`
               : offer.offeredLeaves
-                ? ` — ${offer.offeredLeaves} Leaves are back in your balance`
+                ? ` — ${offer.offeredLeaves} points are back in your balance`
                 : ""),
           link: `/dashboard/tradeplace`,
           entityType: "item",

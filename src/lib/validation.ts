@@ -350,6 +350,12 @@ export const createItemSchema = refinePerishable(
     category: categorySchema,
     condition: conditionSchema,
     valueLeaves: leafAmountSchema.nullish(),
+    /**
+     * The signed ticket from POST /api/ai/valuation. Present = the listing is
+     * valued from that AI suggestion; absent = the deterministic one. Opaque
+     * to clients; verified in @/lib/ai-valuation.
+     */
+    valuationTicket: z.string().trim().max(2048).nullish(),
     images: z.array(z.string().trim().max(MAX_URL)).max(10).optional(),
     wantedItems: optionalText(MAX_WANTED),
     imageHash: z.string().trim().max(128).nullish(),
@@ -448,7 +454,7 @@ export const createOfferSchema = z
         code: z.ZodIssueCode.custom,
         path: ["offeredLeaves"],
         message:
-          "Offers no longer carry Leaves. Offer an item in the same bracket, or one bracket below and pay the bridging fee.",
+          "Offers no longer carry points. Offer an item in the same bracket, or one bracket below and pay the bridging fee.",
       })
     }
     if ((v.offeredItems?.length ?? 0) > 1) {
@@ -531,6 +537,8 @@ export const createMessageSchema = z.object({
   receiverId: z.string().min(1).max(64),
   content: text(MAX_MESSAGE),
   tradeId: z.string().min(1).max(64).nullish(),
+  /** The message this one answers (swipe to reply). Must be in the same chat. */
+  replyToId: z.string().min(1).max(64).nullish(),
 })
 
 export const typingSchema = z.object({ receiverId: z.string().min(1).max(64) })

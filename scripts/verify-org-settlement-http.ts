@@ -21,11 +21,9 @@
  *      read the SHOP's code; both sides submit; items swap. The person earns
  *      TRADE_REWARD, the shop earns NOTHING (no TRADE_REWARD, no TASK_REWARD).
  *
- *   2  UP-BRIDGE, THE SHOP PAYS (and the verified-shop tier-cap exemption).
+ *   2  UP-BRIDGE, THE SHOP PAYS.
  *      The person offers a bracket-4 item for the shop's bracket-3 listing, so
  *      the shop moves up and owes the fee at accept.
- *        2a  an UNVERIFIED shop is a New Trader, capped at bracket 3: refused
- *            TIER_ITEM_VALUE_CAP. The verified shop below is not.
  *        2b  the verified shop, balance 0: INSUFFICIENT_LEAVES, offer PENDING.
  *        2c  funded, no consent: CONSENT_REQUIRED.
  *        2d  with consent: held off the SHOP's balance, not the staff member's.
@@ -267,23 +265,6 @@ async function main() {
     head(`2  up-bridge: the SHOP pays ${UP_FEE} (bracket ${bracketOf(B4)} offered for bracket ${bracketOf(B3)})`)
     const p2 = await person("p2")
     const p2Item = await item(p2.id, "p2 bike", B4)
-    const p2ItemControl = await item(p2.id, "p2 drill", B4)
-
-    head("2a  an UNVERIFIED shop keeps the New Trader cap")
-    const pendingListing = await item(pending.orgUserId, "pending oil", B3)
-    const oc = await call("/api/offers", { token: p2.token, method: "POST", body: { postId: pendingListing.id, offeredItemId: p2ItemControl.id } })
-    check("2a: offer to the pending shop sent", oc.status === 201, brief(oc))
-    if (oc.status === 201) {
-      const ac = await call(`/api/offers/${oc.body.offerId}`, {
-        token: staff.token, orgId: pending.organizationId, method: "PATCH",
-        body: { action: "accept", consent: { accepted: true, policyVersion: TRADING_POLICY_VERSION } },
-      })
-      check("2a: refused TIER_ITEM_VALUE_CAP (bracket 4 over the bracket-3 cap)",
-        ac.status === 403 && ac.body.code === "TIER_ITEM_VALUE_CAP", brief(ac))
-      // Close it so its item is free and nothing is left open.
-      await call(`/api/v1/offers/${oc.body.offerId}/withdraw`, { token: p2.token, method: "POST", body: {} })
-    }
-
     const shopItem2 = await item(verified.orgUserId, "cooking oil", B3)
     const o2 = await call("/api/offers", { token: p2.token, method: "POST", body: { postId: shopItem2.id, offeredItemId: p2Item.id } })
     check("2: offer sent, the RECEIVER is the payer", o2.status === 201 && o2.body.bridgeFeePayer === "receiver", brief(o2))

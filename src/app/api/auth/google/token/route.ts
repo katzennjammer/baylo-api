@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { createRemoteJWKSet, jwtVerify } from "jose"
 import prisma from "@/lib/prisma"
 import { issueTokenPair, toTokenUser } from "@/lib/auth-tokens"
-import { markVerified } from "@/lib/verification"
+import { claimUnverifiedForGoogle, markVerified } from "@/lib/verification"
 import { suspensionState, activeSuspension, suspendedBody, notifySuspensionEnded } from "@/lib/moderation"
 import { googleAudiencePolicy, isConfigured, isTrustedGoogleAudience } from "@/lib/google-audience"
 
@@ -107,6 +107,7 @@ export async function POST(req: NextRequest) {
     if (suspension.suspended) return NextResponse.json(suspendedBody(suspension), { status: 403 })
     // Back after a suspension: say so, once. See notifySuspensionEnded().
     await notifySuspensionEnded(prisma, existing.id)
+    await claimUnverifiedForGoogle(existing.id)
   }
   const user =
     existing ??

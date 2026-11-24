@@ -27,10 +27,11 @@ export const vipUntil = (subs: SubscriptionRow[] | null | undefined) => tierUnti
  * payload that says "premium" goes through this function so the definition of
  * "subscribed" cannot fork.
  *
- * There is no writer in the app. Play Billing is the only lawful way to sell a
- * digital subscription inside the Android app and there is no Play Console
- * account to test it against, so rows are written by hand
- * (scripts/set-premium.ps1) and read by ONE place: isPremium() in
+ * There is no purchase in the app. Play Billing is the only lawful way to sell
+ * a digital subscription inside the Android app and there is no Play Console
+ * account to test it against, so rows are granted by an admin (the Users page,
+ * POST /api/admin/users/[id]/premium, or scripts/set-premium.ps1) and read by
+ * ONE place: isPremium() in
  * @/lib/premium. What it gates is ACQUIRING an item whose value bracket is
  * PREMIUM_MIN_BRACKET or above -- proposing for one, or accepting an offer
  * of one -- see @/lib/brackets. It never hides a listing and never gates
@@ -77,4 +78,19 @@ export function isLifetimePremium(premiumUntil: Date | null | undefined): boolea
  */
 export function isVip(vipUntil: Date | null | undefined, now: Date = new Date()): boolean {
   return vipUntil != null && vipUntil.getTime() > now.getTime()
+}
+
+/**
+ * "Does this person have at least Premium access right now": a live Premium
+ * term OR a live VIP term, VIP being a superset. The expression every gate
+ * already spells out by hand (offer-check, the assistant, achievements), as one
+ * call for the readers that only need the yes/no -- the PREMIUM tag beside a
+ * name, which is why it takes the Subscription rows a user was loaded with and
+ * nothing else.
+ */
+export function hasPremiumAccess(
+  subs: SubscriptionRow[] | null | undefined,
+  now: Date = new Date(),
+): boolean {
+  return isPremium(premiumUntil(subs), now) || isVip(vipUntil(subs), now)
 }

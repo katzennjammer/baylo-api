@@ -19,6 +19,7 @@ import { PolicyDocument, PolicySection } from "@/components/PolicyDocument"
  *   photos re-encoded, location data gone   @/lib/image-sanitize
  *   pickup point shown imprecisely          @/lib/item-visibility
  *   what account deletion erases            api/user/delete-account.ts
+ *   push token, and who carries pushes      @/lib/push, api/v1/push-token
  *   photos sent to Anthropic                api/ai/identify, api/ai/phash
  *   device location never sent here         the app's src/api has no lat/lng
  *
@@ -75,6 +76,14 @@ export default function PrivacyPolicyPage() {
         <p>
           <strong>Sign-in sessions.</strong>{" "}A record that lets this phone stay signed in for up to{" "}
           {REFRESH_TOKEN_TTL_DAYS} days, which you can end at any time by signing out.
+        </p>
+        <p>
+          <strong>Push notification token.</strong>{" "}If you allow notifications, your phone gives
+          Baylo a token: an address for this app on this phone, which says nothing else about you.
+          We keep one, for the phone you last signed in on, and use it only to send you
+          notifications about your messages, offers and trades. It is deleted when you sign out,
+          when you delete your account, or when the notification service reports it no longer
+          works.
         </p>
       </PolicySection>
 
@@ -138,6 +147,14 @@ export default function PrivacyPolicyPage() {
             happen.
           </li>
           <li>
+            <strong>Expo</strong>{" "}runs the push service that sends notifications to your phone. It
+            receives your push token and each notification&apos;s title and text.
+          </li>
+          <li>
+            <strong>Google Firebase Cloud Messaging</strong>{" "}delivers those notifications to Android
+            phones. It receives the same token and notification.
+          </li>
+          <li>
             <strong>Google</strong>{" "}confirms who you are if you choose to sign in with Google.
           </li>
           <li>
@@ -155,8 +172,9 @@ export default function PrivacyPolicyPage() {
       <PolicySection id="keep" title="How long we keep it">
         <p>We keep your information for as long as you have an account.</p>
         <p>
-          You can delete your account in the app, under Settings. When you do, your name, email
-          address, date of birth, password, photo, bio and location are erased, your listings are removed, and your
+          You can delete your account in the app, under Settings, or without the app by following{" "}
+          <a href="/policy/delete-account">these steps</a>. When you do, your name, email
+          address, date of birth, password, photo, bio, location and push token are erased, your listings are removed, and your
           follows, likes, notifications and ID verification records are deleted. Messages and
           comments you wrote are replaced with &quot;[deleted]&quot;, and the text of reviews you
           wrote is removed.
@@ -170,7 +188,10 @@ export default function PrivacyPolicyPage() {
       <PolicySection id="rights" title="Your choices and rights">
         <ul>
           <li>You can see and change your profile in the app at any time.</li>
-          <li>You can delete your account in the app at any time.</li>
+          <li>
+            You can delete your account at any time, in the app or{" "}
+            <a href="/policy/delete-account">without it</a>.
+          </li>
           <li>You can turn off location access in your phone&apos;s settings; the map still works.</li>
           <li>
             Under the Philippine Data Privacy Act of 2012 you can ask what information we hold about

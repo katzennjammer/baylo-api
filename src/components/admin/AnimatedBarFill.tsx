@@ -40,17 +40,21 @@ export function AnimatedBarFill({
     }
   }, [])
 
-  if (reduce || printing) {
-    return <span style={{ display: "block", width: pct + "%", height: "100%", borderRadius: 4, background: color }} />
-  }
+  // ONE element in every case. useReducedMotion() is unknown on the server and
+  // true on the client's first render for someone with reduced motion on, so
+  // returning a different element for it is a hydration mismatch. Instead the
+  // same span starts at width 0 everywhere and jumps to its final width with
+  // no animation when motion is reduced or a printout is imminent.
+  const instant = reduce || printing
 
   return (
     <motion.span
       style={{ display: "block", height: "100%", borderRadius: 4, background: color }}
       initial={{ width: 0 }}
-      whileInView={{ width: pct + "%" }}
+      animate={instant ? { width: pct + "%" } : undefined}
+      whileInView={instant ? undefined : { width: pct + "%" }}
       viewport={{ once: true, amount: 0.4 }}
-      transition={{ duration: 0.4, ease: [0, 0, 0.2, 1], delay: Math.min(index, 10) * 0.04 }}
+      transition={instant ? { duration: 0 } : { duration: 0.4, ease: [0, 0, 0.2, 1], delay: Math.min(index, 10) * 0.04 }}
     />
   )
 }

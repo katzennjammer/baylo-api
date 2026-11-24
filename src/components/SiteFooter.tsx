@@ -1,5 +1,6 @@
 import Link from "next/link"
 import Image from "next/image"
+import { OPERATOR_NAME, SUPPORT_EMAIL } from "@/lib/support"
 
 function ArrowIcon() {
   return (
@@ -26,9 +27,7 @@ export default function SiteFooter() {
                 <span className="accent">Everything traded.</span>
               </h2>
               <p className="footer-meta" data-reveal data-reveal-delay="1">
-                Baylo Labs · Cebu IT Park, Apas<br />
-                Cebu City 6000, Philippines<br />
-                <a href="mailto:hello@baylo.ph">hello@baylo.ph</a> · +63 32 000 0000
+                <a href={`mailto:${SUPPORT_EMAIL}`}>{SUPPORT_EMAIL}</a>
               </p>
             </div>
 
@@ -72,7 +71,7 @@ export default function SiteFooter() {
 
       <div className="wrap">
         <div className="footer-bottom">
-          <span>© 2026 Baylo Labs · Toward a local circular economy</span>
+          <span>© 2026 {OPERATOR_NAME} · Toward a local circular economy</span>
           <div className="legal">
             <Link href="/privacy">Privacy</Link>
             <Link href="/terms">Terms</Link>

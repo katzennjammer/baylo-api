@@ -47,10 +47,10 @@ interface PairRow {
 }
 
 const card: React.CSSProperties = {
-  background: "#fff", borderRadius: 14, border: "1px solid rgba(0,0,0,.08)",
+  background: "var(--adm-panel)", borderRadius: 14, border: "1px solid var(--adm-border)",
   padding: 20, display: "flex", flexDirection: "column", gap: 12,
 }
-const th: React.CSSProperties = { padding: "10px 12px", textAlign: "left", color: "#888", fontSize: 12 }
+const th: React.CSSProperties = { padding: "10px 12px", textAlign: "left", color: "var(--adm-text-muted)", fontSize: 12 }
 const td: React.CSSProperties = { padding: "10px 12px", fontSize: 13 }
 
 function parseFirstImage(raw: ImagesLike): string | null {
@@ -115,7 +115,7 @@ export default async function ReviewQueuePage() {
       <div style={card}>
         <div>
           <p style={{ fontSize: 15, fontWeight: 800 }}>Values waiting for review ({reviews.length})</p>
-          <p style={{ fontSize: 12, color: "#888", marginTop: 3, lineHeight: 1.55, maxWidth: "80ch" }}>
+          <p style={{ fontSize: 12, color: "var(--adm-text-muted)", marginTop: 3, lineHeight: 1.55, maxWidth: "80ch" }}>
             The owner asked for more than one bracket above the suggestion. Until this is
             answered the listing shows to nobody but them. <strong>Approve</strong> publishes it
             at the value they asked for; <strong>Reject</strong> moves it out of this queue,
@@ -126,7 +126,7 @@ export default async function ReviewQueuePage() {
         </div>
 
         {reviews.length === 0 ? (
-          <p style={{ fontSize: 13, color: "#999" }}>Nothing waiting.</p>
+          <p style={{ fontSize: 13, color: "var(--adm-text-muted)" }}>Nothing waiting.</p>
         ) : (
           <div style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 900 }}>
@@ -147,19 +147,19 @@ export default async function ReviewQueuePage() {
                   const asked = i.valueLeaves
                   const cap = suggested === null ? null : valueCap(suggested)
                   return (
-                    <StaggerItem as="tr" index={index} key={i.id} className="admin-row-hover" style={{ borderTop: "1px solid rgba(0,0,0,.06)" }}>
+                    <StaggerItem as="tr" index={index} key={i.id} className="admin-row-hover" style={{ borderTop: "1px solid var(--adm-border)" }}>
                       <td style={{ ...td, display: "flex", alignItems: "center", gap: 10 }}>
                         <AdminListingImage src={parseFirstImage(i.images)} alt={i.title} size={52} />
                         <div>
                           {i.title}
-                          <div style={{ fontSize: 11, color: "#aaa" }}>
+                          <div style={{ fontSize: 11, color: "var(--adm-text-muted)" }}>
                             {i.category} · {i.condition} · {i.valuationSource ?? "no source"}
                           </div>
                         </div>
                       </td>
                       <td style={td}>
                         {i.user.name}
-                        <div style={{ fontSize: 11, color: "#aaa" }}>
+                        <div style={{ fontSize: 11, color: "var(--adm-text-muted)" }}>
                           {i.user.email}
                           {suspensionState(i.user).suspended && " · SUSPENDED"}
                         </div>
@@ -170,7 +170,7 @@ export default async function ReviewQueuePage() {
                         {suggested !== null && asked !== null ? (
                           <>
                             {bracketOf(suggested)} → <strong>{bracketOf(asked)}</strong>
-                            <div style={{ fontSize: 11, color: "#aaa" }}>
+                            <div style={{ fontSize: 11, color: "var(--adm-text-muted)" }}>
                               live without review up to {cap?.maxBracketWithoutReview}
                             </div>
                           </>
@@ -194,7 +194,7 @@ export default async function ReviewQueuePage() {
       <div style={card}>
         <div>
           <p style={{ fontSize: 15, fontWeight: 800 }}>Repeat trade pairs ({pairs.length})</p>
-          <p style={{ fontSize: 12, color: "#888", marginTop: 3, lineHeight: 1.55, maxWidth: "80ch" }}>
+          <p style={{ fontSize: 12, color: "var(--adm-text-muted)", marginTop: 3, lineHeight: 1.55, maxWidth: "80ch" }}>
             Pairs with {MIN_REPEATS} or more completed swaps whose repeatable task awarded{" "}
             <strong>0 Leaves</strong> —
             the faucet guard refusing a partner already traded with inside{" "}
@@ -205,7 +205,7 @@ export default async function ReviewQueuePage() {
         </div>
 
         {pairs.length === 0 ? (
-          <p style={{ fontSize: 13, color: "#999" }}>
+          <p style={{ fontSize: 13, color: "var(--adm-text-muted)" }}>
             No pair has hit {MIN_REPEATS} zero-award swaps.
           </p>
         ) : (
@@ -224,14 +224,14 @@ export default async function ReviewQueuePage() {
                   const u = byId.get(p.userId)
                   const q = byId.get(p.partnerId)
                   return (
-                    <StaggerItem as="tr" index={index} key={`${p.userId}-${p.partnerId}`} className="admin-row-hover" style={{ borderTop: "1px solid rgba(0,0,0,.06)" }}>
+                    <StaggerItem as="tr" index={index} key={`${p.userId}-${p.partnerId}`} className="admin-row-hover" style={{ borderTop: "1px solid var(--adm-border)" }}>
                       <td style={td}>
                         {u?.name ?? p.userId}
-                        <div style={{ fontSize: 11, color: "#aaa" }}>{u?.email}</div>
+                        <div style={{ fontSize: 11, color: "var(--adm-text-muted)" }}>{u?.email}</div>
                       </td>
                       <td style={td}>
                         {q?.name ?? p.partnerId}
-                        <div style={{ fontSize: 11, color: "#aaa" }}>{q?.email}</div>
+                        <div style={{ fontSize: 11, color: "var(--adm-text-muted)" }}>{q?.email}</div>
                       </td>
                       <td style={{ ...td, fontWeight: 700 }}>{Number(p.zeroSwaps)}</td>
                       <td style={td}>{new Date(p.lastAt).toLocaleString()}</td>

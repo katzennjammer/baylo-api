@@ -53,7 +53,7 @@ export function DocumentQueueTabs({
         display: "flex",
         gap: 4,
         margin: "0 0 18px",
-        borderBottom: "1px solid rgba(0,0,0,.1)",
+        borderBottom: "1px solid var(--adm-border-input)",
       }}
     >
       {tabs.map((t) => {
@@ -67,10 +67,10 @@ export function DocumentQueueTabs({
               fontSize: 14,
               fontWeight: on ? 700 : 500,
               textDecoration: "none",
-              color: on ? "#2e7d32" : "#666",
+              color: on ? "var(--adm-good)" : "var(--adm-text-secondary)",
               // The underline sits ON the container's border rather than above
               // it, so the active tab reads as connected to the panel below.
-              borderBottom: `2px solid ${on ? "#4CAF50" : "transparent"}`,
+              borderBottom: `2px solid ${on ? "var(--adm-accent)" : "transparent"}`,
               marginBottom: -1,
               display: "flex",
               alignItems: "center",
@@ -85,8 +85,8 @@ export function DocumentQueueTabs({
                   fontWeight: 800,
                   padding: "2px 7px",
                   borderRadius: 999,
-                  background: "rgba(180,83,9,.12)",
-                  color: "#b45309",
+                  background: "var(--adm-queue-bg)",
+                  color: "var(--adm-queue)",
                 }}
               >
                 {t.pending}

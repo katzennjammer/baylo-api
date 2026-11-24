@@ -44,7 +44,7 @@ import prisma from "../src/lib/prisma"
 import { createOrganization } from "../src/lib/organizations"
 import { signAccessToken } from "../src/lib/auth-tokens"
 import { requireScratchSchema } from "./lib/live-guard"
-import { collapseSystemPairs } from "../../baylo-mobile/src/lib/system-pairs"
+import { collapseSystemPairs } from "./lib/mobile-system-pairs"
 
 // pusher-js's node build is CommonJS with the constructor on `.Pusher`, the
 // same shape baylo-mobile/src/api/pusher.ts unwraps for Metro.

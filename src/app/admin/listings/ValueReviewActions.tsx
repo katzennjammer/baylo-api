@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation"
 import { useRef, useState } from "react"
+import toast from "react-hot-toast"
 import { VALUE_REJECTION_REASONS, VALUE_REJECTION_NOTE_MAX } from "@/lib/value-rejection"
 import { collapseRowThen } from "@/components/admin/rowCollapse"
 import { Expandable } from "@/components/admin/Expandable"
@@ -63,6 +64,7 @@ export function ValueReviewActions({ itemId }: { itemId: string }) {
         setError(payload?.error?.message ?? `Failed (${res.status})`)
         return
       }
+      toast.success(open === "approve" ? "Listing value approved." : "Listing value rejected.")
       setOpen(null)
       setReason("")
       setReasonCode("")
@@ -76,11 +78,11 @@ export function ValueReviewActions({ itemId }: { itemId: string }) {
   }
 
   const btn: React.CSSProperties = {
-    borderRadius: 8, border: "1px solid rgba(0,0,0,.12)", padding: "6px 10px",
-    fontSize: 12, fontWeight: 700, cursor: "pointer", background: "#fff",
+    borderRadius: 8, border: "1px solid var(--adm-border-input)", padding: "6px 10px",
+    fontSize: 12, fontWeight: 700, cursor: "pointer", background: "var(--adm-panel)",
   }
   const field: React.CSSProperties = {
-    padding: "7px 9px", borderRadius: 7, border: "1px solid rgba(0,0,0,.16)", fontSize: 12, width: "100%",
+    padding: "7px 9px", borderRadius: 7, border: "1px solid var(--adm-border-control)", fontSize: 12, width: "100%",
   }
 
   const canSubmit = open === "approve" ? reason.trim().length > 0 : reasonCode.length > 0
@@ -91,7 +93,7 @@ export function ValueReviewActions({ itemId }: { itemId: string }) {
         <button
           type="button"
           className="admin-btn-press"
-          style={{ ...btn, borderColor: "#15803d", color: "#15803d", opacity: open === "reject" ? 0.5 : 1 }}
+          style={{ ...btn, borderColor: "var(--adm-good)", color: "var(--adm-good)", opacity: open === "reject" ? 0.5 : 1 }}
           disabled={busy}
           onClick={() => { setOpen(open === "approve" ? null : "approve"); setError(null) }}
         >
@@ -100,7 +102,7 @@ export function ValueReviewActions({ itemId }: { itemId: string }) {
         <button
           type="button"
           className="admin-btn-press"
-          style={{ ...btn, borderColor: "#b91c1c", color: "#b91c1c", opacity: open === "approve" ? 0.5 : 1 }}
+          style={{ ...btn, borderColor: "var(--adm-warn)", color: "var(--adm-warn)", opacity: open === "approve" ? 0.5 : 1 }}
           disabled={busy}
           onClick={() => { setOpen(open === "reject" ? null : "reject"); setError(null) }}
         >
@@ -119,7 +121,7 @@ export function ValueReviewActions({ itemId }: { itemId: string }) {
             style={field}
             autoFocus
           />
-          <ConfirmRow submitRef={submitRef} busy={busy} canSubmit={canSubmit} color="#15803d" label="Publish at requested value" onSubmit={submit} onCancel={() => setOpen(null)} />
+          <ConfirmRow submitRef={submitRef} busy={busy} canSubmit={canSubmit} color="var(--adm-accent)" label="Publish at requested value" onSubmit={submit} onCancel={() => setOpen(null)} />
         </div>
       </Expandable>
 
@@ -145,11 +147,11 @@ export function ValueReviewActions({ itemId }: { itemId: string }) {
             disabled={busy}
             style={field}
           />
-          <ConfirmRow submitRef={submitRef} busy={busy} canSubmit={canSubmit} color="#b91c1c" label="Reject — owner is told" onSubmit={submit} onCancel={() => setOpen(null)} />
+          <ConfirmRow submitRef={submitRef} busy={busy} canSubmit={canSubmit} color="var(--adm-danger)" label="Reject — owner is told" onSubmit={submit} onCancel={() => setOpen(null)} />
         </div>
       </Expandable>
 
-      {error ? <span style={{ fontSize: 11, color: "#b91c1c" }}>{error}</span> : null}
+      {error ? <span style={{ fontSize: 11, color: "var(--adm-warn)" }}>{error}</span> : null}
     </div>
   )
 }
@@ -169,7 +171,7 @@ function ConfirmRow({
         disabled={busy || !canSubmit}
         className="admin-btn-press"
         style={{
-          flex: 1, padding: "7px 10px", border: 0, borderRadius: 7, background: color, color: "#fff",
+          flex: 1, padding: "7px 10px", border: 0, borderRadius: 7, background: color, color: "var(--adm-text-on-accent)",
           fontWeight: 700, fontSize: 12, cursor: busy || !canSubmit ? "not-allowed" : "pointer",
           opacity: busy || !canSubmit ? 0.55 : 1,
         }}
@@ -181,7 +183,7 @@ function ConfirmRow({
         onClick={onCancel}
         disabled={busy}
         className="admin-btn-press"
-        style={{ padding: "7px 10px", border: "1px solid rgba(0,0,0,.12)", borderRadius: 7, background: "#fff", fontSize: 12, cursor: "pointer" }}
+        style={{ padding: "7px 10px", border: "1px solid var(--adm-border-input)", borderRadius: 7, background: "var(--adm-panel)", fontSize: 12, cursor: "pointer" }}
       >
         Cancel
       </button>

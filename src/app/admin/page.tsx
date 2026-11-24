@@ -39,10 +39,10 @@ interface Props {
 }
 
 const STATUS_COLOR: Record<string, string> = {
-  OPEN: "#b45309",
-  REVIEWING: "#1d4ed8",
-  ACTIONED: "#15803d",
-  DISMISSED: "#6b7280",
+  OPEN: "var(--adm-queue)",
+  REVIEWING: "var(--adm-info)",
+  ACTIONED: "var(--adm-good)",
+  DISMISSED: "var(--adm-text-muted)",
 }
 
 export default async function AdminQueuePage({ searchParams }: Props) {
@@ -107,7 +107,7 @@ export default async function AdminQueuePage({ searchParams }: Props) {
       {/* Filters. All three compose; each chip toggles its own axis off. */}
       <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-          <span style={{ fontSize: 12, color: "#999", width: 64 }}>Status</span>
+          <span style={{ fontSize: 12, color: "var(--adm-text-muted)", width: 64 }}>Status</span>
           <FilterChips
             groupId="report-status"
             options={[
@@ -118,7 +118,7 @@ export default async function AdminQueuePage({ searchParams }: Props) {
         </div>
 
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-          <span style={{ fontSize: 12, color: "#999", width: 64 }}>Type</span>
+          <span style={{ fontSize: 12, color: "var(--adm-text-muted)", width: 64 }}>Type</span>
           <FilterChips
             groupId="report-target"
             options={[
@@ -129,7 +129,7 @@ export default async function AdminQueuePage({ searchParams }: Props) {
         </div>
 
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
-          <span style={{ fontSize: 12, color: "#999", width: 64 }}>Reason</span>
+          <span style={{ fontSize: 12, color: "var(--adm-text-muted)", width: 64 }}>Reason</span>
           <FilterChips
             groupId="report-category"
             options={[
@@ -141,14 +141,14 @@ export default async function AdminQueuePage({ searchParams }: Props) {
       </div>
 
       {reports.length === 0 ? (
-        <p style={{ fontSize: 14, color: "#888", padding: 32, textAlign: "center", background: "#fff", borderRadius: 14 }}>
+        <p style={{ fontSize: 14, color: "var(--adm-text-muted)", padding: 32, textAlign: "center", background: "var(--adm-panel)", borderRadius: 14 }}>
           Nothing here.
         </p>
       ) : (
-        <div style={{ background: "#fff", borderRadius: 14, border: "1px solid rgba(0,0,0,.08)", overflowX: "auto" }}>
+        <div style={{ background: "var(--adm-panel)", borderRadius: 14, border: "1px solid var(--adm-border)", overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13, minWidth: 760 }}>
             <thead>
-              <tr style={{ textAlign: "left", color: "#888", fontSize: 12 }}>
+              <tr style={{ textAlign: "left", color: "var(--adm-text-muted)", fontSize: 12 }}>
                 <th style={{ padding: "12px 16px" }}>Filed</th>
                 <th style={{ padding: "12px 16px" }}>Status</th>
                 <th style={{ padding: "12px 16px" }}>Type</th>
@@ -160,14 +160,14 @@ export default async function AdminQueuePage({ searchParams }: Props) {
             </thead>
             <StaggerGroup as="tbody">
               {reports.map((r, index) => (
-                <StaggerItem as="tr" index={index} key={r.id} className="admin-row-hover" style={{ borderTop: "1px solid rgba(0,0,0,.06)" }}>
-                  <td style={{ padding: "12px 16px", whiteSpace: "nowrap", color: "#666" }}>
+                <StaggerItem as="tr" index={index} key={r.id} className="admin-row-hover" style={{ borderTop: "1px solid var(--adm-border)" }}>
+                  <td style={{ padding: "12px 16px", whiteSpace: "nowrap", color: "var(--adm-text-secondary)" }}>
                     {r.createdAt.toLocaleString()}
                   </td>
                   <td style={{ padding: "12px 16px" }}>
                     <span style={{ color: STATUS_COLOR[r.status], fontWeight: 700 }}>{r.status}</span>
                     {r.resolvedBy && (
-                      <div style={{ fontSize: 11, color: "#aaa" }}>by {r.resolvedBy.name}</div>
+                      <div style={{ fontSize: 11, color: "var(--adm-text-muted)" }}>by {r.resolvedBy.name}</div>
                     )}
                   </td>
                   <td style={{ padding: "12px 16px" }}>{toWireTarget(r.targetType)}</td>
@@ -175,11 +175,11 @@ export default async function AdminQueuePage({ searchParams }: Props) {
                     {CATEGORY_LABEL[toWireCategory(r.category)]}
                   </td>
                   <td style={{ padding: "12px 16px" }}>{r.reporter.name}</td>
-                  <td style={{ padding: "12px 16px", maxWidth: 280, color: "#666" }}>
+                  <td style={{ padding: "12px 16px", maxWidth: 280, color: "var(--adm-text-secondary)" }}>
                     {r.notes ? (r.notes.length > 90 ? `${r.notes.slice(0, 90)}…` : r.notes) : "—"}
                   </td>
                   <td style={{ padding: "12px 16px", whiteSpace: "nowrap" }}>
-                    <Link href={`/admin/reports/${r.id}`} style={{ color: "#4CAF50", fontWeight: 600 }}>
+                    <Link href={`/admin/reports/${r.id}`} style={{ color: "var(--adm-good)", fontWeight: 600 }}>
                       Review →
                     </Link>
                   </td>

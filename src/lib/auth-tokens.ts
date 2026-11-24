@@ -28,6 +28,13 @@ import prisma from "@/lib/prisma"
 export const ACCESS_TOKEN_TTL_SECONDS = 15 * 60
 export const REFRESH_TOKEN_TTL_DAYS = 30
 
+/**
+ * A real cost-12 bcrypt hash of a throwaway string. Login compares against it
+ * when the account does not exist, so a miss costs the same time as a wrong
+ * password and response timing cannot reveal which emails are registered.
+ */
+export const DUMMY_HASH = "$2b$12$EuYQDZUl38JMyUhp3luV3eMjG3ILtKjl1.k8CyIsnHZ2klxmL8wJm"
+
 const REFRESH_TOKEN_TTL_MS = REFRESH_TOKEN_TTL_DAYS * 24 * 60 * 60 * 1000
 
 // Bound to this app so a token minted here cannot be replayed against another

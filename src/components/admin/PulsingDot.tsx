@@ -5,6 +5,6 @@
  * decorative loop with no state and no layout to coordinate, which is
  * exactly the case plain CSS handles best.
  */
-export function PulsingDot({ color = "#b45309" }: { color?: string }) {
+export function PulsingDot({ color = "var(--adm-queue)" }: { color?: string }) {
   return <span className="admin-pulse-dot" style={{ background: color }} aria-hidden="true" />
 }

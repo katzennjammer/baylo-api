@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation"
 import { useRef, useState } from "react"
+import toast from "react-hot-toast"
 import { collapseRowThen } from "@/components/admin/rowCollapse"
 import { Expandable } from "@/components/admin/Expandable"
 
@@ -47,6 +48,7 @@ export function AppealActions({ appealId, sameReviewer }: { appealId: string; sa
         setError(payload?.error?.message ?? `Failed (${res.status})`)
         return
       }
+      toast.success(open === "overturn" ? "Appeal granted." : "Appeal denied.")
       setOpen(null)
       setReason("")
       setArmed(false)
@@ -59,16 +61,16 @@ export function AppealActions({ appealId, sameReviewer }: { appealId: string; sa
   }
 
   const btn: React.CSSProperties = {
-    borderRadius: 8, border: "1px solid rgba(0,0,0,.12)", padding: "6px 10px",
-    fontSize: 12, fontWeight: 700, cursor: "pointer", background: "#fff",
+    borderRadius: 8, border: "1px solid var(--adm-border-input)", padding: "6px 10px",
+    fontSize: 12, fontWeight: 700, cursor: "pointer", background: "var(--adm-panel)",
   }
-  const color = open === "overturn" ? "#15803d" : "#7c2d12"
+  const color = open === "overturn" ? "var(--adm-accent)" : "var(--adm-danger)"
   const canSubmit = reason.trim().length > 0
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 6, minWidth: 240 }}>
       {sameReviewer ? (
-        <div style={{ fontSize: 12, color: "#92400e", background: "#fef3c7", border: "1px solid #fcd34d", borderRadius: 7, padding: "6px 8px" }}>
+        <div style={{ fontSize: 12, color: "var(--adm-queue)", background: "var(--adm-queue-bg)", border: "1px solid var(--adm-queue)", borderRadius: 7, padding: "6px 8px" }}>
           You made the decision being appealed. Prefer a colleague; if you decide it anyway, the audit row records that.
         </div>
       ) : null}
@@ -76,7 +78,7 @@ export function AppealActions({ appealId, sameReviewer }: { appealId: string; sa
         <button
           type="button"
           className="admin-btn-press"
-          style={{ ...btn, borderColor: "#7c2d12", color: "#7c2d12", opacity: open === "overturn" ? 0.5 : 1 }}
+          style={{ ...btn, borderColor: "var(--adm-warn)", color: "var(--adm-warn)", opacity: open === "overturn" ? 0.5 : 1 }}
           disabled={busy}
           onClick={() => { setOpen(open === "uphold" ? null : "uphold"); setArmed(false); setError(null) }}
         >
@@ -85,7 +87,7 @@ export function AppealActions({ appealId, sameReviewer }: { appealId: string; sa
         <button
           type="button"
           className="admin-btn-press"
-          style={{ ...btn, borderColor: "#15803d", color: "#15803d", opacity: open === "uphold" ? 0.5 : 1 }}
+          style={{ ...btn, borderColor: "var(--adm-good)", color: "var(--adm-good)", opacity: open === "uphold" ? 0.5 : 1 }}
           disabled={busy}
           onClick={() => { setOpen(open === "overturn" ? null : "overturn"); setArmed(false); setError(null) }}
         >
@@ -101,7 +103,7 @@ export function AppealActions({ appealId, sameReviewer }: { appealId: string; sa
             maxLength={1000}
             disabled={busy}
             autoFocus
-            style={{ padding: "7px 9px", borderRadius: 7, border: "1px solid rgba(0,0,0,.16)", fontSize: 12, width: "100%" }}
+            style={{ padding: "7px 9px", borderRadius: 7, border: "1px solid var(--adm-border-control)", fontSize: 12, width: "100%" }}
           />
           <div style={{ display: "flex", gap: 6 }}>
             <button
@@ -111,7 +113,7 @@ export function AppealActions({ appealId, sameReviewer }: { appealId: string; sa
               disabled={busy || !canSubmit}
               className="admin-btn-press"
               style={{
-                flex: 1, padding: "7px 10px", border: 0, borderRadius: 7, background: armed ? "#b45309" : color, color: "#fff",
+                flex: 1, padding: "7px 10px", border: 0, borderRadius: 7, background: armed ? "var(--adm-queue)" : color, color: "var(--adm-text-on-accent)",
                 fontWeight: 700, fontSize: 12, cursor: busy || !canSubmit ? "not-allowed" : "pointer", opacity: busy || !canSubmit ? 0.55 : 1,
               }}
             >
@@ -128,14 +130,14 @@ export function AppealActions({ appealId, sameReviewer }: { appealId: string; sa
               onClick={() => { setOpen(null); setArmed(false) }}
               disabled={busy}
               className="admin-btn-press"
-              style={{ padding: "7px 10px", border: "1px solid rgba(0,0,0,.12)", borderRadius: 7, background: "#fff", fontSize: 12, cursor: "pointer" }}
+              style={{ padding: "7px 10px", border: "1px solid var(--adm-border-input)", borderRadius: 7, background: "var(--adm-panel)", fontSize: 12, cursor: "pointer" }}
             >
               Cancel
             </button>
           </div>
         </div>
       </Expandable>
-      {error ? <span style={{ fontSize: 11, color: "#b91c1c" }}>{error}</span> : null}
+      {error ? <span style={{ fontSize: 11, color: "var(--adm-warn)" }}>{error}</span> : null}
     </div>
   )
 }

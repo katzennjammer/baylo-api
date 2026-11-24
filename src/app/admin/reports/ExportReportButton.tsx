@@ -40,7 +40,7 @@ export default function ExportReportButton({
   useEffect(() => {
     const beforePrint = () => {
       const previousTitle = document.title
-      document.title = `Baylo overall report - ${from} to ${to}`
+      document.title = `Baylo platform report - ${from} to ${to}`
       ;(window as Window & { __bayloReportTitle?: string }).__bayloReportTitle = previousTitle
     }
 

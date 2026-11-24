@@ -39,9 +39,9 @@ interface Props {
 }
 
 const STATUS_COLOR: Record<string, string> = {
-  PENDING: "#b45309",
-  APPROVED: "#15803d",
-  REJECTED: "#6b7280",
+  PENDING: "var(--adm-queue)",
+  APPROVED: "var(--adm-good)",
+  REJECTED: "var(--adm-text-muted)",
 }
 
 function ageOf(d: Date): string {
@@ -126,10 +126,10 @@ export default async function IdVerificationQueuePage({ searchParams }: Props) {
             marginTop: 14,
             padding: "12px 14px",
             borderRadius: 12,
-            background: "rgba(229,72,77,.08)",
-            border: "1px solid rgba(229,72,77,.3)",
+            background: "var(--adm-warn-bg)",
+            border: "1px solid var(--adm-warn-outline)",
             fontSize: 13,
-            color: "#991b1b",
+            color: "var(--adm-warn)",
           }}
         >
           <strong>{staleImages} decided submission{staleImages === 1 ? "" : "s"}</strong> still
@@ -156,7 +156,7 @@ export default async function IdVerificationQueuePage({ searchParams }: Props) {
       </div>
 
       {rows.length === 0 ? (
-        <p style={{ fontSize: 14, color: "#888", padding: "32px 0" }}>
+        <p style={{ fontSize: 14, color: "var(--adm-text-muted)", padding: "32px 0" }}>
           {status === "PENDING"
             ? "Nothing waiting. Everyone who has submitted an ID has an answer."
             : "Nothing here."}
@@ -164,9 +164,9 @@ export default async function IdVerificationQueuePage({ searchParams }: Props) {
       ) : (
         <div
           style={{
-            background: "#fff",
+            background: "var(--adm-panel)",
             borderRadius: 14,
-            border: "1px solid rgba(0,0,0,.08)",
+            border: "1px solid var(--adm-border)",
             overflow: "hidden",
           }}
         >
@@ -185,7 +185,7 @@ export default async function IdVerificationQueuePage({ searchParams }: Props) {
                   gap: 14,
                   alignItems: "center",
                   padding: "14px 18px",
-                  borderTop: i === 0 ? "none" : "1px solid rgba(0,0,0,.06)",
+                  borderTop: i === 0 ? "none" : "1px solid var(--adm-border)",
                   textDecoration: "none",
                   color: "inherit",
                   flexWrap: "wrap",
@@ -207,15 +207,15 @@ export default async function IdVerificationQueuePage({ searchParams }: Props) {
                   {r.user.name}
                 </span>
 
-                <span style={{ fontSize: 13, color: "#555", minWidth: 160 }}>
+                <span style={{ fontSize: 13, color: "var(--adm-text-secondary)", minWidth: 160 }}>
                   {ID_TYPE_LABEL[toWireIdType(r.idType)]}
                 </span>
 
-                <span style={{ fontSize: 12, color: "#888" }}>
+                <span style={{ fontSize: 12, color: "var(--adm-text-muted)" }}>
                   attempt {r.attemptCount} · account {accountAgeDays}d old
                 </span>
 
-                <span style={{ marginLeft: "auto", fontSize: 12, color: "#888" }}>
+                <span style={{ marginLeft: "auto", fontSize: 12, color: "var(--adm-text-muted)" }}>
                   {r.status === "PENDING"
                     ? `waiting ${ageOf(r.submittedAt)}`
                     : r.rejectionReason

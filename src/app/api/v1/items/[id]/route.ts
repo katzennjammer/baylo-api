@@ -1,17 +1,19 @@
 import { NextRequest } from "next/server"
-import { bracketOf, valueNeedsPremium, valueNeedsVip } from "@/lib/brackets"
+import { bracketOf, valueNeedsPremium } from "@/lib/brackets"
 import { valueCap } from "@/lib/trade-rules"
 import { valueRejectionSentence } from "@/lib/value-rejection"
 import { ownerAppealState } from "@/lib/appeals"
-import { isPremium, isVip, premiumUntil, vipUntil, SUBSCRIPTION_SELECT } from "@/lib/premium"
+import { hasPremiumAccess, isPremium, isVip, premiumUntil, vipUntil, SUBSCRIPTION_SELECT } from "@/lib/premium"
 import { z } from "zod"
 import { resolveSession } from "@/lib/api-auth"
 import { resolveListingOwners } from "@/lib/listing-owner"
+import { ORG_CONTEXT_HEADER, resolveActingIdentity } from "@/lib/organizations"
+import { isSameOwnerPair, sendingAccountsOf } from "@/lib/trade-participant"
 import prisma from "@/lib/prisma"
 import { preciseAccessItemIds } from "@/lib/item-visibility"
 import { visibleItemWhere } from "@/lib/blocking"
 import { loadTrustTiers } from "@/lib/trust-tiers"
-import { expireStaleOffers } from "@/lib/offers"
+import { expireStaleOffers, offerExpiryCutoff } from "@/lib/offers"
 import { ok, unauthenticated, notFound } from "@/lib/v1/envelope"
 import { parseQuery } from "@/lib/v1/query"
 import { V1_ITEM_SELECT, V1_ITEM_OWNER_SELECT, V1_ITEM_SAFEZONE_SELECT, v1ItemStatsSelect, v1Item, type V1ItemRow } from "@/lib/v1/item"
@@ -187,39 +189,81 @@ export async function GET(
 
   const isOwner = ownerIds.includes(item.userId)
 
+  // WHO WOULD SEND AN OFFER FROM HERE (16 Nov 2026): the acting identity, as
+  // POST /api/offers now uses. In shop mode that is the SHOP -- its items, its
+  // Leaves, its Premium, its pending offer -- not the person. A dead context
+  // falls back to the person, like `owners` above: this screen only reads.
+  const actingResult = await resolveActingIdentity(prisma, viewerId, req.headers.get(ORG_CONTEXT_HEADER))
+  const acting = actingResult.ok ? actingResult.acting : null
+  const offererId = acting?.actingUserId ?? viewerId
+  const shop = acting?.organization ?? null
+
   // `viewer.existingOfferId` below is what puts the app on §5.2's pending-offer
   // screen instead of the composer, so a lapsed offer has to be EXPIRED before
   // it is read or somebody is held on a screen about an offer that is over.
   // Scoped to this viewer AND this listing: the narrowest sweep that fixes the
   // field this route actually serves.
-  if (!isOwner) await expireStaleOffers(prisma, { senderId: viewerId, postId: item.id })
+  if (!isOwner) await expireStaleOffers(prisma, { senderId: offererId, postId: item.id })
 
   // ── 2, 3, 4, 5, 6 ── concurrent: none depends on another.
-  const [access, existingOffer, tradeable, viewerRow, tiers] = await Promise.all([
+  const [access, existingOffer, tradeable, viewerRow, tiers, accounts, sameOwner, incomingOffer] = await Promise.all([
     preciseAccessItemIds(viewerId, [item.id]),
     isOwner
       ? Promise.resolve(null)
       : prisma.trade.findFirst({
-          where: { requestedItemId: item.id, senderId: viewerId, offerStatus: "PENDING" },
+          where: { requestedItemId: item.id, senderId: offererId, offerStatus: "PENDING" },
           select: { id: true },
           orderBy: { createdAt: "desc" },
         }),
     isOwner
       ? Promise.resolve([])
       : prisma.item.findMany({
-          where: { userId: viewerId, status: "AVAILABLE", moderationHiddenAt: null },
-          select: { id: true, title: true, images: ITEM_IMAGES },
+          where: { userId: offererId, status: "AVAILABLE", moderationHiddenAt: null },
+          // valueLeaves: what each is worth, so the offer screen can bracket a
+          // SHOP's items (the person's profile does not list them).
+          select: { id: true, title: true, images: ITEM_IMAGES, valueLeaves: true },
           orderBy: [{ createdAt: "desc" }, { id: "desc" }],
           take: 50,
         }),
     prisma.user.findUnique({
-      where: { id: viewerId },
-      select: { leaves: true, subscriptions: SUBSCRIPTION_SELECT },
+      where: { id: offererId },
+      select: { name: true, avatar: true, leaves: true, subscriptions: SUBSCRIPTION_SELECT },
     }),
     // The same function the contract gates enforce with, so the badge on this
     // screen can never promise something the server would then refuse.
     loadTrustTiers(prisma, [{ id: item.userId, rating: item.user.rating }]),
+    isOwner ? Promise.resolve([]) : sendingAccountsOf(prisma, viewerId),
+    isOwner ? Promise.resolve(false) : isSameOwnerPair(prisma, offererId, item.userId),
+    // THIS ITEM IS ALREADY OFFERED TO YOU (16 Nov 2026): a live offer where
+    // the listing being viewed is the item somebody put up for one of YOUR
+    // listings (yours, or your shop's in shop mode -- the Trades tab's
+    // inbox rule). The button then leads to that offer, not to a new one.
+    // Inside the 3-day window only, so a lapsed offer never shows.
+    isOwner
+      ? Promise.resolve(null)
+      : prisma.trade.findFirst({
+          where: {
+            offeredItemId: item.id,
+            receiverId: offererId,
+            offerStatus: "PENDING",
+            createdAt: { gte: offerExpiryCutoff() },
+          },
+          select: { id: true },
+          orderBy: { createdAt: "desc" },
+        }),
   ])
+  // One pending offer per PERSON (see POST /api/offers): one held by another
+  // of this person's accounts. Only ever this person's own account's name.
+  const otherAccountOffer = isOwner || existingOffer
+    ? null
+    : await prisma.trade.findFirst({
+        where: {
+          requestedItemId: item.id,
+          senderId: { in: accounts.filter((a) => a.id !== offererId).map((a) => a.id) },
+          offerStatus: "PENDING",
+        },
+        select: { senderId: true },
+      })
 
   // resolvePickup() recognises the owner by `item.userId === viewerId`, so a
   // shop member managing the shop's listing is passed as the shop -- they see
@@ -241,21 +285,40 @@ export async function GET(
     viewer: {
       isOwner,
       state: item.status,
+      // The OWNER's action follows the item's state too. It used to be "EDIT"
+      // whatever the status, so an item acquired in a trade (OWNED, not on the
+      // market) offered Edit / See offers and no way to list it again. An app
+      // that predates "RELIST" falls back to its Edit branch, as before.
       action: isOwner
-        ? "EDIT"
+        ? item.status === "OWNED"
+          ? "RELIST"
+          : item.status === "IN_TRADE"
+            ? "IN_TRADE"
+            : item.status === "TRADED"
+              ? "TRADED"
+              : "EDIT"
         : item.status === "IN_TRADE"
           ? "IN_TRADE"
           : item.status === "TRADED"
             ? "TRADED"
-            : "SEND_OFFER",
+            : item.status === "AVAILABLE"
+              ? "SEND_OFFER"
+              : "UNAVAILABLE",
       // An owner cannot offer on their own listing, and neither can anyone once
       // it has left AVAILABLE.
-      canOffer: !isOwner && item.status === "AVAILABLE",
-      // Why the offer control is LOCKED for this viewer, when it is. "vip": the
-      // listing sits in VIP_MIN_BRACKET or above and the viewer has no live VIP
-      // subscription (Premium alone does not clear this one). "premium": the
-      // listing sits in PREMIUM_MIN_BRACKET or above and the viewer has neither
-      // subscription live. Sent as a reason rather than folded into `canOffer`
+      // Nor between two accounts of one person (their shop's listing, or one
+      // shop's on another's), which POST /api/offers refuses.
+      canOffer: !isOwner && !sameOwner && item.status === "AVAILABLE",
+      /**
+       * The listing belongs to another of the viewer's OWN accounts (their
+       * shop, or their personal profile while acting as a shop, or another
+       * of their shops). The button says so instead of "Not available".
+       */
+      ownAccount: !isOwner && sameOwner,
+      // Why the offer control is LOCKED for this viewer, when it is. "premium":
+      // the listing sits in PREMIUM_MIN_BRACKET or above and the viewer has
+      // neither Premium nor VIP live. "vip" is no longer sent: there is no
+      // VIP-only bracket since 22 Oct 2026. Sent as a reason rather than folded into `canOffer`
       // because the two draw different controls -- `canOffer: false` is an
       // inert button ("not available"), a lock is an explanation with the
       // listing left fully in view. Advisory: the same check, in the same
@@ -265,21 +328,41 @@ export async function GET(
       // whatever bracket it is in, and a padlock on your own item would read as
       // a claim about you.
       offerLock:
-        !isOwner && valueNeedsVip(item.valueLeaves) && !isVip(vipUntil(viewerRow?.subscriptions))
-          ? ("vip" as const)
-          : !isOwner &&
-              valueNeedsPremium(item.valueLeaves) &&
-              !isPremium(premiumUntil(viewerRow?.subscriptions)) &&
-              !isVip(vipUntil(viewerRow?.subscriptions))
-            ? ("premium" as const)
-            : null,
+        !isOwner &&
+        valueNeedsPremium(item.valueLeaves) &&
+        !isPremium(premiumUntil(viewerRow?.subscriptions)) &&
+        !isVip(vipUntil(viewerRow?.subscriptions))
+          ? ("premium" as const)
+          : null,
       leaves: viewerRow?.leaves ?? 0,
       tradeableItems: tradeable.map((t) => ({
         id: t.id,
         title: t.title,
         image: firstImage(t.images),
+        valueLeaves: t.valueLeaves,
       })),
       existingOfferId: existingOffer?.id ?? null,
+      /** A live offer that puts THIS item up for one of the viewer's listings. */
+      incomingOfferId: incomingOffer?.id ?? null,
+      /**
+       * The account an offer from here is sent AS (16 Nov 2026). `shop` is
+       * null for the person; in shop mode it names the shop, and
+       * `shop.verified: false` means the button is shown inactive (only
+       * verified shops send). Only ever about the viewer's own account.
+       */
+      sendingAs: {
+        id: offererId,
+        name: shop?.name ?? viewerRow?.name ?? "",
+        avatar: viewerRow?.avatar ?? null,
+        shop: shop ? { id: shop.id, verified: shop.verified } : null,
+        // The SENDER's Premium (the shop's own in shop mode): what the
+        // bridging-fee quote is discounted by. POST /api/offers re-derives it.
+        premium: hasPremiumAccess(viewerRow?.subscriptions),
+      },
+      /** Another of the viewer's own accounts already has an offer pending here. */
+      otherAccountOffer: otherAccountOffer
+        ? { name: accounts.find((a) => a.id === otherAccountOffer.senderId)?.name ?? "another of your accounts" }
+        : null,
     },
   })
 }

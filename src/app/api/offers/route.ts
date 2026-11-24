@@ -14,7 +14,14 @@ import { assessOffer, refusalStatus } from "@/lib/offer-check"
 import { holdBridgeFee } from "@/lib/bridge-fee"
 import { TRADING_POLICY_VERSION } from "@/lib/trade-rules"
 import { settleQuestsAsync } from "@/lib/quests"
-import { isShopMemberPair, shopMemberSelfTradeRefusal } from "@/lib/trade-participant"
+import {
+  isSameOwnerPair,
+  sameOwnerTradeRefusal,
+  sendingAccountsOf,
+  SHOP_NOT_VERIFIED,
+  SHOP_NOT_VERIFIED_MESSAGE,
+} from "@/lib/trade-participant"
+import { ORG_CONTEXT_HEADER, resolveActingIdentity } from "@/lib/organizations"
 
 /**
  * POST /api/offers — one of your items for one of theirs.
@@ -63,7 +70,28 @@ export async function POST(req: NextRequest) {
   try {
     const session = await resolveSession()
     if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
-    const senderId = session.user.id
+    const humanId = session.user.id
+
+    // ── WHO IS SENDING (16 Nov 2026) ──
+    //
+    // The ACTING identity, not the session: in shop mode (X-Baylo-Org, owner
+    // only, re-checked on every request) the offer is the SHOP's -- its items,
+    // its Leaves, its Premium, its chat and its bell. It used to go out as the
+    // person whatever the screen said. A dead shop context is refused rather
+    // than quietly falling back to the person, like every other shop route.
+    const actingResult = await resolveActingIdentity(prisma, humanId, req.headers.get(ORG_CONTEXT_HEADER))
+    if (!actingResult.ok) {
+      return NextResponse.json(
+        { error: "You are not a member of that organisation", code: "ORG_CONTEXT_REFUSED" },
+        { status: 403 },
+      )
+    }
+    const shop = actingResult.acting.organization
+    const senderId = actingResult.acting.actingUserId
+    // Only a VERIFIED shop sends, the same rule as posting.
+    if (shop && !shop.verified) {
+      return NextResponse.json({ error: SHOP_NOT_VERIFIED_MESSAGE, code: SHOP_NOT_VERIFIED }, { status: 403 })
+    }
 
     const parsed = await parseBody(req, createOfferSchema)
     if (!parsed.ok) return parsed.response
@@ -98,10 +126,17 @@ export async function POST(req: NextRequest) {
     // gates, for the same reason as the trade route.
     const blocked = await enforceNotBlocked(senderId, post.userId, "make an offer to this person")
     if (blocked) return blocked
+    // A shop is its owner's voice: a block between the owner and the
+    // listing's owner stops the shop's offer too, or switching to the shop
+    // would walk around it.
+    if (shop) {
+      const ownerBlocked = await enforceNotBlocked(humanId, post.userId, "make an offer to this person")
+      if (ownerBlocked) return ownerBlocked
+    }
 
-    // A member offering on their own shop's listing. Refused here AND at
-    // accept: one person on both sides of a trade. See @/lib/trade-participant.
-    if (await isShopMemberPair(prisma, senderId, post.userId)) return shopMemberSelfTradeRefusal()
+    // One person on both sides of a trade: a person and their own shop, or
+    // two shops with one owner. Refused here AND (person/shop) at accept.
+    if (await isSameOwnerPair(prisma, senderId, post.userId)) return sameOwnerTradeRefusal()
 
     // ── Reputation gates, INITIATING path ──
     //
@@ -114,13 +149,29 @@ export async function POST(req: NextRequest) {
     // One live offer per listing per sender. Without this a proposer stacks
     // three bridges on one listing and holds three fees against a listing that
     // can only be traded once.
+    //
+    // ONE PER PERSON (16 Nov 2026): across their personal profile and every
+    // shop they own, so one person cannot stack an offer per account on one
+    // listing. A declined, withdrawn or expired offer frees the slot. The
+    // reminder names only the sender's OWN account, never anybody else's.
+    const accounts = await sendingAccountsOf(prisma, humanId)
     const standing = await prisma.trade.findFirst({
-      where: { requestedItemId: postId, senderId, offerStatus: "PENDING" },
-      select: { id: true },
+      where: { requestedItemId: postId, senderId: { in: accounts.map((a) => a.id) }, offerStatus: "PENDING" },
+      select: { id: true, senderId: true },
     })
-    if (standing) {
+    if (standing && standing.senderId === senderId) {
       return NextResponse.json(
         { error: "You already have an offer waiting on this listing.", code: "OFFER_ALREADY_PENDING", offerId: standing.id },
+        { status: 409 },
+      )
+    }
+    if (standing) {
+      const as = accounts.find((a) => a.id === standing.senderId)?.name ?? "another of your accounts"
+      return NextResponse.json(
+        {
+          error: `You already have an offer waiting on this listing as ${as}. Withdraw it first, or switch to ${as} to see it.`,
+          code: "OFFER_PENDING_OTHER_ACCOUNT",
+        },
         { status: 409 },
       )
     }
@@ -147,7 +198,7 @@ export async function POST(req: NextRequest) {
       if (!consent?.accepted) {
         return NextResponse.json(
           {
-            error: `Offering a Bracket ${assessed.offeredBracket} item for a Bracket ${assessed.targetBracket} item costs ${proposerFee} Leaves. You have to agree to the bridging fee and the trading policy before this can be sent.`,
+            error: `Offering a Bracket ${assessed.offeredBracket} item for a Bracket ${assessed.targetBracket} item costs ${proposerFee} points. You have to agree to the bridging fee and the trading policy before this can be sent.`,
             code: "CONSENT_REQUIRED",
             fee: proposerFee,
             policyVersion: TRADING_POLICY_VERSION,
@@ -233,7 +284,7 @@ export async function POST(req: NextRequest) {
       if (e instanceof InsufficientLeaves) {
         return NextResponse.json(
           {
-            error: `Proposing this trade costs ${e.need} Leaves and you have ${e.have}. You need ${e.need - e.have} more.`,
+            error: `Proposing this trade costs ${e.need} points and you have ${e.have}. You need ${e.need - e.have} more.`,
             code: "INSUFFICIENT_LEAVES",
             need: e.need,
             have: e.have,
@@ -336,7 +387,7 @@ export async function POST(req: NextRequest) {
          */
         receiverWillPay:
           assessed.payer === "receiver"
-            ? `${post.user.name ?? "They"} will pay a ${assessed.fee}-Leaf bridging fee to accept.`
+            ? `${post.user.name ?? "They"} will pay a ${assessed.fee}-point bridging fee to accept.`
             : null,
         leaves: sender?.leaves ?? 0,
       },

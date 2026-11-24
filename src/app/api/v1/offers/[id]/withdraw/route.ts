@@ -6,7 +6,8 @@ import { notifyUser } from "@/lib/realtime"
 import { releaseBridgeFee } from "@/lib/bridge-fee"
 import { leafBalances } from "@/lib/leaves"
 import { dealByAnyId, expireStaleOffers } from "@/lib/offers"
-import { ok, unauthenticated, notFound, conflict } from "@/lib/v1/envelope"
+import { ok, unauthenticated, notFound, conflict, fail } from "@/lib/v1/envelope"
+import { resolveTradeParticipant } from "@/lib/trade-participant"
 import { parseJsonBody } from "@/lib/v1/body"
 
 export const dynamic = "force-dynamic"
@@ -92,7 +93,14 @@ export async function POST(
   // ONLY THE SENDER. A receiver "withdrawing" someone else's offer is a decline,
   // and it has its own route — 404 rather than 403, the same disclosure rule the
   // rest of v1 follows.
-  if (offer.senderId !== viewerId) return notFound("Offer not found")
+  //
+  // A SHOP'S OFFER is withdrawn from shop mode (16 Nov 2026): the sender may be
+  // the acting shop's backing row, so the side is resolved the way every other
+  // trade route does it (resolveTradeParticipant, owner only).
+  const who = await resolveTradeParticipant(viewerId, req.headers, offer, "sender")
+  if (!who.ok) {
+    return who.kind === "org_refused" ? fail("ORG_CONTEXT_REFUSED", who.message) : notFound("Offer not found")
+  }
 
   /*
    * Only a live offer.
@@ -149,7 +157,7 @@ export async function POST(
 
   // Read AFTER the status moved, so it reflects the released Leaves rather than
   // the balance the sender already had on screen.
-  const balances = await leafBalances(prisma, viewerId)
+  const balances = await leafBalances(prisma, who.participantId)
 
   // The receiver's open offer card has to stop being actionable. Best-effort, in
   // the same shape the accept/decline path uses — a dropped realtime event means

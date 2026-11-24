@@ -59,7 +59,7 @@ export default function UserActions({
         placeholder="Reason required — the user sees this"
         maxLength={1000}
         disabled={!canSuspend || busy}
-        style={{ padding: "7px 9px", borderRadius: 7, border: "1px solid rgba(0,0,0,.16)", fontSize: 12 }}
+        style={{ padding: "7px 9px", borderRadius: 7, border: "1px solid var(--adm-border-control)", fontSize: 12 }}
       />
       {!suspended && (
         <input
@@ -70,7 +70,7 @@ export default function UserActions({
           onChange={(event) => setDays(event.target.value)}
           placeholder="Days; blank = indefinite"
           disabled={!canSuspend || busy}
-          style={{ padding: "7px 9px", borderRadius: 7, border: "1px solid rgba(0,0,0,.16)", fontSize: 12 }}
+          style={{ padding: "7px 9px", borderRadius: 7, border: "1px solid var(--adm-border-control)", fontSize: 12 }}
         />
       )}
       <button
@@ -84,8 +84,8 @@ export default function UserActions({
           padding: "8px 10px",
           border: 0,
           borderRadius: 7,
-          background: suspended ? "#e4f2e8" : "#fee2e2",
-          color: suspended ? "#21643d" : "#991b1b",
+          background: suspended ? "var(--adm-good-bg)" : "var(--adm-warn-bg)",
+          color: suspended ? "var(--adm-good)" : "var(--adm-warn)",
           fontWeight: 700,
           cursor: canSuspend && !busy ? "pointer" : "not-allowed",
           opacity: canSuspend ? 1 : 0.55,

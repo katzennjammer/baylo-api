@@ -64,7 +64,7 @@ import { hashRefreshToken, verifyAccessToken } from "../src/lib/auth-tokens"
 import { bracketOf } from "../src/lib/brackets"
 import { BRIDGE_FEE_PER_BRACKET, TRADE_REWARD_PER_BRACKET, TRADING_POLICY_VERSION } from "../src/lib/trade-rules"
 import { TASK_REWARDS } from "../src/lib/task-constants"
-import { collapseSystemPairs } from "../../baylo-mobile/src/lib/system-pairs"
+import { collapseSystemPairs } from "./lib/mobile-system-pairs"
 
 const schema = requireScratchSchema("scripts/verify-demo-flow.ts")
 const MODE = process.env.DEMO_FLOW_PUSHER

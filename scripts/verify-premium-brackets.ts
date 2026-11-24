@@ -1,5 +1,5 @@
-// Acceptance harness for value brackets and the premium/VIP gate
-// (11 Sep 2026, VIP added 23 Sep 2026).
+// Acceptance harness for value brackets and the premium gate
+// (11 Sep 2026; VIP added 23 Sep 2026, its own bracket removed 22 Oct 2026).
 //
 // RUNS AGAINST A SCRATCH SCHEMA. Point DATABASE_URL at one first -- it
 // creates and deletes rows, and both the prefix-scoped cleanup AND
@@ -14,15 +14,15 @@
 //      code PREMIUM_REQUIRED, and passes brackets 6 and below
 //   4  a live subscription passes bracket 7; an EXPIRED one does not
 //   5  an unvalued listing passes — it has no bracket
-//   6  ORDER: a New Trader (cap 600) on a bracket-7 listing gets
-//      PREMIUM_REQUIRED, not TIER_ITEM_VALUE_CAP — the lock is a property of
-//      the listing and must not change with the viewer's tier
+//   6  NO TIER CAP (Nov 2026): a New Trader on a bracket-7 listing gets
+//      PREMIUM_REQUIRED, and bracket 6 and below pass; a subscriber passes
+//      bracket 7 whatever their trust tier
 //   7  the accept path is gated too, in the same order: a non-subscriber
 //      accepting an offer OF a bracket-7 item gets PREMIUM_REQUIRED (with the
-//      accept-side copy), ahead of the tier cap; a subscriber is capped only
-//   8  VIP: bracket 9 needs VIP specifically -- a Premium-only subscriber is
-//      still refused VIP_REQUIRED there, while a VIP subscriber clears every
-//      Premium bracket too, on both the propose and accept paths
+//      accept-side copy); a subscriber passes
+//   8  no VIP-only bracket (22 Oct 2026): Premium clears brackets 9 and 10, a
+//      non-subscriber gets PREMIUM_REQUIRED there, and VIP still clears every
+//      Premium bracket, on both the propose and accept paths
 
 import prisma from "../src/lib/prisma"
 import {
@@ -31,9 +31,7 @@ import {
   bracketOf,
   bracketRange,
   PREMIUM_MIN_BRACKET,
-  VIP_MIN_BRACKET,
   valueNeedsPremium,
-  valueNeedsVip,
 } from "../src/lib/brackets"
 import { isPremium, isVip } from "../src/lib/premium"
 import {
@@ -196,37 +194,31 @@ async function main() {
   head("5  unvalued")
   check("an unvalued listing passes", (await enforcePremiumForListing(freeStanding, [unvalued.id])) === null)
 
-  head("6  order against the tier cap")
-  // `free` has zero completed trades → New Trader → maxItemValueLeaves 600.
-  // A bracket-7 listing is over that cap too; the premium refusal must win.
-  check("New Trader's cap is below bracket 7", (freeStanding.limits.maxItemValueLeaves ?? Infinity) < 2501)
+  head("6  no tier cap")
+  // `free` has zero completed trades → New Trader. No tier caps what it may
+  // acquire any more, so the Premium gate is the only lock on bracket 7.
+  check("New Trader has no item cap", freeStanding.limits.maxItemBracket === null)
   const initiate = await enforceInitiateTrade(free.id, [b7.id])
   const ib = await body(initiate.response)
-  check("enforceInitiateTrade → PREMIUM_REQUIRED, not TIER_ITEM_VALUE_CAP", ib?.code === "PREMIUM_REQUIRED", JSON.stringify(ib))
+  check("enforceInitiateTrade → PREMIUM_REQUIRED", ib?.code === "PREMIUM_REQUIRED", JSON.stringify(ib))
   const initiate6 = await enforceInitiateTrade(free.id, [b6.id])
-  const ib6 = await body(initiate6.response)
-  check("…and bracket 6 still hits the tier cap as before", ib6?.code === "TIER_ITEM_VALUE_CAP", JSON.stringify(ib6))
+  check("…and a New Trader on bracket 6 passes (no tier cap)", initiate6.response === null)
   const initiatePaid = await enforceInitiateTrade(paid.id, [b7.id])
-  const ipb = await body(initiatePaid.response)
-  check("a premium New Trader on bracket 7 falls through to the tier cap", ipb?.code === "TIER_ITEM_VALUE_CAP", JSON.stringify(ipb))
+  check("a premium New Trader on bracket 7 passes (no tier cap)", initiatePaid.response === null)
 
-  head("7  accept path: premium above the cap")
+  head("7  accept path: premium, no tier cap")
   // The acceptor is acquiring the offered item, so the same two gates run in
   // the same order as on propose, minus the default block. `free` and `paid`
-  // are both New Traders (cap 600), so the bracket-7 item is over the cap for
-  // either -- what differs is WHICH gate answers first.
+  // are both New Traders, so only the Premium gate can answer.
   check("accepting bracket 3 passes for a non-subscriber", (await enforceAcceptTrade(free.id, [b3.id])).response === null)
   const acc7 = await body((await enforceAcceptTrade(free.id, [b7.id])).response)
   check("non-subscriber accepting bracket 7 gets PREMIUM_REQUIRED, not the tier cap", acc7?.code === "PREMIUM_REQUIRED", JSON.stringify(acc7))
   check("accept-side copy names accepting, not proposing", !!acc7?.error && /accepting it is locked/.test(acc7.error) && !/proposing/.test(acc7.error), acc7?.error)
-  const acc7paid = await body((await enforceAcceptTrade(paid.id, [b7.id])).response)
-  check("subscriber accepting bracket 7 is refused only by the TIER CAP", acc7paid?.code === "TIER_ITEM_VALUE_CAP", JSON.stringify(acc7paid))
+  check("subscriber accepting bracket 7 passes (no tier cap)", (await enforceAcceptTrade(paid.id, [b7.id])).response === null)
   check("accepting an unvalued item passes for a non-subscriber", (await enforceAcceptTrade(free.id, [unvalued.id])).response === null)
 
-  head("8  the VIP tier")
-  check("9000 → bracket 8 (still premium, not VIP)", bracketOf(9000) === 8)
-  check("9001 → bracket 9 (the first VIP bracket)", bracketOf(9001) === 9 && VIP_MIN_BRACKET === 9)
-  check("valueNeedsVip(null) is false", valueNeedsVip(null) === false)
+  head("8  no VIP-only bracket")
+  check("9001 → bracket 9", bracketOf(9001) === 9)
   const vipNow = new Date("2026-09-23T12:00:00Z")
   check("isVip: null → false", isVip(null, vipNow) === false)
   check("isVip: past → false", isVip(new Date("2026-09-23T11:59:59Z"), vipNow) === false)
@@ -238,19 +230,18 @@ async function main() {
   check("expired VIP: standing.vip false", vipLapsedStanding.vip === false)
 
   const r9Free = await body(await enforcePremiumForListing(freeStanding, [b9.id]))
-  check("non-subscriber on bracket 9 → VIP_REQUIRED, not PREMIUM_REQUIRED", r9Free?.code === "VIP_REQUIRED", JSON.stringify(r9Free))
-  const r9Paid = await body(await enforcePremiumForListing(paidStanding, [b9.id]))
-  check("Premium-only subscriber on bracket 9 is STILL refused, VIP_REQUIRED", r9Paid?.code === "VIP_REQUIRED", JSON.stringify(r9Paid))
-  check("Premium-only subscriber still passes bracket 7", (await enforcePremiumForListing(paidStanding, [b7.id])) === null)
+  check("non-subscriber on bracket 9 → PREMIUM_REQUIRED", r9Free?.code === "PREMIUM_REQUIRED", JSON.stringify(r9Free))
+  check("Premium subscriber passes bracket 9", (await enforcePremiumForListing(paidStanding, [b9.id])) === null)
+  check("Premium subscriber passes bracket 10", (await enforcePremiumForListing(paidStanding, [b10.id])) === null)
   check("VIP subscriber passes bracket 9", (await enforcePremiumForListing(vipStanding, [b9.id])) === null)
   check("VIP subscriber passes bracket 10", (await enforcePremiumForListing(vipStanding, [b10.id])) === null)
   check("VIP subscriber also passes bracket 7 (VIP is a superset)", (await enforcePremiumForListing(vipStanding, [b7.id])) === null)
   const r9VipLapsed = await body(await enforcePremiumForListing(vipLapsedStanding, [b9.id]))
-  check("expired VIP on bracket 9 → VIP_REQUIRED", r9VipLapsed?.code === "VIP_REQUIRED", JSON.stringify(r9VipLapsed))
+  check("expired VIP on bracket 9 → PREMIUM_REQUIRED", r9VipLapsed?.code === "PREMIUM_REQUIRED", JSON.stringify(r9VipLapsed))
 
   const acc9 = await body((await enforceAcceptTrade(free.id, [b9.id])).response)
-  check("accept path: non-subscriber on bracket 9 → VIP_REQUIRED", acc9?.code === "VIP_REQUIRED", JSON.stringify(acc9))
-  check("accept path: VIP subscriber clears bracket 9, hits only the tier cap", (await body((await enforceAcceptTrade(vipUser.id, [b9.id])).response))?.code === "TIER_ITEM_VALUE_CAP")
+  check("accept path: non-subscriber on bracket 9 → PREMIUM_REQUIRED", acc9?.code === "PREMIUM_REQUIRED", JSON.stringify(acc9))
+  check("accept path: VIP subscriber clears bracket 9", (await enforceAcceptTrade(vipUser.id, [b9.id])).response === null)
 
   await cleanup()
   console.log(`\n${pass} passed, ${fail} failed`)

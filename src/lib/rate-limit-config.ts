@@ -17,6 +17,7 @@ import { rateLimit, clientIp } from "@/lib/rate-limit"
  */
 
 const HOUR = 60 * 60 * 1000
+const MINUTE = 60 * 1000
 const FIFTEEN_MIN = 15 * 60 * 1000
 
 export interface RateRule {
@@ -43,6 +44,12 @@ export const RATE_LIMITS = {
   resendVerification: { limit: 3, windowMs: HOUR },
   /** One Anthropic vision call per request, billed to us. */
   aiIdentify: { limit: 20, windowMs: HOUR },
+  /**
+   * One Claude call with up to three web searches per request, billed to us.
+   * The post wizard runs it once per (title, category, condition), so ten an
+   * hour covers a person listing several items and correcting a title or two.
+   */
+  aiValuation: { limit: 10, windowMs: HOUR },
   /** TWO vision calls per request, plus a full-catalogue scan. */
   aiPhash: { limit: 20, windowMs: HOUR },
   /**
@@ -62,6 +69,8 @@ export const RATE_LIMITS = {
   upload: { limit: 30, windowMs: HOUR },
   /** Nominatim search requests from the admin hub picker. */
   hubGeocode: { limit: 30, windowMs: HOUR },
+  /** User search, keyed per authenticated account. */
+  usersSearch: { limit: 60, windowMs: MINUTE },
   /** Guessing a partner's 6-digit swap code. Also capped per code in the DB. */
   confirmSubmit: { limit: 20, windowMs: HOUR },
   /**

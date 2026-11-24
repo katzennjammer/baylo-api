@@ -2,7 +2,7 @@ import { NextResponse } from "next/server"
 import prisma from "@/lib/prisma"
 import { getTrustTier, getTierLimits, type TrustTier, type TierLimits } from "@/lib/reputation"
 import {
-  bracketOf, bracketRange, PREMIUM_MIN_BRACKET, VIP_MIN_BRACKET, valueNeedsPremium, valueNeedsVip,
+  bracketOf, bracketRange, PREMIUM_MIN_BRACKET, valueNeedsPremium,
 } from "@/lib/brackets"
 import { isLifetimePremium, isPremium, isVip, premiumUntil, vipUntil, SUBSCRIPTION_SELECT } from "@/lib/premium"
 
@@ -122,12 +122,12 @@ function forbidden(message: string, extra: Record<string, unknown> = {}) {
   return NextResponse.json({ error: message, ...extra }, { status: 403 })
 }
 
-// ── The premium/VIP bracket gate ─────────────────────────────────────────────
+// ── The premium bracket gate ─────────────────────────────────────────────────
 
 /**
  * Refuses a non-subscriber ACQUIRING an item in bracket PREMIUM_MIN_BRACKET or
- * above -- on either path -- and, within that range, refuses a Premium-only
- * subscriber an item at VIP_MIN_BRACKET or above.
+ * above -- on either path. A live Premium or VIP subscription clears it; there
+ * is no VIP-only bracket since 22 Oct 2026 (see @/lib/brackets).
  *
  * Both paths, for the same reason the tier cap runs on both: it is a rule
  * about what a person takes in, and a rule that only bound proposers would be
@@ -139,14 +139,6 @@ function forbidden(message: string, extra: Record<string, unknown> = {}) {
  * gated belongs to the side that receives it. (Until 11 Sep 2026 this was
  * propose-only, with the accept side left open as "a toll on selling"; that
  * reading missed that the acceptor is also the one receiving.)
- *
- * VIP checked FIRST, ahead of premium. VIP_MIN_BRACKET sits inside the range
- * PREMIUM_MIN_BRACKET already covers, so a bracket-9 item is caught by
- * `valueNeedsPremium` too -- checking premium first would tell a Premium-only
- * subscriber they are refused for lacking premium on an item premium was
- * never going to unlock, which is not what happened. A live VIP subscription
- * short-circuits the whole function, since VIP passes every premium bracket
- * as well.
  *
  * Ordered BEFORE the tier cap, deliberately. The lock is a property of the
  * ITEM -- everyone sees the same padlock on the same tile -- while the tier cap
@@ -170,31 +162,12 @@ export async function enforcePremiumForListing(
 ): Promise<NextResponse | null> {
   const ids = itemIds.filter(Boolean)
   if (ids.length === 0) return null
-  if (standing.vip) return null
+  if (standing.vip || standing.premium) return null
 
   const rows = await prisma.item.findMany({
     where: { id: { in: ids } },
     select: { id: true, title: true, valueLeaves: true },
   })
-
-  const vipGated = rows.find((r) => valueNeedsVip(r.valueLeaves))
-  if (vipGated) {
-    const lead =
-      `Trading at bracket ${VIP_MIN_BRACKET} and above needs a VIP subscription, ` +
-      `which is coming soon. `
-    const tail =
-      path === "accept"
-        ? `"${vipGated.title}" is in that bracket, so accepting it is locked. The offer stays where it is.`
-        : `"${vipGated.title}" stays visible; only proposing on it is locked.`
-    return forbidden(lead + tail, {
-      code: "VIP_REQUIRED",
-      bracket: bracketOf(vipGated.valueLeaves as number),
-      minBracket: VIP_MIN_BRACKET,
-      path,
-    })
-  }
-
-  if (standing.premium) return null
 
   const gated = rows.find((r) => valueNeedsPremium(r.valueLeaves))
   if (!gated) return null
@@ -217,31 +190,19 @@ export async function enforcePremiumForListing(
 // ── The item-value ceiling ───────────────────────────────────────────────────
 
 /**
- * Caps the value of an item the user is about to ACQUIRE.
+ * Caps the bracket of an item the user is about to ACQUIRE, when the tier has a
+ * cap (`limits.maxItemBracket`).
  *
- * Applied to what they receive, never to what they give: the exposure being
- * capped belongs to the counterparty handing over the item, not to the user
- * handing over their own.
+ * NO TIER HAS ONE since Nov 2026: every tier's `maxItemBracket` is null, so
+ * this returns null (allowed) for every ordinary trader, as it already did for
+ * Top Traders and verified shops. The trust tier no longer limits which items a
+ * user may trade for. The gap rule (one bracket) and the Premium gate
+ * (Bracket 7+) still do. The function stays so a cap can be reinstated by
+ * setting a tier's `maxItemBracket` in @/lib/reputation-config.
  *
- * Applies on BOTH the initiate and accept paths. Reaching for a 5,000-Leaf
- * item is the same reach whoever started the conversation, and a cap that only
- * bound initiators would be avoided by asking the other party to send the
- * offer.
- *
- * ── IT COMPARES BRACKETS, NOT LEAVES ────────────────────────────────────────
- *
- * The cap was a Leaves figure and was quoted as one: `"Air Max" is valued at
- * 480 Leaves`. That was the last place in the offer flow that printed another
- * person's exact value, which is what the bracket presentation exists to
- * prevent -- but simply rewording it produced a worse sentence, because 600
- * sits in the middle of bracket 4 and the refusal then read `is in Bracket 4
- * ... up to Bracket 4`. Two tiles both reading "Bracket 4", one tradeable and
- * one not, with nothing on screen to tell them apart.
- *
- * So the CAP ITSELF is a bracket now -- rounded DOWN, so that rewording a
- * limit can never loosen it; see TIER_MAX_ITEM_BRACKET -- and this compares
- * brackets on both sides. The Leaves figure survives in the config as the
- * thing the bracket is derived from.
+ * When a cap is set it applies to what the user RECEIVES, on both the initiate
+ * and accept paths, and it compares brackets, not Leaves, so a refusal never
+ * prints another person's exact value.
  *
  * An item with a NULL valueLeaves passes here, and cannot reach a trade
  * anyway — see the note on the premium gate.
@@ -337,8 +298,7 @@ export async function enforceAcceptTrade(
  * `maxItemValueBracket` REPLACED `maxItemValueLeaves`. The client used the raw
  * figure to draw "a New Trader can trade for up to 600" beside a listing whose
  * exact value it was not supposed to show; the bracket says the same thing in
- * the vocabulary the rest of the flow speaks. The Leaves figure stays
- * server-side, in TIER_LIMITS, where the comparison is actually made.
+ * the vocabulary the rest of the flow speaks. Both are null for every tier now.
  *
  * The `contracts` block and `restrictions.canInitiateTrades` are gone with
  * deferred agreements. A client reading this payload can no longer be told

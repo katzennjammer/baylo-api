@@ -1,6 +1,7 @@
 import { PrismaClient } from "@/generated/prisma/client"
 import { PrismaPg } from "@prisma/adapter-pg"
 import { assertV2Schema, databaseSchema } from "@/lib/db-schema"
+import { schedulePushForBatch, schedulePushForIds } from "@/lib/push"
 
 // Postgres (Supabase) via the pg driver adapter. Prisma 7's `prisma-client`
 // generator has no built-in engine, so an adapter is required, not optional.
@@ -92,7 +93,31 @@ function createPrismaClient() {
     },
     schema !== "public" ? { schema } : undefined,
   )
-  return new PrismaClient({ adapter })
+  const client = new PrismaClient({ adapter })
+  // ── PUSH (20 Oct 2026) ─────────────────────────────────────────────────────
+  // Every notification row also goes to the recipient's phone; see @/lib/push.
+  // LIVE SCHEMA ONLY: the verify scripts run on scratch copies whose User rows
+  // can carry real tokens, and a test run must never buzz a real phone.
+  // Query extensions change no types, so the cast keeps every `PrismaClient`
+  // signature in the codebase as it was; interactive transactions opened on
+  // this client carry the hook too.
+  if (schema !== "public") return client
+  return client.$extends({
+    query: {
+      notification: {
+        async create({ args, query }) {
+          const row = await query(args)
+          if (typeof row?.id === "string") schedulePushForIds([row.id])
+          return row
+        },
+        async createMany({ args, query }) {
+          const result = await query(args)
+          schedulePushForBatch(Array.isArray(args.data) ? args.data : [args.data])
+          return result
+        },
+      },
+    },
+  }) as unknown as PrismaClient
 }
 
 // databaseSchema() and the v2 guard live in a side-effect-free module so the

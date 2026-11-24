@@ -31,11 +31,11 @@ interface Props {
 
 const btn: React.CSSProperties = {
   padding: "9px 14px", borderRadius: 9, fontSize: 13, fontWeight: 700,
-  border: "1px solid rgba(0,0,0,.14)", background: "#fff", color: "#333",
+  border: "1px solid var(--adm-border-control)", background: "var(--adm-panel)", color: "var(--adm-text-secondary)",
   cursor: "pointer",
 }
-const solid: React.CSSProperties = { ...btn, background: "#4CAF50", color: "#1A3520", border: 0 }
-const danger: React.CSSProperties = { ...btn, background: "#e5484d", color: "#fff", border: 0 }
+const solid: React.CSSProperties = { ...btn, background: "var(--adm-accent)", color: "var(--adm-text)", border: 0 }
+const danger: React.CSSProperties = { ...btn, background: "var(--adm-danger)", color: "var(--adm-text-on-accent)", border: 0 }
 
 export default function ModerationActions({ reportId, status, listing, subject, canSuspend }: Props) {
   const router = useRouter()
@@ -74,12 +74,12 @@ export default function ModerationActions({ reportId, status, listing, subject, 
 
   return (
     <div style={{
-      background: "#fff", borderRadius: 14, border: "1px solid rgba(0,0,0,.08)",
+      background: "var(--adm-panel)", borderRadius: 14, border: "1px solid var(--adm-border)",
       padding: 20, display: "flex", flexDirection: "column", gap: 14,
     }}>
       <div>
         <p style={{ fontSize: 15, fontWeight: 800 }}>Actions</p>
-        <p style={{ fontSize: 12, color: "#888", marginTop: 3 }}>
+        <p style={{ fontSize: 12, color: "var(--adm-text-muted)", marginTop: 3 }}>
           Every action below writes an audit row naming you, the time and this reason.
         </p>
       </div>
@@ -91,8 +91,8 @@ export default function ModerationActions({ reportId, status, listing, subject, 
         placeholder="Why? The reporter reads this too — and so does a user you suspend."
         style={{
           padding: "10px 12px", borderRadius: 10, fontSize: 13, minHeight: 80,
-          border: "1.5px solid rgba(0,0,0,.15)", resize: "vertical",
-          fontFamily: "inherit", background: "#fff", color: "#111",
+          border: "1.5px solid var(--adm-border-control)", resize: "vertical",
+          fontFamily: "inherit", background: "var(--adm-panel)", color: "var(--adm-text)",
         }}
       />
 
@@ -137,7 +137,7 @@ export default function ModerationActions({ reportId, status, listing, subject, 
                 placeholder="days (blank = indefinite)"
                 style={{
                   padding: "9px 12px", borderRadius: 9, fontSize: 13, width: 200,
-                  border: "1.5px solid rgba(0,0,0,.15)", background: "#fff", color: "#111",
+                  border: "1.5px solid var(--adm-border-control)", background: "var(--adm-panel)", color: "var(--adm-text)",
                 }}
               />
             )}
@@ -171,7 +171,7 @@ export default function ModerationActions({ reportId, status, listing, subject, 
       </div>
 
       {!resolved && (
-        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", borderTop: "1px solid rgba(0,0,0,.07)", paddingTop: 14 }}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap", borderTop: "1px solid var(--adm-border)", paddingTop: 14 }}>
           <button
             type="button"
             style={solid}
@@ -188,14 +188,14 @@ export default function ModerationActions({ reportId, status, listing, subject, 
           >
             Dismiss
           </button>
-          <span style={{ fontSize: 12, color: "#999", alignSelf: "center" }}>
+          <span style={{ fontSize: 12, color: "var(--adm-text-muted)", alignSelf: "center" }}>
             Either one notifies the reporter and closes the report.
           </span>
         </div>
       )}
 
       {resolved && (
-        <p style={{ fontSize: 13, color: "#666", borderTop: "1px solid rgba(0,0,0,.07)", paddingTop: 14 }}>
+        <p style={{ fontSize: 13, color: "var(--adm-text-secondary)", borderTop: "1px solid var(--adm-border)", paddingTop: 14 }}>
           This report is {status.toLowerCase()} and the reporter has been told. Hiding a listing
           or suspending an account is still possible above — those are separate acts with their
           own audit rows.

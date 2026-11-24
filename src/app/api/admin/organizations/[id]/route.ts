@@ -209,7 +209,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ id:
             : ("ID_VERIFICATION_REJECTED" as const),
           message: verify
             ? `${row.name} is now a verified organisation. The badge is on your profile` +
-              (welcomeLeaves > 0 ? `, and ${welcomeLeaves} welcome Leaves are in the shop's balance.` : ".")
+              (welcomeLeaves > 0 ? `, and ${welcomeLeaves} welcome points are in the shop's balance.` : ".")
             : ORG_REJECTION_FIX[body.rejectionReason],
           entityType: "organization",
           entityId: row.id,

@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react"
+import { Fragment, useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react"
 import Link from "next/link"
 import { usePathname } from "next/navigation"
 import { motion, useReducedMotion } from "framer-motion"
@@ -17,46 +17,80 @@ import {
   Award,
   ScrollText,
   ShieldCheck,
+  Settings,
   Menu,
   X,
   PanelLeft,
-  Sun,
-  Moon,
   type LucideIcon,
 } from "lucide-react"
 import AccountMenu from "./AccountMenu"
+import { DENSITY_KEY, THEME_KEY } from "./pref-keys"
+import { usePref, useResolvedTheme } from "./prefs"
 import RailTooltip from "@/components/admin/primitives/RailTooltip"
 
 // Moved from the old AdminNav.tsx unchanged: hrefs, order, labels and the
 // longest-href-first active-matching function. Only the icon field and the
 // surrounding markup/styling are new.
-const LINKS: { href: string; label: string; icon: LucideIcon }[] = [
-  { href: "/admin/dashboard", label: "Overview", icon: LayoutGrid },
-  { href: "/admin/reports", label: "Overall report", icon: ChartLine },
-  { href: "/admin", label: "Reports", icon: Flag },
+/** Items waiting in each queue, counted in layout.tsx and shown as a badge on
+ *  that queue's rail item. */
+export interface QueueCounts {
+  reports: number
+  documents: number
+  reviewQueue: number
+  appeals: number
+}
+
+// `group` is the heading the item sits under; consecutive items share one.
+// `exact`: active on its own URL only, never on a child route. Platform
+// reports needs it because the URL space is shared: /admin/reports is the
+// charts page, but /admin/reports/<id> is ONE USER REPORT, opened from the
+// User reports queue -- and without `exact` the longest-prefix match below lit
+// "Platform reports" on that page instead of "User reports".
+// `also`: other URLs that ARE this section. Anything unlisted falls through to
+// the "/admin" root, i.e. "User reports", which is how business documents and
+// the old /admin/anomalies URL lit the wrong item until 20 Oct 2026.
+const LINKS: {
+  href: string
+  label: string
+  icon: LucideIcon
+  group: string
+  queue?: keyof QueueCounts
+  exact?: boolean
+  also?: string[]
+}[] = [
+  { href: "/admin/dashboard", label: "Overview", icon: LayoutGrid, group: "Insight" },
+  { href: "/admin/reports", label: "Platform reports", icon: ChartLine, group: "Insight", exact: true },
+  { href: "/admin", label: "User reports", icon: Flag, group: "Queues", queue: "reports" },
   // Two queues behind one entry: government IDs and business documents,
   // switched by the tab strip on both pages. They are one job — "is this
   // document real" — with different retention rules and different
   // consequences, which is why they are separate routes rather than one
   // filtered list. See DocumentQueueTabs.
-  { href: "/admin/id-verification", label: "Documents", icon: IdCard },
-  { href: "/admin/review-queue", label: "Review queue", icon: Scale },
-  { href: "/admin/appeals", label: "Appeals", icon: Gavel },
-  { href: "/admin/users", label: "Users", icon: Users },
-  { href: "/admin/listings", label: "Listings", icon: Package },
-  { href: "/admin/hubs", label: "Hubs", icon: MapPin },
-  { href: "/admin/achievements", label: "Achievements", icon: Award },
-  { href: "/admin/audit", label: "Audit log", icon: ScrollText },
-  { href: "/admin/access", label: "Access", icon: ShieldCheck },
+  { href: "/admin/id-verification", label: "Documents", icon: IdCard, group: "Queues", queue: "documents", also: ["/admin/organizations"] },
+  // /admin/review-queue re-exports the /admin/anomalies page; both are this queue.
+  { href: "/admin/review-queue", label: "Review queue", icon: Scale, group: "Queues", queue: "reviewQueue", also: ["/admin/anomalies"] },
+  { href: "/admin/appeals", label: "Appeals", icon: Gavel, group: "Queues", queue: "appeals" },
+  { href: "/admin/users", label: "Users", icon: Users, group: "Manage" },
+  { href: "/admin/listings", label: "Listings", icon: Package, group: "Manage" },
+  { href: "/admin/hubs", label: "Hubs", icon: MapPin, group: "Manage" },
+  { href: "/admin/achievements", label: "Achievements", icon: Award, group: "Manage" },
+  { href: "/admin/audit", label: "Audit log", icon: ScrollText, group: "Governance" },
+  { href: "/admin/access", label: "Access", icon: ShieldCheck, group: "Governance" },
+  { href: "/admin/settings", label: "Settings", icon: Settings, group: "Governance" },
 ]
 
 // Longest href first, so a nested route like /admin/id-verification/xyz
 // matches the specific "Documents" link before the "/admin" root link (which
 // would otherwise prefix-match everything under /admin).
-const BY_SPECIFICITY = [...LINKS].sort((a, b) => b.href.length - a.href.length)
+// Every URL a link answers to (its href and its `also`), longest first.
+const BY_SPECIFICITY = LINKS.flatMap((link) =>
+  [link.href, ...(link.also ?? [])].map((prefix) => ({ prefix, link })),
+).sort((a, b) => b.prefix.length - a.prefix.length)
 
 function findActive(pathname: string) {
-  return BY_SPECIFICITY.find((link) => pathname === link.href || pathname.startsWith(link.href + "/"))
+  return BY_SPECIFICITY.find(
+    ({ prefix, link }) => pathname === prefix || (!link.exact && pathname.startsWith(prefix + "/")),
+  )?.link
 }
 
 const RAIL_KEY = "baylo.adm.rail"
@@ -81,28 +115,6 @@ function getRailServerSnapshot() {
   return false
 }
 
-type Theme = "dark" | "light"
-const THEME_KEY = "baylo.adm.theme"
-const THEME_EVENT = "adm-theme-change"
-
-function subscribeTheme(callback: () => void) {
-  window.addEventListener("storage", callback)
-  window.addEventListener(THEME_EVENT, callback)
-  return () => {
-    window.removeEventListener("storage", callback)
-    window.removeEventListener(THEME_EVENT, callback)
-  }
-}
-function getThemeSnapshot(): Theme {
-  try {
-    return window.localStorage.getItem(THEME_KEY) === "light" ? "light" : "dark"
-  } catch {
-    return "dark"
-  }
-}
-function getThemeServerSnapshot(): Theme {
-  return "dark"
-}
 
 const railItemBase: React.CSSProperties = {
   position: "relative",
@@ -121,6 +133,7 @@ function RailItem({
   href,
   label,
   Icon,
+  count,
   active,
   expanded,
   onNavigate,
@@ -129,6 +142,8 @@ function RailItem({
   href: string
   label: string
   Icon: LucideIcon
+  /** Items waiting in this queue; 0 for a non-queue item. */
+  count: number
   active: boolean
   expanded: boolean
   onNavigate?: () => void
@@ -141,7 +156,7 @@ function RailItem({
       ref={itemRef}
       href={href}
       onClick={onNavigate}
-      aria-label={label}
+      aria-label={count > 0 ? `${label}, ${count} waiting` : label}
       aria-current={active ? "page" : undefined}
       aria-describedby={describedById}
       className="adm-press"
@@ -173,6 +188,31 @@ function RailItem({
           {label}
         </span>
       ) : null}
+      {count > 0 ? (
+        expanded ? (
+          <span
+            style={{
+              position: "relative",
+              zIndex: 1,
+              marginLeft: "auto",
+              padding: "2px 8px",
+              borderRadius: 999,
+              background: "var(--adm-queue-bg)",
+              color: "var(--adm-queue)",
+              fontSize: 11,
+              fontWeight: 800,
+              fontVariantNumeric: "tabular-nums",
+            }}
+          >
+            {count}
+          </span>
+        ) : (
+          <span
+            aria-hidden="true"
+            style={{ position: "absolute", top: 11, right: 13, width: 8, height: 8, borderRadius: 999, background: "var(--adm-queue)", zIndex: 1 }}
+          />
+        )
+      ) : null}
     </Link>
   )
 
@@ -182,11 +222,13 @@ function RailItem({
 
 function RailBody({
   pathname,
+  counts,
   expanded,
   onNavigate,
   firstItemRef,
 }: {
   pathname: string
+  counts: QueueCounts
   expanded: boolean
   onNavigate?: () => void
   firstItemRef?: React.Ref<HTMLAnchorElement>
@@ -195,16 +237,36 @@ function RailBody({
   return (
     <>
       {LINKS.map((link, i) => (
-        <RailItem
-          key={link.href}
-          href={link.href}
-          label={link.label}
-          Icon={link.icon}
-          active={active?.href === link.href}
-          expanded={expanded}
-          onNavigate={onNavigate}
-          itemRef={i === 0 ? firstItemRef : undefined}
-        />
+        <Fragment key={link.href}>
+          {i === 0 || LINKS[i - 1].group !== link.group ? (
+            expanded ? (
+              <div
+                style={{
+                  padding: i === 0 ? "4px 15px 2px" : "14px 15px 2px",
+                  fontSize: 11,
+                  fontWeight: 600,
+                  letterSpacing: "0.08em",
+                  textTransform: "uppercase",
+                  color: "var(--adm-text-muted)",
+                }}
+              >
+                {link.group}
+              </div>
+            ) : i > 0 ? (
+              <div aria-hidden="true" style={{ height: 1, background: "var(--adm-divider)", margin: "6px 4px" }} />
+            ) : null
+          ) : null}
+          <RailItem
+            href={link.href}
+            label={link.label}
+            Icon={link.icon}
+            count={link.queue ? counts[link.queue] : 0}
+            active={active?.href === link.href}
+            expanded={expanded}
+            onNavigate={onNavigate}
+            itemRef={i === 0 ? firstItemRef : undefined}
+          />
+        </Fragment>
       ))}
     </>
   )
@@ -213,17 +275,20 @@ function RailBody({
 export default function AdminShell({
   name,
   role,
+  counts,
   fontVariables,
   children,
 }: {
   name: string | null
   role: "ADMIN"
+  counts: QueueCounts
   fontVariables: string
   children: ReactNode
 }) {
   const pathname = usePathname()
   const railExpanded = useSyncExternalStore(subscribeRail, getRailSnapshot, getRailServerSnapshot)
-  const theme = useSyncExternalStore(subscribeTheme, getThemeSnapshot, getThemeServerSnapshot)
+  const theme = useResolvedTheme()
+  const density = usePref(DENSITY_KEY, "comfortable")
   const [drawerOpen, setDrawerOpen] = useState(false)
   const [lastPathname, setLastPathname] = useState(pathname)
 
@@ -238,15 +303,6 @@ export default function AdminShell({
   if (pathname !== lastPathname) {
     setLastPathname(pathname)
     if (drawerOpen) setDrawerOpen(false)
-  }
-
-  function toggleTheme() {
-    try {
-      window.localStorage.setItem(THEME_KEY, theme === "dark" ? "light" : "dark")
-      window.dispatchEvent(new Event(THEME_EVENT))
-    } catch {
-      // localStorage unavailable -- the toggle simply won't persist across reloads.
-    }
   }
 
   function toggleRail() {
@@ -308,7 +364,14 @@ export default function AdminShell({
   }, [drawerOpen])
 
   return (
-    <div className={`admin-root ${fontVariables}`} data-theme={theme}>
+    <div className={`admin-root ${fontVariables}`} data-theme={theme} data-density={density} suppressHydrationWarning>
+      {/* Runs while the HTML is parsed, before first paint: the server can't read
+          localStorage, so without this the console flashes dark until hydration. */}
+      <script
+        dangerouslySetInnerHTML={{
+          __html: `try{var r=document.currentScript.parentElement,t=localStorage.getItem(${JSON.stringify(THEME_KEY)}),d=localStorage.getItem(${JSON.stringify(DENSITY_KEY)});if(t==="system")t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";if(t==="light"||t==="dark")r.setAttribute("data-theme",t);if(d)r.setAttribute("data-density",d)}catch(e){}`,
+        }}
+      />
       <div className="adm-canvas">
         <a href="#adm-main" className="adm-skip-link">
           Skip to content
@@ -339,7 +402,7 @@ export default function AdminShell({
           </button>
 
           <Link
-            href="/admin"
+            href="/admin/home"
             style={{
               display: "flex",
               alignItems: "baseline",
@@ -366,28 +429,6 @@ export default function AdminShell({
             </span>
           </Link>
 
-          <button
-            type="button"
-            onClick={toggleTheme}
-            aria-label={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
-            aria-pressed={theme === "light"}
-            className="adm-press"
-            style={{
-              width: 48,
-              height: 48,
-              borderRadius: "999px",
-              background: "var(--adm-panel-flat)",
-              border: "1px solid var(--adm-border-chip)",
-              color: "var(--adm-text)",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-              cursor: "pointer",
-              flex: "none",
-            }}
-          >
-            {theme === "dark" ? <Sun size={18} aria-hidden="true" /> : <Moon size={18} aria-hidden="true" />}
-          </button>
 
           <AccountMenu name={name} role={role} />
         </div>
@@ -410,7 +451,7 @@ export default function AdminShell({
               transition: "width 250ms var(--adm-ease-standard)",
             }}
           >
-            <RailBody pathname={pathname} expanded={railExpanded} />
+            <RailBody pathname={pathname} counts={counts} expanded={railExpanded} />
 
             <div style={{ height: 1, background: "var(--adm-divider)", margin: "10px 4px" }} />
 
@@ -493,6 +534,7 @@ export default function AdminShell({
 
             <RailBody
               pathname={pathname}
+              counts={counts}
               expanded
               onNavigate={() => setDrawerOpen(false)}
               firstItemRef={firstDrawerItemRef}

@@ -3,8 +3,10 @@ import { z } from "zod"
 import { Prisma } from "@/generated/prisma/client"
 import { resolveSession } from "@/lib/api-auth"
 import prisma from "@/lib/prisma"
+import { SUBSCRIPTION_SELECT, hasPremiumAccess } from "@/lib/premium"
 import { ok, fail, unauthenticated, invalid } from "@/lib/v1/envelope"
 import { resolveInbox } from "@/lib/inbox"
+import { clearedAt } from "@/lib/chat-prefs"
 import { parseQuery, paginationShape } from "@/lib/v1/query"
 import { decodeCursor, encodeCursor, cursorDate } from "@/lib/v1/cursor"
 
@@ -105,8 +107,16 @@ export async function GET(req: NextRequest) {
   `
 
   const hasMore = threads.length > limit
-  const pageThreads = hasMore ? threads.slice(0, limit) : threads
-  const lastRow = pageThreads[pageThreads.length - 1]
+  // "Delete chat": a thread whose newest message is not after the cleared time
+  // is gone from this account's list until someone writes again.
+  const me = await prisma.user.findUnique({ where: { id: viewerId }, select: { clearedChats: true } })
+  const pageAll = hasMore ? threads.slice(0, limit) : threads
+  const pageThreads = pageAll.filter((t) => {
+    const at = clearedAt(me?.clearedChats, t.partnerId)
+    return !at || new Date(t.lastAt) > at
+  })
+  // The cursor follows the UNFILTERED page, so hidden threads never end paging early.
+  const lastRow = pageAll[pageAll.length - 1]
   const nextCursor =
     hasMore && lastRow ? encodeCursor(new Date(lastRow.lastAt), lastRow.partnerId) : null
 
@@ -123,8 +133,9 @@ export async function GET(req: NextRequest) {
       content: true,
       createdAt: true,
       senderId: true,
-      sender: { select: { id: true, name: true, avatar: true } },
-      receiver: { select: { id: true, name: true, avatar: true } },
+      systemEventKey: true,
+      sender: { select: { id: true, name: true, avatar: true, subscriptions: SUBSCRIPTION_SELECT } },
+      receiver: { select: { id: true, name: true, avatar: true, subscriptions: SUBSCRIPTION_SELECT } },
     },
   })
   const byId = new Map(messages.map((m) => [m.id, m]))
@@ -140,11 +151,18 @@ export async function GET(req: NextRequest) {
         partnerId: partner.id,
         partnerName: partner.name ?? "User",
         partnerAvatar: partner.avatar ?? null,
+        // Premium or VIP now: the gold PREMIUM tag beside the name.
+        partnerPremium: hasPremiumAccess(partner.subscriptions),
         lastMessageId: message.id,
         content: message.content,
         lastMessageAt: message.createdAt.toISOString(),
         unreadCount: Number(thread.unreadCount ?? 0),
-        fromMe: message.senderId === viewerId,
+        // A system event ("Trade completed", an offer update) is written as a
+        // PAIR of Message rows, one in each direction, so the newest one is
+        // often "sent" by the viewer. It is nobody's message: the list must
+        // not read it as "You: Trade completed".
+        system: message.systemEventKey != null,
+        fromMe: message.systemEventKey == null && message.senderId === viewerId,
       },
     ]
   })

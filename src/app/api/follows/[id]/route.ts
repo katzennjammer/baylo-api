@@ -45,19 +45,28 @@ export async function PATCH(
 }
 
 // DELETE /api/follows/[id] — remove the current user's relationship with a user
+//
+// Default: unfollow [id] (you stop following them).
+// ?as=follower: remove [id] as YOUR follower (they stop following you). The
+// same row the other way round; they are not told, and can follow again, the
+// way removing a follower works elsewhere. A private account's pending request
+// from them is removed too.
 export async function DELETE(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const session = await resolveSession()
   if (!session?.user?.id) return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
 
-  const { id: followeeId } = await params
-  const follow = await prisma.follow.findUnique({
-    where: { followerId_followeeId: { followerId: session.user.id, followeeId } },
-  })
+  const { id: otherId } = await params
+  const removingFollower = req.nextUrl.searchParams.get("as") === "follower"
+  const key = removingFollower
+    ? { followerId: otherId, followeeId: session.user.id }
+    : { followerId: session.user.id, followeeId: otherId }
+
+  const follow = await prisma.follow.findUnique({ where: { followerId_followeeId: key } })
   if (!follow) return NextResponse.json({ error: "Not found" }, { status: 404 })
 
   await prisma.follow.delete({ where: { id: follow.id } })
-  return NextResponse.json({ status: "unfollowed" })
+  return NextResponse.json({ status: removingFollower ? "removed" : "unfollowed" })
 }

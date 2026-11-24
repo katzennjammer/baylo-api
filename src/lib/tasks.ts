@@ -1,5 +1,6 @@
 import type { PrismaClient } from "@/generated/prisma/client"
 import prisma from "@/lib/prisma"
+import { runInBackground } from "@/lib/background"
 import {
   TASK_REWARDS,
   TASK_ORDER,
@@ -123,12 +124,22 @@ export async function isNewTradePartner(
   const prior = await db.trade.findFirst({
     where: {
       status:    "COMPLETED",
-      updatedAt: { gte: new Date(tradeAt.getTime() - NEW_PARTNER_WINDOW_DAYS * DAY_MS), lt: tradeAt },
-      ...(exceptTradeId ? { id: { not: exceptTradeId } } : {}),
+      // When the earlier trade COMPLETED, not when its row was last written.
+      // updatedAt moves on any later write (a review, an admin fix), which
+      // could drag an old trade into the window and deny a fair reward.
+      // completedAt is stamped once at settlement; rows from before it existed
+      // fall back to updatedAt.
       OR: [
-        { senderId: userId,    receiverId: partnerId },
-        { senderId: partnerId, receiverId: userId },
+        { completedAt: { gte: new Date(tradeAt.getTime() - NEW_PARTNER_WINDOW_DAYS * DAY_MS), lt: tradeAt } },
+        { completedAt: null, updatedAt: { gte: new Date(tradeAt.getTime() - NEW_PARTNER_WINDOW_DAYS * DAY_MS), lt: tradeAt } },
       ],
+      ...(exceptTradeId ? { id: { not: exceptTradeId } } : {}),
+      AND: [{
+        OR: [
+          { senderId: userId,    receiverId: partnerId },
+          { senderId: partnerId, receiverId: userId },
+        ],
+      }],
     },
     select: { id: true },
   })
@@ -312,9 +323,9 @@ export function awardTaskAsync(
   refId = "",
   opts: { partnerId?: string; tradeId?: string; description?: string; tradeAt?: Date; eventAt?: Date } = {},
 ): void {
-  void prisma
+  runInBackground(prisma
     .$transaction((tx) => awardTask(tx as TaskDb, userId, task, refId, opts))
-    .catch(() => { /* awards are best-effort; the backfill catches misses */ })
+    .catch(() => { /* awards are best-effort; the backfill catches misses */ }))
 }
 
 // ── Backfill ─────────────────────────────────────────────────────────────────

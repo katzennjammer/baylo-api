@@ -13,8 +13,8 @@
  *   C         org staff, acting as the org, offer one of the ORG's items on a
  *             person's listing.
  *   QUESTS    the event hook in POST /api/offers settles the people's quests
- *             with no GET /api/v1/quests involved, and never touches the org's
- *             backing row.
+ *             with no GET /api/v1/quests involved. Since 16 Nov 2026 a VERIFIED
+ *             shop gets its own on its backing row, never "Follow a trader".
  *
  *   D         SELF-DEALING. A member (owner, staff, or a PENDING invitee)
  *             offering on their own shop's listing is refused at propose; an
@@ -29,12 +29,12 @@
  * money side of a shop's trades -- settlement, fees, rewards -- is in
  * verify-org-settlement-http.ts.
  *
- * C IS EXPECTED TO FAIL, DELIBERATELY. Shop-initiated offers were deferred on
- * 26 Sep 2026 (decision F): POST /api/offers still acts as the signed-in human,
- * so a staff member's offer is sent BY the person, and the shop's item is not
- * theirs to offer. The check stays in, reporting FAIL and labelled as known,
- * so the day it is built there is already a test waiting to turn green. A run
- * of this file is healthy when C is the ONLY failure.
+ * C IS GREEN SINCE 16 NOV 2026 (decision F built): POST /api/offers sends as
+ * the acting identity, so the owner's offer in shop mode is the SHOP's. C2
+ * pins the rules that came with it: one pending offer per person across
+ * their profile and shops, the shop cannot offer on its owner's listing or
+ * offer the owner's personal item, an unverified shop cannot send, and the
+ * shop can withdraw its own offer. A healthy run has no failures.
  *
  * Fixtures are tagged, created through Prisma and the org library, and
  * deleted in `finally`.
@@ -201,13 +201,57 @@ async function main() {
       token: staffToken, orgId: org.organizationId, method: "POST",
       body: { postId: aliceItem2.id, offeredItemId: orgItem2.id },
     })
-    check("[KNOWN FAIL, deferred F] staff with X-Baylo-Org can offer an org item", fromOrg.status === 201, brief(fromOrg))
+    check("the owner with X-Baylo-Org can offer a shop item", fromOrg.status === 201, brief(fromOrg))
     if (fromOrg.status === 201) {
       const row = await prisma.trade.findUnique({
         where: { id: String(fromOrg.body.offerId) }, select: { senderId: true },
       })
-      check("[KNOWN FAIL, deferred F] and the offer is sent BY the org, not the staff member", row?.senderId === org.orgUserId,
+      check("and the offer is sent BY the shop, not the owner", row?.senderId === org.orgUserId,
         `sender ${row?.senderId}`)
+    }
+
+    // ── C2: the rules that only exist once a shop can send (16 Nov 2026) ──
+    console.log("\nC2: shop-sent offer rules")
+    // One pending offer per PERSON: the owner, personally, on the same listing.
+    const ownerThing = await item(owner.id, "owner personal plate")
+    const twice = await call("/api/offers", {
+      token: staffToken, method: "POST",
+      body: { postId: aliceItem2.id, offeredItemId: ownerThing.id },
+    })
+    check("the owner cannot also offer personally on a listing the shop already offered on",
+      twice.status === 409 && twice.body.code === "OFFER_PENDING_OTHER_ACCOUNT", brief(twice))
+    // A personal item while acting as the shop is not the shop's to offer.
+    // A fresh listing: bobItem2 is already in a trade from B.
+    const bobFresh = await item(bob.id, "bob fresh listing")
+    const notShops = await call("/api/offers", {
+      token: staffToken, orgId: org.organizationId, method: "POST",
+      body: { postId: bobFresh.id, offeredItemId: ownerThing.id },
+    })
+    check("acting as the shop, the owner's personal item is refused", notShops.status >= 400 && notShops.status < 500, brief(notShops))
+    // The shop on its owner's own listing: one person on both sides.
+    const ownerListing = await item(owner.id, "owner listing")
+    const orgItem5 = await item(org.orgUserId, "org salt 2")
+    const shopToOwner = await call("/api/offers", {
+      token: staffToken, orgId: org.organizationId, method: "POST",
+      body: { postId: ownerListing.id, offeredItemId: orgItem5.id },
+    })
+    check("the shop cannot offer on its owner's listing",
+      shopToOwner.status === 403 && shopToOwner.body.code === "SHOP_MEMBER_SELF_TRADE", brief(shopToOwner))
+    // An unverified shop may not send.
+    await prisma.organization.update({ where: { id: org.organizationId }, data: { verificationStatus: "PENDING" } })
+    const unverified = await call("/api/offers", {
+      token: staffToken, orgId: org.organizationId, method: "POST",
+      body: { postId: bobFresh.id, offeredItemId: orgItem5.id },
+    })
+    check("an unverified shop cannot send an offer",
+      unverified.status === 403 && unverified.body.code === "SHOP_NOT_VERIFIED", brief(unverified))
+    await prisma.organization.update({ where: { id: org.organizationId }, data: { verificationStatus: "VERIFIED" } })
+    // The shop withdraws its own offer from shop mode.
+    if (fromOrg.status === 201) {
+      const wd = await call(`/api/v1/offers/${String(fromOrg.body.offerId)}/withdraw`, {
+        token: staffToken, orgId: org.organizationId, method: "POST", body: {},
+      })
+      check("the shop can withdraw its own offer", wd.status === 200, brief(wd))
     }
 
     // ── D ───────────────────────────────────────────────────────────────────
@@ -311,9 +355,15 @@ async function main() {
       (rows) => rows.length === 5,
     )
     check("bob (receiver, then sender) has today's 5 assignments", bobDay.length === 5, `${bobDay.length} rows`)
-    await new Promise((r) => setTimeout(r, 1500))
-    const orgRows = await prisma.userProgress.count({ where: { userId: org.orgUserId, type: "QUEST" } })
-    check("the org's backing row got NO quest assignments", orgRows === 0, `${orgRows} rows`)
+    // Since 16 Nov 2026 a VERIFIED shop has its own daily quests (this one
+    // is verified above), assigned on its own row like a person's. Never
+    // "Follow a trader": a shop cannot follow anyone.
+    const orgDay = await poll(
+      () => prisma.userProgress.findMany({ where: { userId: org.orgUserId, type: "QUEST" } }),
+      (rows) => rows.length === 5,
+    )
+    check("the verified shop has its own 5 assignments", orgDay.length === 5, `${orgDay.length} rows`)
+    check("and never 'Follow a trader'", !orgDay.some((a) => a.quest === "FOLLOW_TRADER"))
   } finally {
     const ids = created.users
     await prisma.trade.deleteMany({ where: { OR: [{ senderId: { in: ids } }, { receiverId: { in: ids } }] } })

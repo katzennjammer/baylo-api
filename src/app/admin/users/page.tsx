@@ -5,6 +5,8 @@ import { REPORT } from "@/lib/report-case"
 import { IN_TRADE_PHASE } from "@/lib/trade-row"
 import { suspensionState, activeSuspension, notSuspendedWhere, suspendedWhere } from "@/lib/moderation"
 import UserActions from "./UserActions"
+import PremiumToggle from "./PremiumToggle"
+import { isLifetimePremium, isPremium, isVip, premiumUntil, vipUntil, SUBSCRIPTION_SELECT } from "@/lib/premium"
 import { FilterChips } from "@/components/admin/FilterChips"
 import { StaggerGroup, StaggerItem } from "@/components/admin/Stagger"
 import UrlSyncedForm from "@/components/admin/primitives/UrlSyncedForm"
@@ -26,9 +28,9 @@ function chip(active: boolean): React.CSSProperties {
     fontSize: 13,
     fontWeight: 600,
     textDecoration: "none",
-    border: `1px solid ${active ? "#4CAF50" : "rgba(0,0,0,.14)"}`,
-    background: active ? "rgba(76,175,80,.12)" : "#fff",
-    color: active ? "#2e7d32" : "#555",
+    border: `1px solid ${active ? "var(--adm-accent)" : "var(--adm-border-control)"}`,
+    background: active ? "var(--adm-good-bg)" : "var(--adm-panel)",
+    color: active ? "var(--adm-good)" : "var(--adm-text-secondary)",
   }
 }
 // Used only by the Previous/Next pager below, which is a single link rather
@@ -84,6 +86,7 @@ export default async function UsersPage({ searchParams }: Props) {
       id: true, name: true, email: true, role: true, isVerified: true,
       idVerifiedGrandfatheredAt: true, createdAt: true, suspensions: activeSuspension(now),
       deletedAt: true,
+      subscriptions: SUBSCRIPTION_SELECT,
       _count: { select: { items: true, casesFiled: { where: REPORT }, idVerifications: true, sentTrades: { where: IN_TRADE_PHASE }, receivedTrades: { where: IN_TRADE_PHASE } } },
       idVerifications: {
         select: { status: true, submittedAt: true },
@@ -122,9 +125,9 @@ export default async function UsersPage({ searchParams }: Props) {
           name="q"
           defaultValue={q}
           placeholder="Search name or email"
-          style={{ flex: 1, padding: "10px 12px", borderRadius: 9, border: "1px solid rgba(0,0,0,.16)", fontSize: 14 }}
+          style={{ flex: 1, padding: "10px 12px", borderRadius: 9, border: "1px solid var(--adm-border-control)", fontSize: 14 }}
         />
-        <button type="submit" style={{ padding: "10px 16px", border: 0, borderRadius: 9, background: "#17201b", color: "#fff", fontWeight: 700 }}>
+        <button type="submit" style={{ padding: "10px 16px", border: 0, borderRadius: 9, background: "var(--adm-text)", color: "var(--adm-shell)", fontWeight: 700 }}>
           Search
         </button>
       </UrlSyncedForm>
@@ -146,12 +149,12 @@ export default async function UsersPage({ searchParams }: Props) {
       />
 
       {users.length === 0 ? (
-        <p style={{ padding: 32, textAlign: "center", background: "#fff", borderRadius: 14, color: "#888" }}>No users found.</p>
+        <p style={{ padding: 32, textAlign: "center", background: "var(--adm-panel)", borderRadius: 14, color: "var(--adm-text-muted)" }}>No users found.</p>
       ) : (
-        <div style={{ background: "#fff", borderRadius: 14, border: "1px solid rgba(0,0,0,.08)", overflowX: "auto" }}>
+        <div style={{ background: "var(--adm-panel)", borderRadius: 14, border: "1px solid var(--adm-border)", overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1100, fontSize: 13 }}>
             <thead>
-              <tr style={{ textAlign: "left", color: "#888", fontSize: 12 }}>
+              <tr style={{ textAlign: "left", color: "var(--adm-text-muted)", fontSize: 12 }}>
                 <th style={{ padding: "12px 14px" }}>Account</th>
                 <th style={{ padding: "12px 14px" }}>Role / state</th>
                 <th style={{ padding: "12px 14px" }}>Verification</th>
@@ -162,42 +165,53 @@ export default async function UsersPage({ searchParams }: Props) {
             <StaggerGroup as="tbody">
               {users.map((user, index) => {
                 const suspension = suspensionState(user)
+                const premiumEnds = premiumUntil(user.subscriptions)
+                const premium = isPremium(premiumEnds, now)
+                const vip = isVip(vipUntil(user.subscriptions), now)
                 return (
                   <StaggerItem
                     as="tr"
                     index={index}
                     key={user.id}
                     className="admin-row-hover"
-                    style={{ borderTop: "1px solid rgba(0,0,0,.06)", verticalAlign: "top" }}
+                    style={{ borderTop: "1px solid var(--adm-border)", verticalAlign: "top" }}
                   >
                     <td style={{ padding: "14px" }}>
                       <strong>{user.name}</strong>
-                      <div style={{ color: "#777", marginTop: 3 }}>{user.email}</div>
-                      <div style={{ color: "#aaa", fontSize: 11, marginTop: 5 }}>Joined {user.createdAt.toLocaleDateString()}</div>
+                      <div style={{ color: "var(--adm-text-muted)", marginTop: 3 }}>{user.email}</div>
+                      <div style={{ color: "var(--adm-text-muted)", fontSize: 11, marginTop: 5 }}>Joined {user.createdAt.toLocaleDateString()}</div>
                     </td>
                     <td style={{ padding: "14px" }}>
                       <strong>{user.role}</strong>
-                      <div style={{ marginTop: 5, color: user.deletedAt || suspension.suspended ? "#b91c1c" : "#15803d" }}>
+                      <div style={{ marginTop: 5, color: user.deletedAt || suspension.suspended ? "var(--adm-warn)" : "var(--adm-good)" }}>
                         {user.deletedAt ? "Deleted" : suspension.suspended ? "Suspended" : "Active"}
                       </div>
-                      {user.isVerified && <div style={{ color: "#777", fontSize: 11, marginTop: 3 }}>Email verified</div>}
+                      {user.isVerified && <div style={{ color: "var(--adm-text-muted)", fontSize: 11, marginTop: 3 }}>Email verified</div>}
+                      <div style={{ color: premium || vip ? "var(--adm-good)" : "var(--adm-text-muted)", fontSize: 11, marginTop: 3 }}>
+                        {vip
+                          ? "VIP"
+                          : premium
+                            ? isLifetimePremium(premiumEnds) ? "Premium · lifetime" : `Premium until ${premiumEnds!.toLocaleDateString()}`
+                            : "Free"}
+                      </div>
+                      {canSuspend && !user.deletedAt && <PremiumToggle userId={user.id} premium={premium} />}
                     </td>
                     <td style={{ padding: "14px" }}>
                       {idStatus(user)}
-                      <div style={{ color: "#777", fontSize: 11, marginTop: 4 }}>
+                      <div style={{ color: "var(--adm-text-muted)", fontSize: 11, marginTop: 4 }}>
                         {user._count.idVerifications} submission{user._count.idVerifications === 1 ? "" : "s"}
                       </div>
                     </td>
-                    <td style={{ padding: "14px", color: "#555", lineHeight: 1.7 }}>
+                    <td style={{ padding: "14px", color: "var(--adm-text-secondary)", lineHeight: 1.7 }}>
                       <div>{user._count.items} listings</div>
                       <div>{user._count.casesFiled} reports filed</div>
                       <div>{user._count.sentTrades + user._count.receivedTrades} trade requests</div>
                     </td>
                     <td style={{ padding: "14px" }}>
                       {user.deletedAt ? (
-                        <span style={{ color: "#888" }}>Deleted accounts cannot be suspended.</span>
+                        <span style={{ color: "var(--adm-text-muted)" }}>Deleted accounts cannot be suspended.</span>
                       ) : !canSuspend ? (
-                        <span style={{ color: "#888" }}>Admin-only account controls.</span>
+                        <span style={{ color: "var(--adm-text-muted)" }}>Admin-only account controls.</span>
                       ) : (
                         <UserActions userId={user.id} suspended={suspension.suspended} canSuspend={canSuspend} />
                       )}
@@ -211,7 +225,7 @@ export default async function UsersPage({ searchParams }: Props) {
       )}
       {totalPages > 1 && (
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 13 }}>
-          <span style={{ color: "#777" }}>Page {page} of {totalPages} ({total} users)</span>
+          <span style={{ color: "var(--adm-text-muted)" }}>Page {page} of {totalPages} ({total} users)</span>
           <div style={{ display: "flex", gap: 8 }}>
             <Link
               href={href({ page: page > 1 ? String(page - 1) : undefined })}

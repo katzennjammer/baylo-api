@@ -1,5 +1,6 @@
 import prisma from "@/lib/prisma"
 import { CATEGORY_LABEL, suspendedWhere, toWireCategory } from "@/lib/moderation"
+import { actionLabel } from "@/lib/admin-display"
 import { SAFE_ZONE_TYPE_LABELS, type SafeZoneTypeValue } from "@/lib/safe-zones"
 import { REPORT } from "@/lib/report-case"
 
@@ -66,6 +67,56 @@ export function normaliseWindowDays(raw: string | string[] | undefined): number 
   return match ? match.days : DEFAULT_WINDOW_DAYS
 }
 
+/** A window the admin picked by date instead of from WINDOW_OPTIONS. */
+export interface CustomRange {
+  from: Date
+  to: Date
+}
+
+const CUSTOM_RANGE_LABEL = "Selected period"
+
+// Asia/Manila is UTC+8 all year (no daylight saving), so a calendar day there
+// is a fixed offset from UTC. Change this with REPORT_TIME_ZONE.
+const REPORT_ZONE_OFFSET_MS = 8 * HOUR_MS
+
+/** "2026-09-21" -> that calendar day's [y, m, d], or null if it is not a real date. */
+function parseYmd(raw: string | string[] | undefined): [number, number, number] | null {
+  const value = Array.isArray(raw) ? raw[0] : raw
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value ?? "")
+  if (!match) return null
+  const [year, month, day] = [Number(match[1]), Number(match[2]), Number(match[3])]
+  const check = new Date(Date.UTC(year, month - 1, day))
+  // Date.UTC rolls 2026-02-31 over into March; a real date survives the round trip.
+  if (check.getUTCFullYear() !== year || check.getUTCMonth() !== month - 1 || check.getUTCDate() !== day) return null
+  return [year, month, day]
+}
+
+/**
+ * Resolves ?from=YYYY-MM-DD&to=YYYY-MM-DD to a window, or null when either is
+ * missing or malformed (the caller then falls back to the preset window).
+ *
+ * Both days are whole days in REPORT_TIME_ZONE: from its first instant to its
+ * last. Given backwards they are swapped rather than rejected, and the end is
+ * capped at now -- a report cannot count what has not happened yet.
+ */
+export function parseCustomRange(rawFrom: string | string[] | undefined, rawTo: string | string[] | undefined): CustomRange | null {
+  const a = parseYmd(rawFrom)
+  const b = parseYmd(rawTo)
+  if (!a || !b) return null
+  const startOf = (ymd: [number, number, number]) => Date.UTC(ymd[0], ymd[1] - 1, ymd[2]) - REPORT_ZONE_OFFSET_MS
+  const first = Math.min(startOf(a), startOf(b))
+  const last = Math.max(startOf(a), startOf(b)) + DAY_MS - 1
+  const now = Date.now()
+  if (first > now) return null
+  return { from: new Date(first), to: new Date(Math.min(last, now)) }
+}
+
+/** A moment as the "YYYY-MM-DD" an <input type="date"> takes, in REPORT_TIME_ZONE. */
+export function reportDateInputValue(d: Date): string {
+  const ymd = zonedYmd(d)
+  return monthKey(ymd.year, ymd.month) + "-" + String(ymd.day).padStart(2, "0")
+}
+
 export interface SeriesPoint {
   /** Stable identity for React keys. Falls back to the label when absent. */
   key?: string
@@ -85,6 +136,8 @@ export interface ActorRow {
   name: string
   role: string
   count: number
+  /** What the count is made of, most frequent first. */
+  breakdown: { label: string; count: number }[]
 }
 
 export interface ReportTotals {
@@ -221,8 +274,8 @@ interface MonthBucket {
  *
  * Walks integer (year, month) pairs rather than nudging a Date, so a month can
  * never be skipped or doubled by day-of-month overflow or a zone offset.
- * The first bucket is partial when the window starts after the 1st; the last is
- * always partial, because the current month is still in progress.
+ * The first bucket is partial when the window starts after the 1st; the last
+ * is partial unless the window ends on the final day of its month.
  */
 function monthBuckets(from: Date, to: Date): MonthBucket[] {
   const start = zonedYmd(from)
@@ -239,10 +292,11 @@ function monthBuckets(from: Date, to: Date): MonthBucket[] {
     })
     const isFirst = buckets.length === 0
     const isLast = year === end.year && month === end.month
+    const daysInMonth = new Date(Date.UTC(year, month, 0)).getUTCDate()
     buckets.push({
       key: monthKey(year, month),
       label: label,
-      partial: (isFirst && start.day > 1) || isLast,
+      partial: (isFirst && start.day > 1) || (isLast && end.day < daysInMonth),
     })
     month += 1
     if (month > 12) {
@@ -312,10 +366,11 @@ function hubTypeLabel(type: string): string {
 const REMOVED_HUB_KEY = "removed-hubs"
 const REMOVED_HUB_LABEL = "Removed hubs"
 
-export async function loadReportSummary(requestedDays: number): Promise<ReportSummary> {
+export async function loadReportSummary(requestedDays: number, custom?: CustomRange): Promise<ReportSummary> {
   const windowDays = normaliseWindowDays(String(requestedDays))
-  const to = new Date()
-  const from = new Date(to.getTime() - windowDays * DAY_MS)
+  const generatedAt = new Date()
+  const to = custom ? custom.to : generatedAt
+  const from = custom ? custom.from : new Date(to.getTime() - windowDays * DAY_MS)
   const range = { gte: from, lte: to }
 
   // ── Named where-fragments ───────────────
@@ -449,11 +504,21 @@ export async function loadReportSummary(requestedDays: number): Promise<ReportSu
     prisma.moderationCase.findMany({ where: reportsJoinedInWindow, select: { createdAt: true, decidedAt: true } }),
     prisma.user.findMany({ where: joinedInWindow, select: { createdAt: true } }),
 
-    prisma.adminAction.groupBy({ by: ["actorId"], where: joinedInWindow, _count: { id: true }, orderBy: { _count: { id: "desc" } }, take: 10 }),
+    prisma.adminAction.groupBy({ by: ["actorId", "action"], where: joinedInWindow, _count: { id: true }, orderBy: { _count: { id: "desc" } } }),
   ])
 
   // ── Staff names: the one read that depends on another ────────────────
-  const actorIds = byActorRaw.map((row) => row.actorId)
+  // One row per (actor, kind), already most-frequent first; folded into one
+  // entry per actor so the page can say what each total is made of.
+  const byActor = new Map<string, { count: number; breakdown: ActorRow["breakdown"] }>()
+  for (const row of byActorRaw) {
+    const entry = byActor.get(row.actorId) ?? { count: 0, breakdown: [] }
+    entry.count += row._count.id
+    entry.breakdown.push({ label: actionLabel(row.action), count: row._count.id })
+    byActor.set(row.actorId, entry)
+  }
+  const topActors = [...byActor.entries()].sort((a, b) => b[1].count - a[1].count).slice(0, 10)
+  const actorIds = topActors.map(([id]) => id)
   const actorPeople =
     actorIds.length > 0
       ? await prisma.user.findMany({ where: { id: { in: actorIds } }, select: { id: true, name: true, role: true } })
@@ -608,17 +673,18 @@ export async function loadReportSummary(requestedDays: number): Promise<ReportSu
   )
   const reportsByStatus: SeriesPoint[] = byStatus.map((row) => ({ key: row.status, label: humanise(row.status), value: row._count.id }))
   const tasksCompleted: SeriesPoint[] = byTask.flatMap((row) => (row.task ? [{ key: row.task, label: humanise(row.task), value: row._count.id }] : []))
-  const actionsByKind: SeriesPoint[] = byAction.map((row) => ({ key: row.action, label: humanise(row.action), value: row._count.id }))
+  const actionsByKind: SeriesPoint[] = byAction.map((row) => ({ key: row.action, label: actionLabel(row.action), value: row._count.id }))
   const listingsByCategory: SeriesPoint[] = listingsByCategoryRaw.map((row) => ({ key: row.category, label: humanise(row.category), value: row._count.id }))
   const listingsByCondition: SeriesPoint[] = listingsByConditionRaw.map((row) => ({ key: row.condition, label: humanise(row.condition), value: row._count.id }))
 
-  const actionsByActor: ActorRow[] = byActorRaw.map((row) => {
-    const person = actorById.get(row.actorId)
+  const actionsByActor: ActorRow[] = topActors.map(([id, entry]) => {
+    const person = actorById.get(id)
     return {
-      id: row.actorId,
+      id: id,
       name: person && person.name ? person.name : "Unknown",
       role: person ? person.role : "—",
-      count: row._count.id,
+      count: entry.count,
+      breakdown: entry.breakdown,
     }
   })
 
@@ -628,8 +694,8 @@ export async function loadReportSummary(requestedDays: number): Promise<ReportSu
 
   return {
     windowDays: windowDays,
-    windowLabel: windowOption ? windowOption.label : "Last " + windowDays + " days",
-    generatedAt: to,
+    windowLabel: custom ? CUSTOM_RANGE_LABEL : windowOption ? windowOption.label : "Last " + windowDays + " days",
+    generatedAt: generatedAt,
     from: from,
     to: to,
     totals: totals,

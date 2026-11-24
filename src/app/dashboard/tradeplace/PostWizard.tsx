@@ -165,10 +165,59 @@ interface Valuation {
   min: number;
   max: number;
   allowed: { min: number; max: number };
-  valuationSource: "comparables" | "category_band";
+  valuationSource: "comparables" | "category_band" | "ai_market";
   sampleSize: number;
   comparables: Comparable[];
   basis: string;
+}
+
+/**
+ * What /api/ai/valuation said about the current (title, category, condition).
+ *
+ * `key` is that triple. The ticket is only valid for exactly the inputs it was
+ * issued for, so a title edited after the estimate makes it stale, and a stale
+ * one is never sent (see titleKey / handlePost).
+ */
+/** The online price summary and the Baylo price level it falls in. */
+interface AiPriceLevel {
+  market: { typicalPhp: number; lowPhp: number; highPhp: number; listingCount: number };
+  level: {
+    index: 0 | 1 | 2 | 3;
+    name: string;
+    categoryLabel: string;
+    cutoffsPhp: [number, number, number];
+    levels: { name: string; leaves: number }[];
+  };
+  sources: { title: string; url: string; pricePhp: number }[];
+}
+
+type AiValuation =
+  | ({ status: "ai"; key: string; ticket: string } & AiPriceLevel)
+  | { status: "fallback"; key: string; message: string };
+
+type AiValuationResponse =
+  | ({
+      status: "ai";
+      valuation: { suggestedLeaves: number; allowed: { min: number; max: number } };
+      ticket: string;
+    } & AiPriceLevel)
+  | { status: "fallback"; message: string };
+
+const php = (n: number) => `₱${n.toLocaleString("en-PH")}`;
+
+/** "₱8,000–₱25,000", "under ₱2,000", "₱25,000 and up" for level i. */
+function levelPesoRange(cutoffs: [number, number, number], i: number): string {
+  if (i === 0) return `under ${php(cutoffs[0])}`;
+  if (i === 3) return `${php(cutoffs[2])} and up`;
+  return `${php(cutoffs[i - 1])}–${php(cutoffs[i])}`;
+}
+
+const aiKey = (title: string, category: string, condition: string) =>
+  JSON.stringify([title.trim().replace(/\s+/g, " ").toLowerCase(), category, condition]);
+
+/** https only. A source link is rendered as an <a>, so nothing else gets through. */
+function httpsOnly(url: string): string | null {
+  try { return new URL(url).protocol === "https:" ? url : null; } catch { return null; }
 }
 
 interface Props {
@@ -241,6 +290,7 @@ export default function PostWizard({ onClose, onPosted, initialItem, me }: Props
   );
   const [valueError, setValueError] = useState("");
   const [showBasis,  setShowBasis]  = useState(false);
+  const [aiValuation, setAiValuation] = useState<AiValuation | null>(null);
 
   // Step 3 — Ask
   const [wantedText, setWantedText] = useState(() => parseWanted(initialItem));
@@ -389,10 +439,16 @@ export default function PostWizard({ onClose, onPosted, initialItem, me }: Props
   }
 
   // ── Suggested value ───────────────────────────────────────────────────────────
-  // Calls /api/v1/valuation. NOT an AI call, and no longer described as one:
-  // the number comes from a statistical model over category, condition and
-  // settled Baylo trades. The copy this replaced credited the number to an AI
-  // scan the app has never performed.
+  // Two calls. /api/v1/valuation first: Baylo's own model over category,
+  // condition and settled trades. It gives the allowed range and the standard
+  // estimate. Then, for a NEW listing, /api/ai/valuation: Claude reads current
+  // online listings and places the item inside that range. If it succeeds, its
+  // number replaces the standard one and its ticket goes with the POST, so the
+  // listing is created with exactly the number shown. If it does not, the
+  // standard estimate stays and is labelled as the fallback it is.
+  //
+  // Edits skip the AI call: an edit re-values with the standard model (and
+  // spends the listing's one re-valuation doing so), as before.
   //
   // No local band table, deliberately. The server owns the bands; a copy here
   // would drift, and the drift would surface as a slider offering values the
@@ -421,15 +477,75 @@ export default function PostWizard({ onClose, onPosted, initialItem, me }: Props
       }
 
       setValueError("");
-      setValuation(body.data);
-      setUserValue(body.data.suggestedLeaves);
+      const standard = body.data;
+      const key = aiKey(title, category, condition);
+      let ai: AiValuation | null = null;
+      let shown: Valuation = standard;
+
+      if (!isEdit && title.trim()) {
+        try {
+          const aiRes = await fetch("/api/ai/valuation", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ title: title.trim(), category, condition }),
+          });
+          const aiBody = await aiRes.json() as AiValuationResponse & { error?: string };
+          if (aiRes.ok && aiBody.status === "ai") {
+            ai = {
+              status: "ai",
+              key,
+              ticket: aiBody.ticket,
+              market: aiBody.market,
+              level: aiBody.level,
+              sources: aiBody.sources,
+            };
+            const { market, level } = aiBody;
+            shown = {
+              ...standard,
+              suggestedLeaves: aiBody.valuation.suggestedLeaves,
+              allowed: aiBody.valuation.allowed,
+              valuationSource: "ai_market",
+              basis:
+                `Online asking prices for this item are typically ${php(market.typicalPhp)} ` +
+                `(${market.listingCount} listings). That is ${level.name} for ${level.categoryLabel.toLowerCase()} ` +
+                `(${levelPesoRange(level.cutoffsPhp, level.index)}), and ${level.name} is always ` +
+                `${level.levels[level.index].leaves.toLocaleString("en-US")} Leaves for this condition. ` +
+                `The same price always gives the same value.`,
+            };
+          } else {
+            ai = {
+              status: "fallback",
+              key,
+              message:
+                aiRes.ok && aiBody.status === "fallback"
+                  ? aiBody.message
+                  : aiBody.error ?? "AI valuation is unavailable right now.",
+            };
+          }
+        } catch {
+          ai = { status: "fallback", key, message: "AI valuation is unavailable right now." };
+        }
+      }
+
+      setAiValuation(ai);
+      setValuation(shown);
+      setUserValue(shown.suggestedLeaves);
       setValueSub("result");
     } catch {
       setValuation(null);
+      setAiValuation(null);
       setValueError("Couldn't load the suggested value — enter your own asking value below.");
       setValueSub("result");
     }
   }
+
+  // An AI estimate is for the exact title it was asked about. Editing the title
+  // afterwards (the wizard allows going back) makes it stale: drop it and ask
+  // again on the value step rather than post a value for a different item.
+  useEffect(() => {
+    if (aiValuation && aiValuation.key !== aiKey(title, category, condition)) invalidateValuation();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [title]);
 
   // The suggestion is a function of category AND condition, so editing either
   // invalidates it. This used to watch category only, which is how a listing
@@ -437,6 +553,7 @@ export default function PostWizard({ onClose, onPosted, initialItem, me }: Props
   function invalidateValuation() {
     setValueSub("intro");
     setValuation(null);
+    setAiValuation(null);
     setValueError("");
   }
 
@@ -475,6 +592,11 @@ export default function PostWizard({ onClose, onPosted, initialItem, me }: Props
         pickupLng:      pickup?.lng ?? null,
         pickupAddress:  pickup?.address ?? null,
         imageHash,
+        // Only a ticket for exactly these inputs. Without one the server uses
+        // the standard estimate, which is what the wizard showed in that case.
+        ...(!isEdit && aiValuation?.status === "ai" && aiValuation.key === aiKey(title, category, condition)
+          ? { valuationTicket: aiValuation.ticket }
+          : {}),
       };
       const url    = isEdit ? `/api/items/${initialItem!.id}` : "/api/items";
       const method = isEdit ? "PATCH" : "POST";
@@ -484,7 +606,13 @@ export default function PostWizard({ onClose, onPosted, initialItem, me }: Props
         body: JSON.stringify(body),
       });
       if (!res.ok) {
-        const { error: e } = await res.json() as { error?: string };
+        const { error: e, code } = await res.json() as { error?: string; code?: string };
+        if (code === "VALUATION_TICKET_INVALID") {
+          // Expired or no longer matching. Back to the value step for a fresh
+          // estimate; nothing was created.
+          invalidateValuation();
+          setStep(2);
+        }
         throw new Error(e ?? "Failed to post");
       }
       const item = await res.json() as SerializedItem;
@@ -685,7 +813,7 @@ export default function PostWizard({ onClose, onPosted, initialItem, me }: Props
               Confirm the details
             </p>
             <p className="pw2-ident-info">
-              We analyzed your photo's colors, shape and setting. Confirm the item so buyers
+              We analyzed your photo&apos;s colors, shape and setting. Confirm the item so buyers
               can find it and we can value it accurately.
             </p>
             {identifying ? (
@@ -803,9 +931,14 @@ export default function PostWizard({ onClose, onPosted, initialItem, me }: Props
           <div className="pw2-globe-badge"><Globe size={32} /></div>
           <h3>Get a suggested value</h3>
           <p>
-            We calculate an estimated value in Pasa Leaves from your item&rsquo;s
-            category, its condition, and comparable completed trades on Baylo.
-            You can adjust it before you post.
+            {isEdit
+              ? <>We calculate an estimated value in Pasa Leaves from your item&rsquo;s
+                category, its condition, and comparable completed trades on Baylo.
+                You can adjust it before you post.</>
+              : <>Claude, Baylo&rsquo;s AI, finds current online asking prices for your
+                item&rsquo;s name. Baylo then puts that price into a fixed price level for
+                its category, which sets the value. Your photo isn&rsquo;t sent. You can
+                adjust the value before you post.</>}
           </p>
         </div>
       );
@@ -818,7 +951,11 @@ export default function PostWizard({ onClose, onPosted, initialItem, me }: Props
             <Globe size={32} />
           </div>
           <h3>Calculating estimated value…</h3>
-          <p>Checking completed {catLabel.toLowerCase()} swaps and the category band for {condLabel.toLowerCase()} condition.</p>
+          <p>
+            {isEdit
+              ? <>Checking completed {catLabel.toLowerCase()} swaps and the category band for {condLabel.toLowerCase()} condition.</>
+              : <>Searching online asking prices for this item. This can take up to 20 seconds.</>}
+          </p>
         </div>
       );
     }
@@ -838,9 +975,18 @@ export default function PostWizard({ onClose, onPosted, initialItem, me }: Props
     // out loud because a value the platform calculated and a value the owner
     // typed are different claims, and the old panel rendered them identically
     // under a heading that credited both to an AI.
-    const sourceNote = valuation?.valuationSource === "comparables"
+    const isAi = valuation?.valuationSource === "ai_market";
+    const sourceNote = isAi
+      ? `${aiValuation?.status === "ai" ? aiValuation.level.name : ""} for ${catLabel.toLowerCase()} · from online prices`
+      : valuation?.valuationSource === "comparables"
       ? `${valuation.sampleSize} comparable completed trade${valuation.sampleSize === 1 ? "" : "s"}`
       : "category & condition band";
+    const aiSources = aiValuation?.status === "ai"
+      ? aiValuation.sources.flatMap(src => {
+          const url = httpsOnly(src.url);
+          return url ? [{ ...src, url }] : [];
+        })
+      : [];
 
     return (
       <div>
@@ -849,7 +995,7 @@ export default function PostWizard({ onClose, onPosted, initialItem, me }: Props
           <div className="pw2-est-panel">
             <div className="pw2-est-header">
               <span>
-                SUGGESTED VALUE
+                {isAi ? "SUGGESTED VALUE (ESTIMATE)" : aiValuation?.status === "fallback" ? "BAYLO STANDARD ESTIMATE" : "SUGGESTED VALUE"}
                 {/* The tooltip. Text comes from the server alongside the number
                     so it always describes the calculation that actually ran. */}
                 <button
@@ -864,6 +1010,17 @@ export default function PostWizard({ onClose, onPosted, initialItem, me }: Props
             </div>
             {showBasis && (
               <p className="pw2-basis" role="note">{valuation.basis}</p>
+            )}
+            {/* The AI's own one-line reason is always visible, not behind the
+                tooltip: it is the provenance of the number. */}
+            {isAi && !showBasis && (
+              <p className="pw2-basis" role="note">{valuation.basis}</p>
+            )}
+            {/* A fallback is labelled as one. It must never read as an AI result. */}
+            {aiValuation?.status === "fallback" && (
+              <p className="pw2-basis" role="note">
+                {aiValuation.message} Showing Baylo&rsquo;s standard estimate instead.
+              </p>
             )}
             <div style={{ position: "relative", padding: "24px 0 4px" }}>
               <div className="pw2-est-bar">
@@ -918,8 +1075,64 @@ export default function PostWizard({ onClose, onPosted, initialItem, me }: Props
           )}
         </div>
 
+        {/* Online sources behind an AI estimate. Shown here only, never stored. */}
+        {isAi && aiValuation?.status === "ai" && (
+          <div className="pw2-comps">
+            <p className="pw2-comps-label">ONLINE ASKING PRICE</p>
+            <div className="pw2-comp-row">
+              <div className="pw2-comp-left">
+                <p>{php(aiValuation.market.typicalPhp)} typical</p>
+                <p>
+                  {aiValuation.market.listingCount} listings, {php(aiValuation.market.lowPhp)}–{php(aiValuation.market.highPhp)} · found by AI
+                </p>
+              </div>
+            </div>
+
+            <p className="pw2-comps-label" style={{ marginTop: 14 }}>
+              PRICE LEVEL · {aiValuation.level.categoryLabel.toUpperCase()}
+            </p>
+            {aiValuation.level.levels.map((lv, i) => {
+              const here = i === aiValuation.level.index;
+              return (
+                <div key={lv.name} className="pw2-comp-row" aria-current={here ? "true" : undefined}>
+                  <div className="pw2-comp-left">
+                    <p style={here ? { color: "#15803D" } : undefined}>{lv.name}{here ? " ← this item" : ""}</p>
+                    <p>{levelPesoRange(aiValuation.level.cutoffsPhp, i)}</p>
+                  </div>
+                  <span className="pw2-comp-pts" style={here ? { color: "#15803D" } : undefined}>
+                    {fmtLeaves(lv.leaves)}
+                  </span>
+                </div>
+              );
+            })}
+
+            {aiSources.length > 0 && (
+              <>
+                <p className="pw2-comps-label" style={{ marginTop: 14 }}>LISTINGS CHECKED</p>
+                {aiSources.map(src => (
+                  <div key={src.url} className="pw2-comp-row">
+                    <div className="pw2-comp-left">
+                      <p>
+                        <a href={src.url} target="_blank" rel="noopener noreferrer nofollow" style={{ color: "#15803D", textDecoration: "underline" }}>
+                          {src.title}
+                        </a>
+                      </p>
+                      <p>{new URL(src.url).hostname}</p>
+                    </div>
+                    <span className="pw2-comp-pts">{php(src.pricePhp)}</span>
+                  </div>
+                ))}
+              </>
+            )}
+            <p style={{ fontSize: 11.5, color: "#9CA3AF", margin: "8px 0 0" }}>
+              Asking prices found by AI, not confirmed sales. Leaves are not pesos: the price only
+              sets the level.
+            </p>
+          </div>
+        )}
+
         {/* Comparables */}
-        {valuation && valuation.comparables.length > 0 && (
+        {valuation && !isAi && valuation.comparables.length > 0 && (
           <div className="pw2-comps">
             <p className="pw2-comps-label">WHAT THIS IS BASED ON</p>
             {valuation.comparables.map((c, i) => (

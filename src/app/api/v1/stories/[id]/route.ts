@@ -5,6 +5,7 @@ import prisma from "@/lib/prisma"
 import { ok, unauthenticated, notFound } from "@/lib/v1/envelope"
 import { parseQuery } from "@/lib/v1/query"
 import { deleteOwnStory } from "@/lib/stories"
+import { ORG_CONTEXT_HEADER, resolveActingIdentity } from "@/lib/organizations"
 
 export const dynamic = "force-dynamic"
 
@@ -28,7 +29,13 @@ export async function DELETE(
   const parsed = parseQuery(req, querySchema)
   if (!parsed.ok) return parsed.response
 
-  const deleted = await deleteOwnStory(prisma, session.user.id, id)
+  // The shop's own story can be deleted from shop mode (16 Nov 2026); the
+  // person's own stays deletable in either mode.
+  const acting = await resolveActingIdentity(prisma, session.user.id, req.headers.get(ORG_CONTEXT_HEADER))
+  const actingId = acting.ok ? acting.acting.actingUserId : session.user.id
+  const deleted =
+    (actingId !== session.user.id && (await deleteOwnStory(prisma, actingId, id))) ||
+    (await deleteOwnStory(prisma, session.user.id, id))
   if (!deleted) return notFound("That story no longer exists")
   return ok({ id, deleted: true })
 }

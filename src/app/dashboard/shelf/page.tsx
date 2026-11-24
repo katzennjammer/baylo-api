@@ -169,12 +169,11 @@ export default async function ShelfPage() {
       partnerId: m.senderId,
     }))
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const notifications = rawNotifs.map(n => ({
     id:      n.id,
     who:     n.actor?.name ?? "Baylo",
     avatar:  n.actor?.avatar ?? null,
-    icon:    (NOTIF_ICON[n.type] ?? "bell") as any,
+    icon:    NOTIF_ICON[n.type] ?? "bell",
     text:    n.message,
     link:    n.link ?? null,
     time:    timeAgo(n.createdAt),

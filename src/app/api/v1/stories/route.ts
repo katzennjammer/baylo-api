@@ -6,7 +6,7 @@ import { ok, unauthenticated, notFound, forbidden, conflict, fail } from "@/lib/
 import { parseJsonBody } from "@/lib/v1/body"
 import { parseQuery } from "@/lib/v1/query"
 import { enforceRateLimit } from "@/lib/rate-limit-config"
-import { ORG_CONTEXT_HEADER } from "@/lib/organizations"
+import { ORG_CONTEXT_HEADER, resolveActingIdentity } from "@/lib/organizations"
 import { STORY_CAPTION_MAX, createListingStory, listStoryRow } from "@/lib/stories"
 
 export const dynamic = "force-dynamic"
@@ -17,11 +17,10 @@ export const dynamic = "force-dynamic"
  *
  * The rules are in @/lib/stories; see liveStoryWhere() for what "live" means.
  *
- * PERSONAL ACCOUNTS ONLY (v1). A POST carrying X-Baylo-Org is refused with
- * FORBIDDEN / PERSONAL_ONLY rather than quietly posted as the person: the
- * phone sent it while acting as a shop, and a story appearing under the
- * person's face would be the wrong author either way. GET ignores the header;
- * the row is the person's view whichever context the phone is in.
+ * SHOPS POST THEIR OWN STORIES (16 Nov 2026). Acting as a shop (X-Baylo-Org,
+ * owner only), a POST shares one of the SHOP's listings under the shop's
+ * name; only a VERIFIED shop may (see createListingStory). GET puts the
+ * acting account's own circle first; blocks still follow the person.
  */
 
 const querySchema = z.strictObject({})
@@ -42,20 +41,22 @@ export async function GET(req: NextRequest) {
   const parsed = parseQuery(req, querySchema)
   if (!parsed.ok) return parsed.response
 
-  const authors = await listStoryRow(prisma, session.user.id)
+  const acting = await resolveActingIdentity(prisma, session.user.id, req.headers.get(ORG_CONTEXT_HEADER))
+  const ownId = acting.ok ? acting.acting.actingUserId : session.user.id
+  const authors = await listStoryRow(prisma, session.user.id, new Date(), undefined, ownId)
   return ok({ authors })
 }
 
 export async function POST(req: NextRequest) {
   const session = await resolveSession()
   if (!session?.user?.id) return unauthenticated()
-  const authorId = session.user.id
+  const acting = await resolveActingIdentity(prisma, session.user.id, req.headers.get(ORG_CONTEXT_HEADER))
+  if (!acting.ok) return fail("ORG_CONTEXT_REFUSED", "You are not a member of that organisation")
+  // The shop's story in shop mode, the person's otherwise.
+  const authorId = acting.acting.actingUserId
 
-  if (req.headers.get(ORG_CONTEXT_HEADER)) {
-    return forbidden("Stories are for personal accounts", { code: "PERSONAL_ONLY" })
-  }
-
-  const limited = enforceRateLimit("storyCreate", authorId)
+  // Rate limits stay on the PERSON, like every limiter.
+  const limited = enforceRateLimit("storyCreate", session.user.id)
   if (limited) return limited
 
   const parsed = await parseJsonBody(req, bodySchema)
@@ -83,6 +84,6 @@ export async function POST(req: NextRequest) {
         retryAt: result.retryAt,
       })
     case "PERSONAL_ONLY":
-      return forbidden("Stories are for personal accounts", { code: "PERSONAL_ONLY" })
+      return forbidden("Only verified shops can share stories. Your shop's verification isn't approved yet.", { code: "PERSONAL_ONLY" })
   }
 }

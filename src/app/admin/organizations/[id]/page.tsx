@@ -49,16 +49,16 @@ interface Props {
 }
 
 const card: React.CSSProperties = {
-  background: "#fff",
+  background: "var(--adm-panel)",
   borderRadius: 14,
-  border: "1px solid rgba(0,0,0,.08)",
+  border: "1px solid var(--adm-border)",
   padding: 20,
 }
 
 const STATUS_COLOR: Record<string, string> = {
-  PENDING: "#b45309",
-  VERIFIED: "#15803d",
-  REJECTED: "#6b7280",
+  PENDING: "var(--adm-queue)",
+  VERIFIED: "var(--adm-good)",
+  REJECTED: "var(--adm-text-muted)",
 }
 
 /**
@@ -77,7 +77,7 @@ function accountAgeDays(createdAt: Date): number {
 function Field({ label, value }: { label: string; value: React.ReactNode }) {
   return (
     <div style={{ display: "flex", gap: 10, fontSize: 13, padding: "5px 0" }}>
-      <span style={{ color: "#888", minWidth: 150 }}>{label}</span>
+      <span style={{ color: "var(--adm-text-muted)", minWidth: 150 }}>{label}</span>
       <span style={{ fontWeight: 600 }}>{value}</span>
     </div>
   )
@@ -126,7 +126,7 @@ export default async function OrganizationReviewPage({ params }: Props) {
     <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
       <Link
         href="/admin/organizations"
-        style={{ fontSize: 13, color: "#666", textDecoration: "none" }}
+        style={{ fontSize: 13, color: "var(--adm-text-secondary)", textDecoration: "none" }}
       >
         ← Business documents
       </Link>
@@ -159,11 +159,11 @@ export default async function OrganizationReviewPage({ params }: Props) {
               padding: "10px 12px",
               marginBottom: 12,
               borderRadius: 10,
-              background: "#f6f6f6",
-              border: "1px solid rgba(0,0,0,.08)",
+              background: "var(--adm-panel-flat)",
+              border: "1px solid var(--adm-border)",
             }}
           >
-            <span style={{ fontSize: 12, color: "#666" }}>DTI registration no. (as typed)</span>
+            <span style={{ fontSize: 12, color: "var(--adm-text-secondary)" }}>DTI registration no. (as typed)</span>
             {org.dtiRegistrationNumber ? (
               <span
                 style={{
@@ -176,7 +176,7 @@ export default async function OrganizationReviewPage({ params }: Props) {
                 {org.dtiRegistrationNumber}
               </span>
             ) : (
-              <span style={{ fontSize: 13, color: "#b45309", fontWeight: 600 }}>
+              <span style={{ fontSize: 13, color: "var(--adm-queue)", fontWeight: 600 }}>
                 none on file — applied before the field existed
               </span>
             )}
@@ -191,17 +191,17 @@ export default async function OrganizationReviewPage({ params }: Props) {
                 style={{
                   width: "100%",
                   borderRadius: 10,
-                  border: "1px solid rgba(0,0,0,.1)",
-                  background: "#f6f6f6",
+                  border: "1px solid var(--adm-border-input)",
+                  background: "var(--adm-panel-flat)",
                 }}
               />
-              <p style={{ fontSize: 12, color: "#888", marginTop: 8 }}>
+              <p style={{ fontSize: 12, color: "var(--adm-text-muted)", marginTop: 8 }}>
                 This link expires in {Math.round(ORG_DOC_URL_TTL_S / 60)} minutes and is re-minted
                 on every page load. Reload if the image stops rendering.
               </p>
             </>
           ) : (
-            <p style={{ fontSize: 13, color: "#888" }}>
+            <p style={{ fontSize: 13, color: "var(--adm-text-muted)" }}>
               {org.docDeletedAt
                 ? `Destroyed on ${org.docDeletedAt.toLocaleString()}, as every decision does.`
                 : org.docDeleteFailedAt
@@ -268,7 +268,7 @@ export default async function OrganizationReviewPage({ params }: Props) {
             />
           ) : (
             <div style={card}>
-              <p style={{ fontSize: 13, color: "#888" }}>
+              <p style={{ fontSize: 13, color: "var(--adm-text-muted)" }}>
                 Already decided. A decision is not reversible from here — the document it was made
                 against no longer exists, so a second look would be a different review of nothing.
               </p>
@@ -283,9 +283,9 @@ export default async function OrganizationReviewPage({ params }: Props) {
         <div style={{ display: "flex", gap: 12, alignItems: "center", fontSize: 13, padding: "6px 0" }}>
           <span style={{ flex: 1 }}>
             {org.owner.name}{" "}
-            <span style={{ color: "#888" }}>{org.owner.email}</span>
+            <span style={{ color: "var(--adm-text-muted)" }}>{org.owner.email}</span>
           </span>
-          <span style={{ color: "#888" }}>since {org.ownerJoinedAt.toLocaleDateString()}</span>
+          <span style={{ color: "var(--adm-text-muted)" }}>since {org.ownerJoinedAt.toLocaleDateString()}</span>
         </div>
       </div>
     </div>

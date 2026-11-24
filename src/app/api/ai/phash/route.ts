@@ -3,6 +3,7 @@ import { resolveSession } from "@/lib/api-auth"
 import prisma from "@/lib/prisma"
 import sharp from "sharp"
 import Anthropic from "@anthropic-ai/sdk"
+import { HAIKU_MODEL, NO_THINKING } from "@/lib/anthropic"
 import { fetchAllowedImage, isAllowedImageUrl } from "@/lib/safe-image-url"
 import { enforceRateLimit } from "@/lib/rate-limit-config"
 import { imageUrlSchema, parseBody } from "@/lib/validation"
@@ -102,7 +103,8 @@ async function confirmWithAI(imageUrl: string, existingUrl: string): Promise<boo
     throw new Error("blocked")
   }
   const msg = await anthropic.messages.create({
-    model: "claude-haiku-4-5-20251001",
+    model: HAIKU_MODEL,
+      thinking: NO_THINKING,
     max_tokens: 128,
     messages: [{
       role: "user",

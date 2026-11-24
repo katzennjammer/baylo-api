@@ -1,5 +1,6 @@
 "use client"
 
+import { useState, type ReactNode } from "react"
 import type { SeriesPoint } from "@/lib/admin-reports"
 import { CountUp } from "@/components/admin/CountUp"
 import { AnimatedBarFill } from "@/components/admin/AnimatedBarFill"
@@ -142,6 +143,150 @@ export function BarChart({
   )
 }
 
+// ── ColumnChart ─────────────────────────────────────────────────────────────
+
+const COLUMN_PLOT_H = 200
+const COLUMN_AXIS_W = 40
+
+/** A round axis top and step for whole-number counts: 278 -> 0, 100, 200, 300. */
+function niceScale(max: number): { top: number; step: number } {
+  const rough = max / 4
+  const magnitude = Math.pow(10, Math.floor(Math.log10(rough)))
+  const normalised = rough / magnitude
+  // 1, 2, 5, 10 only -- a 2.5 step would label a count axis "2.5, 7.5".
+  const nice = normalised <= 1 ? 1 : normalised <= 2 ? 2 : normalised <= 5 ? 5 : 10
+  const step = Math.max(1, nice * magnitude)
+  return { top: Math.ceil(max / step) * step, step }
+}
+
+/**
+ * Vertical bars against a value axis, for a series whose labels are short: the
+ * months of a year, a handful of types. BarChart stays the right shape for long
+ * labels (hub names, report reasons), which a column has no room to print.
+ *
+ * Same overflow-proof construction as BarChart, turned on its side: each bar's
+ * height is a PERCENTAGE of a fixed-height plot and each slot is a flex share
+ * of the card's width, so nothing here is sized from a constant that could be
+ * wider than the card. Bars are <span>s, not <div>s, because the print
+ * stylesheet whitens every div's background.
+ */
+export function ColumnChart({
+  title,
+  caption,
+  points,
+  color = "var(--adm-accent)",
+  emptyLabel = "Nothing to show for this period.",
+  limit,
+}: BarChartProps) {
+  const max = points.reduce((highest, p) => (p.value > highest ? p.value : highest), 0)
+  const hasData = points.length > 0 && max > 0
+  const shown = limit !== undefined && points.length > limit ? points.slice(0, limit) : points
+  const hidden = points.length - shown.length
+  const { top, step } = hasData ? niceScale(max) : { top: 1, step: 1 }
+  const ticks: number[] = []
+  for (let value = 0; value <= top + step / 2; value += step) ticks.push(value)
+
+  const slots: React.CSSProperties = { display: "flex", gap: 8, padding: "0 8px" }
+
+  return (
+    <section style={cardStyle} className="adm-lift report-column-chart">
+      <h2 style={cardTitleStyle}>{title}</h2>
+      {caption ? <p style={captionStyle}>{caption}</p> : null}
+
+      {!hasData ? (
+        <p style={emptyStyle}>{emptyLabel}</p>
+      ) : (
+        <div style={{ marginTop: 34 }}>
+          <div className="report-column-plot" style={{ position: "relative", height: COLUMN_PLOT_H }}>
+            {ticks.map((tick) => (
+              <div key={tick} style={{ position: "absolute", left: 0, right: 0, bottom: (tick / top) * 100 + "%" }}>
+                <span
+                  style={{
+                    position: "absolute",
+                    left: 0,
+                    bottom: -7,
+                    width: COLUMN_AXIS_W - 10,
+                    textAlign: "right",
+                    fontSize: 11,
+                    lineHeight: "14px",
+                    color: "var(--adm-text-muted)",
+                    fontVariantNumeric: "tabular-nums",
+                  }}
+                >
+                  {tick.toLocaleString()}
+                </span>
+                <div style={{ marginLeft: COLUMN_AXIS_W, borderTop: "1px solid var(--adm-divider)" }} />
+              </div>
+            ))}
+
+            <div style={{ ...slots, position: "absolute", left: COLUMN_AXIS_W, right: 0, top: 0, bottom: 0, alignItems: "flex-end" }}>
+              {shown.map((point) => {
+                // A real value is floored at 1% so it never renders as nothing.
+                const pct = point.value > 0 ? Math.max(1, (point.value / top) * 100) : 0
+                return (
+                  // role="img" sits on the slot, not the bar: the print
+                  // stylesheet pins every span[role='img'] to a 7px track
+                  // height, which is right for BarChart and would flatten
+                  // these.
+                  <div
+                    key={point.key ?? point.label}
+                    role="img"
+                    aria-label={point.label + ": " + point.value}
+                    title={point.label + ": " + point.value.toLocaleString()}
+                    style={{ flex: 1, minWidth: 0, height: "100%", display: "flex", alignItems: "flex-end", justifyContent: "center" }}
+                  >
+                    <span
+                      style={{
+                        position: "relative",
+                        display: "block",
+                        width: "100%",
+                        maxWidth: 44,
+                        height: pct + "%",
+                        background: color,
+                        borderRadius: "6px 6px 0 0",
+                      }}
+                    >
+                      <span
+                        style={{
+                          position: "absolute",
+                          left: "50%",
+                          bottom: "100%",
+                          transform: "translateX(-50%)",
+                          paddingBottom: 4,
+                          fontSize: 11,
+                          fontWeight: 700,
+                          color: "var(--adm-text)",
+                          whiteSpace: "nowrap",
+                          fontVariantNumeric: "tabular-nums",
+                        }}
+                      >
+                        {point.value.toLocaleString()}
+                      </span>
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+
+          <div className="report-column-labels" style={{ ...slots, marginLeft: COLUMN_AXIS_W, marginTop: 8, alignItems: "flex-start" }}>
+            {shown.map((point) => (
+              <span
+                key={point.key ?? point.label}
+                style={{ flex: 1, minWidth: 0, textAlign: "center", fontSize: 11, lineHeight: 1.3, color: "var(--adm-text-muted)", overflowWrap: "anywhere" }}
+              >
+                {point.label}
+                {point.partial ? "*" : ""}
+              </span>
+            ))}
+          </div>
+          {hidden > 0 ? <p style={{ fontSize: 12, color: "var(--adm-text-muted)", marginTop: 10 }}>and {hidden} more with a smaller count.</p> : null}
+        </div>
+      )}
+    </section>
+  )
+}
+
 /**
  * A single headline number.
  *
@@ -162,11 +307,11 @@ export function StatTile({
   const valueColor = tone === "warn" ? "var(--adm-warn)" : tone === "good" ? "var(--adm-good)" : "var(--adm-text)"
 
   return (
-    <div style={cardStyle} className="adm-lift">
+    <div style={cardStyle} className="adm-lift report-tile">
       <div style={{ color: "var(--adm-text-muted)", fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: "0.08em" }}>
         {label}
       </div>
-      <div style={{ fontSize: 38, fontWeight: 700, marginTop: 10, letterSpacing: "-0.03em", color: valueColor, fontVariantNumeric: "tabular-nums" }}>
+      <div className="report-tile-value" style={{ fontSize: 38, fontWeight: 700, marginTop: 10, letterSpacing: "-0.03em", color: valueColor, fontVariantNumeric: "tabular-nums" }}>
         {typeof value === "number" ? <CountUp value={value} /> : value}
       </div>
       {hint ? <div style={{ color: "var(--adm-text-muted)", fontSize: 12, marginTop: 8, lineHeight: 1.5 }}>{hint}</div> : null}
@@ -191,7 +336,7 @@ export function RankTable({
   title: string
   caption?: string
   columns: string[]
-  rows: { key: string; cells: (string | number)[] }[]
+  rows: { key: string; cells: ReactNode[] }[]
   emptyLabel?: string
 }) {
   return (
@@ -235,6 +380,7 @@ export function RankTable({
                         fontWeight: i === 0 ? 700 : 500,
                         color: i === 0 ? "var(--adm-text)" : "var(--adm-text-secondary)",
                         whiteSpace: i === 0 ? "normal" : "nowrap",
+                        verticalAlign: "top",
                       }}
                     >
                       {typeof cell === "number" ? cell.toLocaleString() : cell}
@@ -267,19 +413,22 @@ const CHART_PAD_X = 8
 const CHART_PAD_TOP = 12
 const CHART_PAD_BOTTOM = 28
 
+const CHART_INNER_W = CHART_W - CHART_PAD_X * 2
+const CHART_INNER_H = CHART_H - CHART_PAD_TOP - CHART_PAD_BOTTOM
+
+/** Where point `i` of `n` sits, in viewBox units. */
+function xAt(i: number, n: number): number {
+  return CHART_PAD_X + (n <= 1 ? CHART_INNER_W / 2 : (i / (n - 1)) * CHART_INNER_W)
+}
+function yAt(value: number, max: number): number {
+  return CHART_PAD_TOP + CHART_INNER_H - (max > 0 ? (value / max) * CHART_INNER_H : 0)
+}
+
 /** `M x0,y0 L x1,y1 L x2,y2 ...` over a fixed viewBox -- see the file header
  *  for why a viewBox-scaled SVG can't reproduce BarChart's old overflow bug. */
 function linePath(points: SeriesPoint[], max: number): string {
-  const innerW = CHART_W - CHART_PAD_X * 2
-  const innerH = CHART_H - CHART_PAD_TOP - CHART_PAD_BOTTOM
   const n = points.length
-  return points
-    .map((p, i) => {
-      const x = CHART_PAD_X + (n <= 1 ? innerW / 2 : (i / (n - 1)) * innerW)
-      const y = CHART_PAD_TOP + innerH - (max > 0 ? (p.value / max) * innerH : 0)
-      return `${i === 0 ? "M" : "L"} ${x.toFixed(1)},${y.toFixed(1)}`
-    })
-    .join(" ")
+  return points.map((p, i) => `${i === 0 ? "M" : "L"} ${xAt(i, n).toFixed(1)},${yAt(p.value, max).toFixed(1)}`).join(" ")
 }
 
 function areaPath(points: SeriesPoint[], max: number): string {
@@ -315,6 +464,30 @@ export function TrendChart({
   const hasData = primary.points.length > 0 && max > 0
   const gradientId = "trend-fill-" + title.replace(/[^a-z0-9]+/gi, "-").toLowerCase()
 
+  // The point under the cursor, and where it sits in the wrapper in CSS pixels
+  // (the tooltip is HTML laid over the SVG, so it needs pixels, not viewBox
+  // units).
+  const [hover, setHover] = useState<{ index: number; left: number; top: number; flip: boolean } | null>(null)
+  const n = primary.points.length
+
+  function onPointerMove(event: React.PointerEvent<SVGSVGElement>) {
+    const svg = event.currentTarget
+    const matrix = svg.getScreenCTM()
+    if (!matrix || n === 0) return
+    // The viewBox is letterboxed inside the element, so a plain "fraction of
+    // the element's width" would be off; the CTM is the exact mapping.
+    const viewX = (event.clientX - matrix.e) / matrix.a
+    const index = n <= 1 ? 0 : Math.min(n - 1, Math.max(0, Math.round(((viewX - CHART_PAD_X) / CHART_INNER_W) * (n - 1))))
+    const box = svg.getBoundingClientRect()
+    setHover({
+      index,
+      left: xAt(index, n) * matrix.a + matrix.e - box.left,
+      top: yAt(primary.points[index].value, max) * matrix.d + matrix.f - box.top,
+      flip: index > (n - 1) / 2,
+    })
+  }
+  const hovered = hover ? primary.points[hover.index] : null
+
   return (
     <section style={{ ...cardStyle, gridColumn: "1 / -1" }} className="adm-lift report-trend-chart">
       <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16, flexWrap: "wrap" }}>
@@ -331,8 +504,15 @@ export function TrendChart({
       {!hasData ? (
         <p style={emptyStyle}>{emptyLabel}</p>
       ) : (
-        <div style={{ marginTop: 18 }}>
-          <svg viewBox={`0 0 ${CHART_W} ${CHART_H}`} style={{ width: "100%", height: 220, display: "block" }} role="img" aria-label={title}>
+        <div style={{ marginTop: 18, position: "relative" }}>
+          <svg
+            viewBox={`0 0 ${CHART_W} ${CHART_H}`}
+            style={{ width: "100%", height: 220, display: "block", touchAction: "pan-y" }}
+            role="img"
+            aria-label={title}
+            onPointerMove={onPointerMove}
+            onPointerLeave={() => setHover(null)}
+          >
             <defs>
               <linearGradient id={gradientId} x1="0" y1="0" x2="0" y2="1">
                 <stop offset="0%" stopColor={primary.color} stopOpacity="0.45" />
@@ -368,10 +548,26 @@ export function TrendChart({
               strokeLinejoin="round"
             />
 
+            {hover ? (
+              <g pointerEvents="none">
+                <line
+                  x1={xAt(hover.index, n)}
+                  y1={CHART_PAD_TOP}
+                  x2={xAt(hover.index, n)}
+                  y2={CHART_H - CHART_PAD_BOTTOM}
+                  style={{ stroke: "var(--adm-text-muted)" }}
+                  strokeWidth={1}
+                  strokeDasharray="3 4"
+                />
+                {secondary && secondary.points[hover.index] ? (
+                  <circle cx={xAt(hover.index, n)} cy={yAt(secondary.points[hover.index].value, max)} r={4} style={{ fill: secondary.color, stroke: "var(--adm-panel-solid)" }} strokeWidth={2} />
+                ) : null}
+                <circle cx={xAt(hover.index, n)} cy={yAt(primary.points[hover.index].value, max)} r={4} style={{ fill: primary.color, stroke: "var(--adm-panel-solid)" }} strokeWidth={2} />
+              </g>
+            ) : null}
+
             {primary.points.map((p, i) => {
-              const innerW = CHART_W - CHART_PAD_X * 2
-              const n = primary.points.length
-              const x = CHART_PAD_X + (n <= 1 ? innerW / 2 : (i / (n - 1)) * innerW)
+              const x = xAt(i, n)
               return (
                 <text
                   key={p.key ?? p.label}
@@ -386,6 +582,39 @@ export function TrendChart({
               )
             })}
           </svg>
+
+          {hover && hovered ? (
+            <div
+              style={{
+                position: "absolute",
+                top: Math.min(hover.top + 12, CHART_H - 110),
+                ...(hover.flip ? { right: `calc(100% - ${hover.left - 14}px)` } : { left: hover.left + 14 }),
+                minWidth: 160,
+                background: "var(--adm-panel-solid)",
+                border: "1px solid var(--adm-border-hover)",
+                borderRadius: 10,
+                boxShadow: "0 8px 24px rgba(0,0,0,0.16)",
+                pointerEvents: "none",
+                zIndex: 2,
+              }}
+            >
+              <div style={{ padding: "8px 12px", fontSize: 12, fontWeight: 600, color: "var(--adm-text-secondary)", borderBottom: "1px solid var(--adm-divider)" }}>
+                {hovered.label}
+                {hovered.partial ? " (so far)" : ""}
+              </div>
+              <div style={{ padding: "8px 12px", display: "grid", gap: 6 }}>
+                {[primary, ...(secondary ? [secondary] : [])].map((series) => (
+                  <div key={series.label} style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 13 }}>
+                    <span style={{ width: 8, height: 8, borderRadius: 999, background: series.color, flexShrink: 0 }} />
+                    <span style={{ flex: 1, color: "var(--adm-text-secondary)", whiteSpace: "nowrap" }}>{series.label}</span>
+                    <span style={{ fontWeight: 700, color: "var(--adm-text)", fontVariantNumeric: "tabular-nums" }}>
+                      {(series.points[hover.index]?.value ?? 0).toLocaleString()}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ) : null}
         </div>
       )}
     </section>

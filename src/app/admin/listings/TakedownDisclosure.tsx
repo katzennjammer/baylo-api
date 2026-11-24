@@ -16,7 +16,7 @@ export function TakedownDisclosure({ children }: { children: ReactNode }) {
         type="button"
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
-        style={{ fontSize: 12, color: "#777", cursor: "pointer", background: "none", border: 0, padding: 0 }}
+        style={{ fontSize: 12, color: "var(--adm-text-muted)", cursor: "pointer", background: "none", border: 0, padding: 0 }}
       >
         {open ? "Hide moderation takedown" : "Moderation takedown…"}
       </button>

@@ -64,15 +64,15 @@ export default function AchievementToggle({
             onClick={() => setOpen(true)}
             className="admin-btn-press"
             style={{
-              padding: "7px 10px", border: "1px solid rgba(0,0,0,.12)", borderRadius: 7,
-              background: isActive ? "#fee2e2" : "#e4f2e8",
-              color: isActive ? "#991b1b" : "#21643d", fontWeight: 700, fontSize: 12, cursor: "pointer",
+              padding: "7px 10px", border: "1px solid var(--adm-border-input)", borderRadius: 7,
+              background: isActive ? "var(--adm-warn-bg)" : "var(--adm-good-bg)",
+              color: isActive ? "var(--adm-warn)" : "var(--adm-good)", fontWeight: 700, fontSize: 12, cursor: "pointer",
             }}
           >
             {isActive ? "Deactivate" : "Reactivate"}
           </button>
           {isActive && earnedCount > 0 ? (
-            <span style={{ fontSize: 11, color: "#888" }}>
+            <span style={{ fontSize: 11, color: "var(--adm-text-muted)" }}>
               {earnedCount} user{earnedCount === 1 ? "" : "s"} keep it
             </span>
           ) : null}
@@ -87,7 +87,7 @@ export default function AchievementToggle({
             maxLength={1000}
             disabled={busy}
             autoFocus
-            style={{ padding: "7px 9px", borderRadius: 7, border: "1px solid rgba(0,0,0,.16)", fontSize: 12 }}
+            style={{ padding: "7px 9px", borderRadius: 7, border: "1px solid var(--adm-border-control)", fontSize: 12 }}
           />
           <div style={{ display: "flex", gap: 6 }}>
             <button
@@ -97,7 +97,7 @@ export default function AchievementToggle({
               className="admin-btn-press"
               style={{
                 flex: 1, padding: "7px 10px", border: 0, borderRadius: 7,
-                background: isActive ? "#e5484d" : "#4CAF50", color: "#fff",
+                background: isActive ? "var(--adm-danger)" : "var(--adm-accent)", color: "var(--adm-text-on-accent)",
                 fontWeight: 700, fontSize: 12, opacity: busy || !reason.trim() ? 0.55 : 1,
               }}
             >
@@ -108,7 +108,7 @@ export default function AchievementToggle({
               onClick={() => { setOpen(false); setReason("") }}
               disabled={busy}
               className="admin-btn-press"
-              style={{ padding: "7px 10px", border: "1px solid rgba(0,0,0,.12)", borderRadius: 7, background: "#fff", fontSize: 12, cursor: "pointer" }}
+              style={{ padding: "7px 10px", border: "1px solid var(--adm-border-input)", borderRadius: 7, background: "var(--adm-panel)", fontSize: 12, cursor: "pointer" }}
             >
               Cancel
             </button>

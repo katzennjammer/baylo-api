@@ -123,12 +123,9 @@ export async function POST(req: Request) {
   // After the commit, so the check can see the review it is looking for.
   settleQuestsAsync(myId, ["LEAVE_REVIEW"])
 
-  // Fire-and-forget notification — do not block the response
-  const reviewer = await prisma.user.findUnique({
-    where: { id: myId },
-    select: { name: true },
-  })
-  await prisma.notification.create({
+  // A notification failure must not make a successfully saved review look
+  // unsuccessful to the caller.
+  void prisma.notification.create({
     data: {
       userId:  revieweeId,
       actorId: myId,
@@ -136,6 +133,8 @@ export async function POST(req: Request) {
       message: `left you a ${starsInt}-star review`,
       link:    "/profile",
     },
+  }).catch((error: unknown) => {
+    console.error("[reviews] Failed to create review notification:", error)
   })
 
   return NextResponse.json({ ok: true, reviewId: review.id })

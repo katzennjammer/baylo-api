@@ -1,5 +1,7 @@
-import { loadReportSummary, normaliseWindowDays, WINDOW_OPTIONS } from "@/lib/admin-reports"
-import { BarChart, DonutChart, RankTable, StatTile, TrendChart } from "./ReportCharts"
+import { cookies } from "next/headers"
+import { REPORT_DAYS_COOKIE } from "../pref-keys"
+import { formatReportDate, loadReportSummary, normaliseWindowDays, parseCustomRange, reportDateInputValue, WINDOW_OPTIONS } from "@/lib/admin-reports"
+import { BarChart, ColumnChart, DonutChart, RankTable, StatTile, TrendChart } from "./ReportCharts"
 import ReportControls from "./ReportControls"
 import ExportReportButton from "./ExportReportButton"
 
@@ -39,18 +41,19 @@ const INFO_COLOR = "var(--adm-info)"
 const NEUTRAL_COLOR = "var(--adm-text-secondary)"
 
 interface Props {
-  searchParams: Promise<{ days?: string }>
+  searchParams: Promise<{ days?: string; from?: string; to?: string }>
 }
 
 export default async function AdminReportsPage({ searchParams }: Props) {
   const sp = await searchParams
-  const days = normaliseWindowDays(sp.days)
-  const summary = await loadReportSummary(days)
+  // No ?days= falls back to the period this admin chose in Settings.
+  const days = normaliseWindowDays(sp.days ?? (await cookies()).get(REPORT_DAYS_COOKIE)?.value)
+  // ?from=&to= wins over ?days= when both dates are valid.
+  const custom = parseCustomRange(sp.from, sp.to)
+  const summary = await loadReportSummary(days, custom ?? undefined)
   const t = summary.totals
-
-  const dateFormat: Intl.DateTimeFormatOptions = { month: "short", day: "numeric", year: "numeric" }
-  const fromLabel = summary.from.toLocaleDateString("en-US", dateFormat)
-const toLabel = summary.to.toLocaleDateString("en-US", dateFormat)
+  const fromLabel = formatReportDate(summary.from)
+const toLabel = formatReportDate(summary.to)
   const generatedLabel = summary.generatedAt.toLocaleString()
 
   const resolutionLabel =
@@ -87,6 +90,10 @@ const toLabel = summary.to.toLocaleDateString("en-US", dateFormat)
             "  html, body { overflow: visible !important; }",
             "  header, nav, .no-print, [role='navigation'], [data-print-hidden='true'] { display: none !important; }",
             "  .print-only { display: block !important; }",
+            // The console's top bar is a div, so the rule above misses it; the
+            // shell's border and padding would frame every sheet.
+            "  .adm-topbar { display: none !important; }",
+            "  .adm-canvas, .adm-shell, .adm-body { border: 0 !important; padding: 0 !important; margin: 0 !important; border-radius: 0 !important; max-width: none !important; }",
             "  main, .report-shell, section, div, table, tr, td, th { overflow: visible !important; position: static !important; }",
             "  html, body, main, .report-shell { height: auto !important; max-height: none !important; }",
             "  main { padding: 0 !important; max-width: none !important; margin: 0 !important; width: auto !important; }",
@@ -113,7 +120,25 @@ const toLabel = summary.to.toLocaleDateString("en-US", dateFormat)
             // Each section is its own two-column grid, and the card is the
             // atomic unit: break-inside: avoid so a tile or a table row is never
             // split.
-            "  .report-grid { display: grid !important; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) !important; gap: 8px !important; align-items: start !important; }",
+            // SIX TRACKS, so two widths share one grid: a chart spans three
+            // (two across) and a number tile spans two (three across). With
+            // tiles and charts both at half width, a short tile sat beside a
+            // tall chart and left a hole under it on every sheet. A tile that
+            // is alone ahead of its section's charts becomes a full-width
+            // strip instead of a third of a row. The trend chart's inline
+            // `grid-column: 1 / -1` still wins over the un-!important span.
+            "  .report-grid { display: grid !important; grid-template-columns: repeat(6, minmax(0, 1fr)) !important; gap: 8px !important; align-items: start !important; }",
+            "  .report-grid > * { grid-column: span 3; }",
+            "  .report-grid > .report-tile { grid-column: span 2 !important; }",
+            // ...and that strip is ONE LINE (label, number, hint side by side).
+            // Stacked, it was a tall, mostly empty card; the height it wasted
+            // was what pushed the section's charts onto the next sheet and
+            // left the rest of this one blank.
+            "  .report-grid > .report-tile:first-child:has(+ :not(.report-tile)) { grid-column: 1 / -1 !important; display: flex !important; align-items: baseline !important; gap: 10px !important; padding: 6px 10px !important; }",
+            "  .report-grid > .report-tile:first-child:has(+ :not(.report-tile)) > div { margin-top: 0 !important; }",
+            "  .report-grid > .report-donut-chart { grid-column: 1 / -1 !important; }",
+            "  .report-tile-value { font-size: 22px !important; margin-top: 2px !important; }",
+            "  .report-tile > div:last-child { margin-top: 2px !important; font-size: 10px !important; }",
             "  .report-grid > * { padding: 8px !important; min-width: 0 !important; break-inside: avoid !important; page-break-inside: avoid !important; }",
             // A RANK TABLE NEEDS THE WHOLE WIDTH. Four columns ("Hub", "Type",
             // "State", "Meetups") in one ~294px half-column is unreadably
@@ -145,8 +170,23 @@ const toLabel = summary.to.toLocaleDateString("en-US", dateFormat)
             // so shrinking them for the narrow print column is a CSS height
             // override, not a layout change -- nothing about the SVG's own
             // coordinate system needs to know it's printing.
-            "  .report-trend-chart svg { height: 130px !important; }",
-            "  .report-trend-chart text { font-size: 8px !important; }",
+            "  .report-trend-chart svg { height: 115px !important; }",
+            "  .report-column-plot { height: 90px !important; }",
+            // ColumnChart opts out of the BarChart row rules above: its bars
+            // are flex shares of the plot and its labels sit under them. It
+            // also needs its positioning back -- the blanket
+            // `div { position: static }` reset above otherwise drops the axis
+            // labels in the page corner and collapses the plot -- and room
+            // above the plot for the value printed over the tallest bar.
+            "  .report-grid .report-column-plot { position: relative !important; }",
+            "  .report-grid .report-column-plot > div { position: absolute !important; }",
+            "  .report-grid > section.report-column-chart > div { margin-top: 18px !important; }",
+            "  .report-grid .report-column-chart [role='img'] { min-width: 0 !important; }",
+            "  .report-grid section.report-column-chart > div > div > span:first-child { width: auto !important; }",
+            "  .report-trend-chart text { font-size: 15px !important; }",
+            // Narrow slots on paper: a smaller label keeps "Electronics" on one line.
+            "  .report-column-labels span { font-size: 8px !important; }",
+            "  .report-column-labels, .report-column-plot > div:last-child { gap: 4px !important; padding: 0 4px !important; }",
             "  .report-donut-chart svg { width: 96px !important; height: 96px !important; }",
             // TABLES IN A HALF-COLUMN. A RankTable cell is white-space: nowrap
             // on screen, which is right when the card is full width. In a
@@ -183,7 +223,7 @@ const toLabel = summary.to.toLocaleDateString("en-US", dateFormat)
       </div>
       <div className="report-head" style={{ display: "flex", justifyContent: "space-between", alignItems: "start", gap: 16, flexWrap: "wrap" }}>
         <div style={{ minWidth: 0 }}>
-          <h1 style={{ fontSize: 30, fontWeight: 700, letterSpacing: "-0.02em", color: "var(--adm-text)" }}>Overall report</h1>
+          <h1 style={{ fontSize: 30, fontWeight: 700, letterSpacing: "-0.02em", color: "var(--adm-text)" }}>Platform reports</h1>
           <p style={{ fontSize: 14, fontWeight: 500, color: "var(--adm-text-secondary)", marginTop: 6, maxWidth: "72ch", lineHeight: 1.6 }}>
             {summary.windowLabel} ({fromLabel} to {toLabel}). Every figure is counted in the database,
             not on this screen.
@@ -201,7 +241,10 @@ const toLabel = summary.to.toLocaleDateString("en-US", dateFormat)
       {/* ── Filters ─────────────────────────── */}
       <ReportControls
         options={WINDOW_OPTIONS.map((option) => ({ days: option.days, label: option.label }))}
-        activeDays={days}
+        activeDays={custom ? 0 : days}
+        from={reportDateInputValue(summary.from)}
+        to={reportDateInputValue(summary.to)}
+        max={reportDateInputValue(summary.generatedAt)}
       />
 
       {/* ── Community ───────────────────────── */}
@@ -245,7 +288,7 @@ const toLabel = summary.to.toLocaleDateString("en-US", dateFormat)
             primary={{ points: summary.usersByMonth, color: "var(--adm-accent)", label: "New accounts" }}
             secondary={{ points: summary.reportsByMonth, color: "var(--adm-accent-2)", label: "Reports filed" }}
           />
-          <BarChart
+          <ColumnChart
             title="Leaf movement per month"
             caption="Total Leaves moved, credits and debits together -- the size of the economy, not the balance of it."
             points={summary.leavesByMonth}
@@ -266,15 +309,7 @@ const toLabel = summary.to.toLocaleDateString("en-US", dateFormat)
         <h2 style={sectionHeading}>Safe-Zone meetups</h2>
         <div className="report-grid" style={gridStyle}>
           <StatTile label="Active hubs" value={t.hubsActive} hint={t.hubsInactive + " inactive"} />
-          <BarChart
-            title="Meetups arranged, by hub"
-            caption="Where trades have planned to meet, all time. This is the direct answer to which hub people actually choose."
-            points={summary.hubPlans}
-            color={SERIES_COLOR}
-            limit={10}
-            emptyLabel="No trade has arranged a meetup hub yet."
-          />
-          <BarChart
+          <ColumnChart
             title="Meetups arranged, by hub type"
             caption="The shape of the answer when somebody asks what kind of place to add next."
             points={summary.hubByType}
@@ -317,14 +352,14 @@ const toLabel = summary.to.toLocaleDateString("en-US", dateFormat)
         <h2 style={sectionHeading}>Listings</h2>
         <div className="report-grid" style={gridStyle}>
           <StatTile label="Posted in period" value={t.listingsInWindow} hint={summary.windowLabel.toLowerCase()} />
-          <BarChart
+          <ColumnChart
             title="Listings by category"
             caption="All time, what the marketplace actually holds."
             points={summary.listingsByCategory}
             color={SERIES_COLOR}
             emptyLabel="No listings have been posted."
           />
-          <BarChart
+          <ColumnChart
             title="Listings by condition"
             caption="All time. A marketplace of nothing but used goods tells you something about the supply."
             points={summary.listingsByCondition}
@@ -375,12 +410,23 @@ const toLabel = summary.to.toLocaleDateString("en-US", dateFormat)
             emptyLabel="No admin actions were taken in this period."
           />
           <RankTable
-            title="Actions per staff account"
-            caption="Admin actions in the period. Read it as workload, not as a ranking of anyone."
-            columns={["Staff account", "Role", "Actions"]}
+            title="What each admin did"
+            caption="Decisions each admin made in the period, by kind. Read it as workload, not as a ranking of anyone."
+            columns={["Admin", "What they did", "Total"]}
             rows={summary.actionsByActor.map((actor) => ({
-              key: actor.name + actor.role,
-              cells: [actor.name, actor.role, actor.count],
+              key: actor.id,
+              cells: [
+                actor.name,
+                <ul key="breakdown" style={{ listStyle: "none", margin: 0, padding: 0, display: "grid", gap: 4, whiteSpace: "normal" }}>
+                  {actor.breakdown.map((kind) => (
+                    <li key={kind.label} style={{ display: "flex", justifyContent: "space-between", gap: 16 }}>
+                      <span>{kind.label}</span>
+                      <span style={{ fontVariantNumeric: "tabular-nums", color: "var(--adm-text)" }}>{kind.count.toLocaleString()}</span>
+                    </li>
+                  ))}
+                </ul>,
+                actor.count,
+              ],
             }))}
             emptyLabel="No admin actions were taken in this period."
           />

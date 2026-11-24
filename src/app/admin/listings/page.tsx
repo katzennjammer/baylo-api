@@ -6,10 +6,12 @@ import { valueCap } from "@/lib/trade-rules"
 import { VALUE_REJECTION_REASONS } from "@/lib/value-rejection"
 import { categoryLabel } from "@/lib/v1/taxonomy"
 import ListingActions from "./ListingActions"
+import { moderationLabel } from "./moderation-label"
 import { TakedownDisclosure } from "./TakedownDisclosure"
 import { FilterChips } from "@/components/admin/FilterChips"
 import { StaggerGroup, StaggerItem } from "@/components/admin/Stagger"
 import UrlSyncedForm from "@/components/admin/primitives/UrlSyncedForm"
+import { adminThumb } from "@/lib/admin-display"
 
 export const dynamic = "force-dynamic"
 export const revalidate = 0
@@ -22,21 +24,6 @@ const STATUSES = ["available", "pending_review", "value_rejected", "in_trade", "
 type StatusFilter = (typeof STATUSES)[number]
 type ItemStatus = "AVAILABLE" | "IN_TRADE" | "TRADED" | "OWNED" | "REMOVED" | "PENDING_REVIEW" | "VALUE_REJECTED"
 
-/**
- * The Moderation column, in words that say who the listing is waiting on.
- *
- * "Visible" used to be the answer for anything not hidden, which on a
- * PENDING_REVIEW row was a lie: nobody but the owner could see it. Hidden
- * wins over the review states because it is the one an owner cannot undo by
- * editing.
- */
-function moderationLabel(status: string, hidden: boolean): { text: string; color: string } {
-  if (hidden) return { text: "Hidden", color: "#b91c1c" }
-  if (status === "PENDING_REVIEW") return { text: "Waiting for review", color: "#b45309" }
-  if (status === "VALUE_REJECTED") return { text: "Value rejected — owner choosing", color: "#7c2d12" }
-  if (status === "AVAILABLE") return { text: "Visible", color: "#15803d" }
-  return { text: "Not listed", color: "#666" }
-}
 
 
 export default async function ListingsPage({ searchParams }: Props) {
@@ -66,6 +53,7 @@ export default async function ListingsPage({ searchParams }: Props) {
       id: true, title: true, category: true, status: true, moderationHiddenAt: true, valueRejectionReason: true,
       createdAt: true, valueLeaves: true, suggestedLeaves: true, valueSetByUser: true,
       user: { select: { id: true, name: true, email: true } },
+      images: { select: { url: true }, orderBy: { position: "asc" }, take: 1 },
     },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take: 100,
@@ -87,8 +75,8 @@ export default async function ListingsPage({ searchParams }: Props) {
         </p>
       </div>
       <UrlSyncedForm action="/admin/listings" style={{ display: "flex", gap: 8, maxWidth: 620 }}>
-        <input name="q" defaultValue={q} placeholder="Search title or owner" style={{ flex: 1, padding: "10px 12px", borderRadius: 9, border: "1px solid rgba(0,0,0,.16)", fontSize: 14 }} />
-        <button type="submit" style={{ padding: "10px 16px", border: 0, borderRadius: 9, background: "#17201b", color: "#fff", fontWeight: 700 }}>Search</button>
+        <input name="q" defaultValue={q} placeholder="Search title or owner" style={{ flex: 1, padding: "10px 12px", borderRadius: 9, border: "1px solid var(--adm-border-control)", fontSize: 14 }} />
+        <button type="submit" style={{ padding: "10px 16px", border: 0, borderRadius: 9, background: "var(--adm-text)", color: "var(--adm-shell)", fontWeight: 700 }}>Search</button>
       </UrlSyncedForm>
       <FilterChips
         groupId="status"
@@ -102,11 +90,11 @@ export default async function ListingsPage({ searchParams }: Props) {
         ]}
       />
       {listings.length === 0 ? (
-        <p style={{ padding: 32, textAlign: "center", background: "#fff", borderRadius: 14, color: "#888" }}>No listings found.</p>
+        <p style={{ padding: 32, textAlign: "center", background: "var(--adm-panel)", borderRadius: 14, color: "var(--adm-text-muted)" }}>No listings found.</p>
       ) : (
-        <div style={{ background: "#fff", borderRadius: 14, border: "1px solid rgba(0,0,0,.08)", overflowX: "auto" }}>
+        <div style={{ background: "var(--adm-panel)", borderRadius: 14, border: "1px solid var(--adm-border)", overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 1000, fontSize: 13 }}>
-            <thead><tr style={{ textAlign: "left", color: "#888", fontSize: 12 }}>
+            <thead><tr style={{ textAlign: "left", color: "var(--adm-text-muted)", fontSize: 12 }}>
               <th style={{ padding: "12px 14px" }}>Listing</th>
               <th style={{ padding: "12px 14px" }}>Category</th>
               <th style={{ padding: "12px 14px" }}>Owner</th>
@@ -128,10 +116,33 @@ export default async function ListingsPage({ searchParams }: Props) {
                     index={index}
                     key={listing.id}
                     className="admin-row-hover"
-                    style={{ borderTop: "1px solid rgba(0,0,0,.06)", verticalAlign: "top" }}
+                    style={{ borderTop: "1px solid var(--adm-border)", verticalAlign: "top" }}
                   >
                     <td style={{ padding: "14px" }}>
-                      <Link href={`/listings/${listing.id}`} style={{ color: "#21643d", fontWeight: 700 }}>{listing.title}</Link>
+                      <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
+                      {/*
+                        The admin detail page, NOT /listings/<id>: that is the
+                        retired user web app, whose guard sends every admin to
+                        /admin/dashboard -- which is how clicking a listing here
+                        used to land on Overview.
+                      */}
+                      <Link href={`/admin/listings/${listing.id}`} aria-hidden tabIndex={-1} style={{ flexShrink: 0 }}>
+                        {listing.images[0] ? (
+                          // eslint-disable-next-line @next/next/no-img-element
+                          <img
+                            src={adminThumb(listing.images[0].url, 96)}
+                            alt=""
+                            width={48}
+                            height={48}
+                            loading="lazy"
+                            style={{ width: 48, height: 48, borderRadius: 8, objectFit: "cover", display: "block", border: "1px solid var(--adm-border)" }}
+                          />
+                        ) : (
+                          <div style={{ width: 48, height: 48, borderRadius: 8, background: "var(--adm-border)" }} />
+                        )}
+                      </Link>
+                      <div>
+                      <Link href={`/admin/listings/${listing.id}`} style={{ color: "var(--adm-good)", fontWeight: 700 }}>{listing.title}</Link>
                       {/*
                         BOTH numbers, always. The one the model suggested and the
                         one the owner listed at are different facts, and the gap
@@ -139,32 +150,34 @@ export default async function ListingsPage({ searchParams }: Props) {
                         whether a listing is priced honestly. A listing that went
                         to review shows it here as well as in the queue.
                       */}
-                      <div style={{ color: "#777", marginTop: 4 }}>
+                      <div style={{ color: "var(--adm-text-muted)", marginTop: 4 }}>
                         {requested?.toLocaleString() ?? "—"} Leaves
-                        {requested !== null ? <span style={{ color: "#999" }}> · bracket {bracketOf(requested)}</span> : null}
+                        {requested !== null ? <span style={{ color: "var(--adm-text-muted)" }}> · bracket {bracketOf(requested)}</span> : null}
                         {listing.valueSetByUser ? (
-                          <span style={{ color: "#b45309", fontWeight: 700 }}> · owner-set</span>
+                          <span style={{ color: "var(--adm-queue)", fontWeight: 700 }}> · owner-set</span>
                         ) : null}
                       </div>
                       {suggested !== null && suggested !== requested ? (
-                        <div style={{ color: "#aaa", fontSize: 12, marginTop: 2 }}>
+                        <div style={{ color: "var(--adm-text-muted)", fontSize: 12, marginTop: 2 }}>
                           suggested {suggested.toLocaleString()} · bracket {bracketOf(suggested)}
                           {cap !== null ? ` · live without review up to ${cap}` : ""}
                         </div>
                       ) : null}
                       {listing.status === "VALUE_REJECTED" && listing.valueRejectionReason ? (
-                        <div style={{ color: "#7c2d12", fontSize: 12, marginTop: 2 }}>
+                        <div style={{ color: "var(--adm-warn)", fontSize: 12, marginTop: 2 }}>
                           rejected: {VALUE_REJECTION_REASONS[listing.valueRejectionReason]?.label ?? listing.valueRejectionReason}
                         </div>
                       ) : null}
+                      </div>
+                      </div>
                     </td>
                     <td style={{ padding: "14px", whiteSpace: "nowrap" }}>{categoryLabel(listing.category)}</td>
                     <td style={{ padding: "14px" }}>
                       <strong>{listing.user.name}</strong>
-                      <div style={{ color: "#777", marginTop: 3 }}>{listing.user.email}</div>
+                      <div style={{ color: "var(--adm-text-muted)", marginTop: 3 }}>{listing.user.email}</div>
                     </td>
                     <td style={{ padding: "14px" }}>{listing.status}</td>
-                    <td style={{ padding: "14px", color: "#666", whiteSpace: "nowrap" }}>{listing.createdAt.toLocaleDateString()}</td>
+                    <td style={{ padding: "14px", color: "var(--adm-text-secondary)", whiteSpace: "nowrap" }}>{listing.createdAt.toLocaleDateString()}</td>
                     <td style={{ padding: "14px" }}>
                       <div style={{ color: label.color, fontWeight: 700, marginBottom: 6 }}>
                         {label.text}
@@ -177,7 +190,7 @@ export default async function ListingsPage({ searchParams }: Props) {
                       */}
                       {inReview ? (
                         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                          <Link href="/admin/review-queue" style={{ color: "#21643d", fontWeight: 700 }}>
+                          <Link href="/admin/review-queue" style={{ color: "var(--adm-good)", fontWeight: 700 }}>
                             Review value in queue →
                           </Link>
                           {canAct ? (

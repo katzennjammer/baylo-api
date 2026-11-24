@@ -1,4 +1,4 @@
-import sharp from "sharp"
+import sharp, { type Metadata } from "sharp"
 
 /**
  * Turns an uploaded byte buffer into an image we are willing to store, or
@@ -25,8 +25,39 @@ import sharp from "sharp"
  * address is for the bytes we upload not to contain one.
  */
 
-/** Formats we are prepared to decode and re-encode. */
-const ALLOWED_FORMATS = new Set(["jpeg", "jpg", "png", "webp", "gif", "avif", "tiff"])
+/**
+ * Formats we are prepared to decode and re-encode, identified by their first
+ * bytes BEFORE sharp parses anything. Asking sharp for metadata first meant
+ * every decoder libvips ships (TIFF, AVIF/HEIF, SVG, ...) parsed attacker bytes
+ * before the allow-list said no, and those decoders are where sharp's CVEs
+ * live. TIFF and AVIF are gone: the app never sends them.
+ *
+ * HEIC (iPhone/Android camera default) is recognised so it can be refused with
+ * a reason: sharp's prebuilt libvips carries no HEVC decoder, so it reads the
+ * header and then fails to decode. Measured on 0.34.5 and 0.35.5 alike. The
+ * app has to send those as JPEG.
+ */
+type SniffedFormat = "jpeg" | "png" | "webp" | "gif" | "heic"
+
+export function sniffImageFormat(b: Buffer): SniffedFormat | null {
+  if (b.length < 12) return null
+  if (b[0] === 0xff && b[1] === 0xd8 && b[2] === 0xff) return "jpeg"
+  if (b.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))) return "png"
+  const head = b.subarray(0, 6).toString("latin1")
+  if (head === "GIF87a" || head === "GIF89a") return "gif"
+  if (b.subarray(0, 4).toString("latin1") === "RIFF" && b.subarray(8, 12).toString("latin1") === "WEBP") return "webp"
+  // ISO-BMFF: an "ftyp" box listing brands -- the major one at 8, compatible
+  // ones from 16. Phones write HEIC as major "heic" or as "mif1" with "heic"
+  // compatible, so the whole list is read. AVIF shares the container; its
+  // brands are not in this list, so it falls through to null.
+  if (b.subarray(4, 8).toString("latin1") === "ftyp") {
+    const end = Math.min(b.readUInt32BE(0), b.length)
+    const brands = [b.subarray(8, 12).toString("latin1")]
+    for (let i = 16; i + 4 <= end; i += 4) brands.push(b.subarray(i, i + 4).toString("latin1"))
+    if (brands.some((x) => ["heic", "heix", "hevc", "hevx", "heim", "heis"].includes(x))) return "heic"
+  }
+  return null
+}
 
 /** Anything larger is re-encoded down; also caps decode cost. */
 const MAX_DIMENSION = 4096
@@ -39,18 +70,23 @@ export interface SanitizedImage {
 }
 
 export async function sanitizeImage(input: Buffer): Promise<SanitizedImage> {
+  const sniffed = sniffImageFormat(input)
+  if (sniffed === "heic") throw new Error("heic_unsupported")
+  if (!sniffed) throw new Error("unsupported_format")
+
   // `failOn: "none"` keeps sharp from rejecting images that merely carry
-  // warnings; the format check below is what decides acceptance.
+  // warnings; the byte check above is what decides acceptance.
   const image = sharp(input, { failOn: "none", limitInputPixels: 268_402_689 })
 
-  let meta: sharp.Metadata
+  let meta: Metadata
   try {
     meta = await image.metadata()
   } catch {
     throw new Error("not_an_image")
   }
 
-  if (!meta.format || !ALLOWED_FORMATS.has(meta.format)) {
+  // The decoder sharp chose must be the one the bytes claimed.
+  if (meta.format !== sniffed) {
     throw new Error("unsupported_format")
   }
   if (!meta.width || !meta.height) {

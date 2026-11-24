@@ -54,7 +54,7 @@ export default function ListingActions({
         placeholder="Reason required"
         maxLength={1000}
         disabled={!canAct || busy}
-        style={{ padding: "7px 9px", borderRadius: 7, border: "1px solid rgba(0,0,0,.16)", fontSize: 12 }}
+        style={{ padding: "7px 9px", borderRadius: 7, border: "1px solid var(--adm-border-control)", fontSize: 12 }}
       />
       <button
         ref={buttonRef}
@@ -67,8 +67,8 @@ export default function ListingActions({
           padding: "8px 10px",
           border: 0,
           borderRadius: 7,
-          background: hidden ? "#e4f2e8" : "#fee2e2",
-          color: hidden ? "#21643d" : "#991b1b",
+          background: hidden ? "var(--adm-good-bg)" : "var(--adm-warn-bg)",
+          color: hidden ? "var(--adm-good)" : "var(--adm-warn)",
           fontWeight: 700,
           cursor: canAct && !busy ? "pointer" : "not-allowed",
           opacity: canAct ? 1 : 0.55,
