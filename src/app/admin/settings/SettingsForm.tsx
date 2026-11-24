@@ -1,6 +1,6 @@
 "use client"
 
-import { useEffect, useState } from "react"
+import { useEffect, useState, useSyncExternalStore } from "react"
 import toast from "react-hot-toast"
 import { DENSITY_KEY, LANDING_COOKIE, REPORT_DAYS_COOKIE, THEME_KEY } from "../pref-keys"
 import { usePref, writePref, writePrefCookie } from "../prefs"
@@ -44,9 +44,12 @@ const button: React.CSSProperties = {
 }
 
 /** A small set of mutually exclusive choices, as native radios in a pill row. */
-function Choice({ name, value, options, onChange }: { name: string; value: string; options: Option[]; onChange: (value: string) => void }) {
+function Choice({ name, value, options, onChange, local }: { name: string; value: string; options: Option[]; onChange: (value: string) => void; local?: boolean }) {
+  // `local` choices live in localStorage, which the server can't read, so its
+  // HTML marks the default. Hide them until hydrated rather than show a wrong one.
+  const hydrated = useSyncExternalStore(() => () => {}, () => true, () => false)
   return (
-    <div role="radiogroup" style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+    <div role="radiogroup" style={{ display: "flex", gap: 6, flexWrap: "wrap", visibility: local && !hydrated ? "hidden" : undefined }}>
       {options.map((option) => {
         const active = option.value === value
         return (
@@ -178,6 +181,7 @@ export default function SettingsForm({
           <span style={rowLabel}>Theme</span>
           <Choice
             name="theme"
+            local
             value={theme}
             options={[
               { value: "light", label: "Light" },
@@ -194,6 +198,7 @@ export default function SettingsForm({
           </span>
           <Choice
             name="density"
+            local
             value={density}
             options={[
               { value: "comfortable", label: "Comfortable" },

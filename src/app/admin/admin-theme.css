@@ -207,34 +207,34 @@
   background: var(--adm-bg);
   display: flex;
   justify-content: center;
-  padding: 24px;
+  padding: 12px;
 }
-@media (max-width: 1279px) { .admin-root .adm-canvas { padding: 20px; } }
+@media (max-width: 1279px) { .admin-root .adm-canvas { padding: 12px; } }
 @media (max-width: 1023px) { .admin-root .adm-canvas { padding: 12px; } }
 @media (max-width: 639px)  { .admin-root .adm-canvas { padding: 0; } }
 
 .admin-root .adm-shell {
   width: 100%;
-  max-width: 1440px;
+  max-width: 1920px;
   min-width: 0;
   background: var(--adm-shell);
   border: 1px solid var(--adm-shell-border);
-  border-radius: 36px;
-  padding: 28px;
+  border-radius: 28px;
+  padding: 18px;
   display: flex;
   flex-direction: column;
-  gap: 28px;
+  gap: 18px;
 }
-@media (max-width: 1279px) { .admin-root .adm-shell { padding: 24px; border-radius: 32px; gap: 24px; } }
-@media (max-width: 1023px) { .admin-root .adm-shell { padding: 20px; border-radius: 28px; gap: 24px; } }
+@media (max-width: 1279px) { .admin-root .adm-shell { padding: 16px; border-radius: 24px; gap: 16px; } }
+@media (max-width: 1023px) { .admin-root .adm-shell { padding: 16px; border-radius: 24px; gap: 16px; } }
 @media (max-width: 639px)  { .admin-root .adm-shell { padding: 16px; border-radius: 0; gap: 20px; } }
 
-.admin-root .adm-body { display: flex; gap: 28px; align-items: flex-start; min-width: 0; }
-@media (max-width: 1023px) { .admin-root .adm-body { gap: 24px; } }
+.admin-root .adm-body { display: flex; gap: 18px; align-items: flex-start; min-width: 0; }
+@media (max-width: 1023px) { .admin-root .adm-body { gap: 16px; } }
 
 /* The content area. Text with no colour of its own inherits the theme ink;
    every admin page now draws its surfaces from the --adm-* tokens. */
-.admin-root .adm-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 32px; overflow-x: hidden; color: var(--adm-text); }
+.admin-root .adm-main { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 20px; overflow-x: hidden; color: var(--adm-text); }
 
 .admin-root .adm-topbar { display: flex; align-items: center; gap: 16px; flex-wrap: nowrap; min-width: 0; }
 

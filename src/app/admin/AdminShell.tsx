@@ -24,7 +24,7 @@ import {
   type LucideIcon,
 } from "lucide-react"
 import AccountMenu from "./AccountMenu"
-import { DENSITY_KEY } from "./pref-keys"
+import { DENSITY_KEY, THEME_KEY } from "./pref-keys"
 import { usePref, useResolvedTheme } from "./prefs"
 import RailTooltip from "@/components/admin/primitives/RailTooltip"
 
@@ -364,7 +364,14 @@ export default function AdminShell({
   }, [drawerOpen])
 
   return (
-    <div className={`admin-root ${fontVariables}`} data-theme={theme} data-density={density}>
+    <div className={`admin-root ${fontVariables}`} data-theme={theme} data-density={density} suppressHydrationWarning>
+      {/* Runs while the HTML is parsed, before first paint: the server can't read
+          localStorage, so without this the console flashes dark until hydration. */}
+      <script
+        dangerouslySetInnerHTML={{
+          __html: `try{var r=document.currentScript.parentElement,t=localStorage.getItem(${JSON.stringify(THEME_KEY)}),d=localStorage.getItem(${JSON.stringify(DENSITY_KEY)});if(t==="system")t=matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";if(t==="light"||t==="dark")r.setAttribute("data-theme",t);if(d)r.setAttribute("data-density",d)}catch(e){}`,
+        }}
+      />
       <div className="adm-canvas">
         <a href="#adm-main" className="adm-skip-link">
           Skip to content
