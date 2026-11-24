@@ -32,24 +32,27 @@ const ROUTES: [string, string[]][] = [
 
 beforeEach(reset)
 
-for (const [route, methods] of ROUTES) {
-  for (const method of methods) {
-    const label = `${method} /api/admin/${route}`
-    c("Admin Access", `Visitor who is not signed in calls ${label}`, "Refused with 401 UNAUTHENTICATED; the database is never touched", async () => {
-      const mod = await import(`@/app/api/admin/${route}/route`)
-      const res = await call(mod[method], method, {})
-      assert.equal(res.status, 401)
-      assert.equal((await res.json()).code, "UNAUTHENTICATED")
-    })
-    c("Admin Access", `Signed-in non-admin member calls ${label}`, "Refused with 403 FORBIDDEN; the database is never touched", async () => {
-      signInAs(member())
-      const mod = await import(`@/app/api/admin/${route}/route`)
-      const res = await call(mod[method], method, {})
-      assert.equal(res.status, 403)
-      assert.equal((await res.json()).code, "FORBIDDEN")
-    })
+const ALL = ROUTES.flatMap(([route, methods]) => methods.map((method) => ({ route, method, label: `${method} /api/admin/${route}` })))
+
+c("Admin Access", "Visitor who is not signed in calls any of the 20 admin endpoints", "Every endpoint refuses with 401 UNAUTHENTICATED and the database is never touched", async () => {
+  for (const { route, method, label } of ALL) {
+    reset()
+    const mod = await import(`@/app/api/admin/${route}/route`)
+    const res = await call(mod[method], method, {})
+    assert.equal(res.status, 401, label)
+    assert.equal((await res.json()).code, "UNAUTHENTICATED", label)
   }
-}
+})
+c("Admin Access", "Signed-in non-admin member calls any of the 20 admin endpoints", "Every endpoint refuses with 403 FORBIDDEN and the database is never touched", async () => {
+  for (const { route, method, label } of ALL) {
+    reset()
+    signInAs(member())
+    const mod = await import(`@/app/api/admin/${route}/route`)
+    const res = await call(mod[method], method, {})
+    assert.equal(res.status, 403, label)
+    assert.equal((await res.json()).code, "FORBIDDEN", label)
+  }
+})
 
 c("Admin Access", "Admin role was revoked after the session was issued", "Role is re-read from the database, so the request is refused (403)", async () => {
   // The session says user-1 exists; the database now says USER.
