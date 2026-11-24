@@ -42,23 +42,17 @@ export default async function* reporter(source) {
   const rank = (m) => { const i = MODULE_ORDER.indexOf(m); return i === -1 ? 99 : i; };
   rows.sort((a, b) => rank(a.module) - rank(b.module) || a.file.localeCompare(b.file) || a.line - b.line);
 
-  const counters = new Map();
-  for (const r of rows) {
-    const n = (counters.get(r.module) ?? 0) + 1;
-    counters.set(r.module, n);
-    r.id = `Case-${String(n).padStart(3, "0")}`;
-  }
+  // Case IDs run continuously down the whole table, like a thesis test table.
+  let n = 0;
+  for (const r of rows) r.id = `Case-${String(++n).padStart(3, "0")}`;
+  const counters = new Map(rows.map((r) => [r.module, 1]));
 
   const head = "| Proponent | Module Name | Unit Name | Date Tested | Test Case ID | Test Case Description | Expected Result | Actual Result | Result |\n|---|---|---|---|---|---|---|---|---|";
   const line = (r) => `| ${esc(PROPONENT)} | ${esc(r.module)} | ${esc(r.unit)} | ${DATE} | ${r.id} | ${esc(r.description)} | ${esc(r.expected)} | ${esc(r.actual)} | ${r.result} |`;
 
   const passed = rows.filter((r) => r.result === "PASSED").length;
   let md = `# Unit Testing Report\n\nGenerated ${DATE}. ${rows.length} cases, ${passed} passed, ${rows.length - passed} failed.\n`;
-  let t = 0;
-  for (const m of [...counters.keys()]) {
-    t++;
-    md += `\n## Table ${t}: Unit Testing — ${m}\n\n${head}\n${rows.filter((r) => r.module === m).map(line).join("\n")}\n`;
-  }
+  md += `\n## Table 1: Unit Testing\n\n${head}\n${rows.map(line).join("\n")}\n`;
 
   const header = ["Proponent", "Module Name", "Unit Name", "Date Tested", "Test Case ID", "Test Case Description", "Expected Result", "Actual Result", "Result"];
   const csvText = [header.map(csv).join(","), ...rows.map((r) => [PROPONENT, r.module, r.unit, DATE, r.id, r.description, r.expected, r.actual, r.result].map(csv).join(","))].join("\n");
