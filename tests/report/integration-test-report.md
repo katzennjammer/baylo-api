@@ -1,0 +1,16 @@
+# Integration Testing Report
+
+Generated 11/24/2026. 8 cases, 8 passed, 0 failed.
+
+## Table 1: Integration Testing
+
+| Proponent | Test Case ID | Module 1 | Integration Process | Module 2 | Pre-condition | Expected Result | Result | Remarks |
+|---|---|---|---|---|---|---|---|---|
+| — | IntegTestCase-01 | User Suspension | Test integration when an admin suspends a member, the member's session stops being accepted | Access Control | Member is signed in and not suspended; an admin is signed in | Verify the member is treated as a signed-in non-admin (403) before and as signed out (401) after the suspension | Performed as expected | PASSED |
+| — | IntegTestCase-02 | User Suspension | Test integration when an admin lifts a suspension, the member's access returns | Access Control | Member is suspended indefinitely; an admin is signed in | Verify the member is refused as signed out (401) while suspended and accepted again as a signed-in member (403 for admin pages) after the lift | Performed as expected | PASSED |
+| — | IntegTestCase-03 | User Suspension | Test integration when an admin suspends the same member twice, the first suspension is remembered | Moderation Rules | Member is already suspended by an earlier request | Verify the second request is refused with 409 ALREADY_SUSPENDED and only one suspension is stored | Performed as expected | PASSED |
+| — | IntegTestCase-04 | User Suspension | Test integration when a member is suspended, lifted and suspended again, the suspension level and audit trail follow | Audit Log | Member has no earlier suspensions | Verify levels 1 and 2 are recorded and the audit log reads USER_SUSPENDED, USER_UNSUSPENDED, USER_SUSPENDED in order | Performed as expected | PASSED |
+| — | IntegTestCase-05 | User Suspension | Test integration when a suspended member tries to sign in, the refusal carries what the admin entered | Sign-in Refusal | An admin suspended the member for 7 days with the reason 'Spam listings' | Verify the 403 body has code ACCOUNT_SUSPENDED with the same reason, level 1 and an end date about 7 days ahead | Performed as expected | PASSED |
+| — | IntegTestCase-06 | Report Review | Test integration when two admins mark the same report as 'reviewing', the second is told it is already being reviewed | Audit Log | An open report exists | Verify the first request moves the report to REVIEWING with one audit entry and the second is refused with 409 | Performed as expected | PASSED |
+| — | IntegTestCase-07 | Admin Access | Test integration when an admin's role is removed while still signed in, the next request is refused | User Roles | Admin is signed in and has just used the admin pages | Verify the first request passes the gate and, after the role changes to member, the same session is refused with 403 | Performed as expected | PASSED |
+| — | IntegTestCase-08 | Client Address | Test integration when people behind a trusted proxy sign up, each address gets its own rate limit | Rate Limit | Requests arrive through Cloudflare from two different addresses and the limit is 3 per hour | Verify the first address is blocked on its 4th request while the second address is still allowed | Performed as expected | PASSED |

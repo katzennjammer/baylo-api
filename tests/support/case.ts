@@ -18,3 +18,16 @@ export function suite(moduleName: string) {
     test([moduleName, unit, description, expected].join(SEP), fn);
   };
 }
+
+/**
+ * One row of the integration-testing table: two modules working together.
+ *
+ *   integration("Register Process", "Test integration when ...", "Saving Management",
+ *     "Pre-condition ...", "Expected result ...", () => { ... });
+ */
+export function integration(
+  module1: string, process: string, module2: string, precondition: string, expected: string,
+  fn: () => void | Promise<void>,
+) {
+  test(["INTEG", module1, process, module2, precondition, expected].join(SEP), fn);
+}

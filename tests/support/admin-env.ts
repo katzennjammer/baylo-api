@@ -43,9 +43,15 @@ export function signInAs(user: FakeUser) {
 
 const txBase: Record<string, unknown> = {
   suspension: {
-    count: async () => env.suspensionCount,
-    create: async (a: { data: unknown }) => void env.created.push(a.data),
-    updateMany: async () => void env.lifted++,
+    count: async () => env.suspensionCount + env.created.length,
+    create: async (a: { data: { userId: string; reason: string; startsAt: Date; endsAt: Date | null; level: number } }) => {
+      env.created.push(a.data)
+      env.users[a.data.userId]?.suspensions.push({ startsAt: a.data.startsAt, endsAt: a.data.endsAt, liftedAt: null, reason: a.data.reason, level: a.data.level })
+    },
+    updateMany: async (a: { where: { userId: string }; data: { liftedAt: Date } }) => {
+      env.lifted++
+      for (const sus of env.users[a.where.userId]?.suspensions ?? []) if (!sus.liftedAt) sus.liftedAt = a.data.liftedAt
+    },
   },
   adminAction: {
     create: async (a: { data: { action: string; targetId: string; reason: string; detail: string | null } }) =>

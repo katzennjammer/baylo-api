@@ -14,7 +14,8 @@
     "start:lan": "next start -H 0.0.0.0",
     "lint": "eslint",
     "test": "node --experimental-test-module-mocks --import tsx --test --test-concurrency=1 --test-reporter=spec --test-reporter-destination=stdout --test-reporter=./tests/support/reporter.mjs --test-reporter-destination=stdout tests/unit/*.test.ts",
-    "seed": "tsx prisma/seed.ts"
+    "seed": "tsx prisma/seed.ts",
+    "test:integration": "node --experimental-test-module-mocks --import tsx --test --test-concurrency=1 --test-reporter=spec --test-reporter-destination=stdout --test-reporter=./tests/support/reporter.mjs --test-reporter-destination=stdout tests/integration/*.test.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.104.2",

@@ -24,9 +24,20 @@ const csv = (s) => `"${String(s).replace(/"/g, '""')}"`;
 
 export default async function* reporter(source) {
   const rows = [];
+  const integ = [];
   for await (const ev of source) {
     if (ev.type !== "test:pass" && ev.type !== "test:fail") continue;
     const parts = ev.data.name.split(SEP);
+    if (parts[0] === "INTEG" && parts.length === 6) {
+      const failed = ev.type === "test:fail";
+      const reason = failed ? String(ev.data.details?.error?.cause?.message ?? ev.data.details?.error?.message ?? "error").split("\n")[0] : "";
+      integ.push({
+        m1: parts[1], process: parts[2], m2: parts[3], pre: parts[4], expected: parts[5],
+        actual: failed ? `Did not perform as expected: ${reason}` : "Performed as expected",
+        result: failed ? "FAILED" : "PASSED", file: ev.data.file ?? "", line: ev.data.line ?? 0,
+      });
+      continue;
+    }
     if (parts.length !== 4) continue;
     const [module, unit, description, expected] = parts;
     const failed = ev.type === "test:fail";
@@ -38,6 +49,21 @@ export default async function* reporter(source) {
       file: ev.data.file ?? "", line: ev.data.line ?? 0,
     });
   }
+
+  if (integ.length > 0) {
+    integ.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line);
+    integ.forEach((r, i) => (r.id = `IntegTestCase-${String(i + 1).padStart(2, "0")}`));
+    const ih = "| Proponent | Test Case ID | Module 1 | Integration Process | Module 2 | Pre-condition | Expected Result | Result | Remarks |\n|---|---|---|---|---|---|---|---|---|";
+    const il = (r) => `| ${esc(PROPONENT)} | ${r.id} | ${esc(r.m1)} | ${esc(r.process)} | ${esc(r.m2)} | ${esc(r.pre)} | ${esc(r.expected)} | ${esc(r.actual)} | ${r.result} |`;
+    const ip = integ.filter((r) => r.result === "PASSED").length;
+    const imd = `# Integration Testing Report\n\nGenerated ${DATE}. ${integ.length} cases, ${ip} passed, ${integ.length - ip} failed.\n\n## Table 1: Integration Testing\n\n${ih}\n${integ.map(il).join("\n")}\n`;
+    const icsv = [["Proponent", "Test Case ID", "Module 1", "Integration Process", "Module 2", "Pre-condition", "Expected Result", "Result", "Remarks"].map(csv).join(","), ...integ.map((r) => [PROPONENT, r.id, r.m1, r.process, r.m2, r.pre, r.expected, r.actual, r.result].map(csv).join(","))].join("\n");
+    mkdirSync("tests/report", { recursive: true });
+    writeFileSync("tests/report/integration-test-report.md", imd);
+    writeFileSync("tests/report/integration-test-report.csv", icsv + "\n");
+    yield `\nIntegration-testing table: ${integ.length} cases (${ip} passed) -> tests/report/integration-test-report.md and .csv\n`;
+  }
+  if (rows.length === 0) return;
 
   const rank = (m) => { const i = MODULE_ORDER.indexOf(m); return i === -1 ? 99 : i; };
   rows.sort((a, b) => rank(a.module) - rank(b.module) || a.file.localeCompare(b.file) || a.line - b.line);
