@@ -57,9 +57,11 @@ const ID_PREFIX = "def-"
 // NO PASSWORD IN THE REPO. A random one is made on the run that CREATES the
 // accounts, printed once and saved to backups/defense-accounts.txt on the PC
 // that ran it (outside the repo). A re-run never changes an existing
-// account's password. Pass DEFENSE_PASSWORD=... to choose it yourself.
+// account's password. Pass DEFENSE_PASSWORD=... to choose it yourself, and
+// --reset-password to set it on accounts that already exist.
 const PASSWORD = process.env.DEFENSE_PASSWORD || `Baylo-${randomBytes(4).toString("hex")}!`
 const BCRYPT_ROUNDS = 12
+const RESET_PASSWORD = process.argv.includes("--reset-password")
 const CREDENTIALS_FILE = resolve(__dirname, "../../backups/defense-accounts.txt")
 
 const hoursAgo = (h: number) => new Date(Date.now() - h * 3_600_000)
@@ -183,7 +185,11 @@ async function upsertUser(a: Account, passwordHash: string) {
       idVerifiedGrandfatheredAt: a.verified ? new Date() : null,
       createdAt: daysAgo(a.verified ? 30 : 3),
     },
-    update: { ...shared, ...(a.verified ? { idVerifiedGrandfatheredAt: new Date() } : {}) },
+    update: {
+      ...shared,
+      ...(a.verified ? { idVerifiedGrandfatheredAt: new Date() } : {}),
+      ...(RESET_PASSWORD ? { password: passwordHash } : {}),
+    },
   })
   return existed
 }
@@ -232,6 +238,9 @@ async function upsertItem(a: Account, i: number, hubIds: string[]) {
 }
 
 async function apply() {
+  // Checked before anything is written, so a forgotten DEFENSE_PASSWORD
+  // never resets the accounts to a random password.
+  if (RESET_PASSWORD && !process.env.DEFENSE_PASSWORD) throw new Error("--reset-password needs DEFENSE_PASSWORD set")
   check()
   await assertNoForeignRows()
   const passwordHash = await bcrypt.hash(PASSWORD, BCRYPT_ROUNDS)
@@ -251,7 +260,7 @@ async function apply() {
     }
   }
   console.log(`  listings: ${tally.created} created, ${tally.kept} already present`)
-  if (newAccounts === ACCOUNTS.length) writeCredentials()
+  if (newAccounts === ACCOUNTS.length || RESET_PASSWORD) writeCredentials()
   else if (newAccounts > 0) {
     console.log(`\n  ${newAccounts} account(s) were new and got the password ${PASSWORD}; the others kept theirs.`)
   } else {
