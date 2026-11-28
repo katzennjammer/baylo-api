@@ -20,8 +20,8 @@
 //     can train with or without them and report both.
 //
 // Nothing personal leaves the database: no user ids, names, emails or
-// locations. Only what a listing shows publicly: title, category, condition,
-// value and its public photo URL.
+// locations. Only what a listing shows publicly: title, description, category,
+// condition, value and its public photo URL.
 
 import { mkdirSync, writeFileSync } from "node:fs"
 import { dirname, resolve } from "node:path"
@@ -45,6 +45,7 @@ async function main() {
     select: {
       id: true,
       title: true,
+      description: true,
       category: true,
       condition: true,
       valueLeaves: true,
@@ -57,7 +58,7 @@ async function main() {
     orderBy: { createdAt: "asc" },
   })
 
-  const header = ["item_id", "photo_index", "image_url", "title", "category", "condition", "value", "valuation_source", "status", "is_perishable", "is_demo", "created_at"]
+  const header = ["item_id", "photo_index", "image_url", "title", "description", "category", "condition", "value", "valuation_source", "status", "is_perishable", "is_demo", "created_at"]
   const lines = [header.join(",")]
   const perCategory = new Map<string, { items: number; photos: number }>()
   let photos = 0
@@ -67,7 +68,7 @@ async function main() {
     c.items++
     for (const img of it.images) {
       if (!/^https:\/\//.test(img.url)) continue // only public, fetchable photos
-      lines.push([it.id, img.position, img.url, it.title, it.category, it.condition, it.valueLeaves, it.valuationSource, it.status, it.isPerishable ? 1 : 0, isDemo ? 1 : 0, it.createdAt.toISOString()].map(csv).join(","))
+      lines.push([it.id, img.position, img.url, it.title, it.description, it.category, it.condition, it.valueLeaves, it.valuationSource, it.status, it.isPerishable ? 1 : 0, isDemo ? 1 : 0, it.createdAt.toISOString()].map(csv).join(","))
       c.photos++
       photos++
     }
