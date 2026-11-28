@@ -11,6 +11,7 @@
 import { createHash } from "node:crypto"
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs"
 import path from "node:path"
+import { fileURLToPath } from "node:url"
 
 const MODELS = [
   {
@@ -20,7 +21,9 @@ const MODELS = [
   },
 ]
 
-const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..")
+// fileURLToPath, not URL.pathname: on Windows the latter is "/D:/..." and
+// path.resolve turns it into "D:\\D:\\...".
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..")
 const sha = (buf) => createHash("sha256").update(buf).digest("hex")
 
 for (const m of MODELS) {
