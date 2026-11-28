@@ -81,6 +81,8 @@ export interface Candidate {
   id: string
   category: string
   createdAt: Date
+  /** The listing's owner; read by the learned ranker (@/lib/recommend-learned). */
+  ownerId?: string
 }
 
 export interface Engagement {
@@ -93,6 +95,8 @@ export type RecommendReason =
   | { code: "CATEGORY"; category: string }
   | { code: "POPULAR" }
   | { code: "NEW" }
+  /** Learned ranker only: from an owner the viewer has dealt with before. */
+  | { code: "KNOWN" }
 
 export interface Scored {
   id: string
@@ -262,17 +266,18 @@ export async function loadSignals(db: Db, viewerId: string): Promise<Signal[]> {
 
 /** What this viewer may be recommended, newest first. */
 export async function loadCandidates(db: Db, viewerId: string): Promise<Candidate[]> {
-  return db.item.findMany({
+  const rows = await db.item.findMany({
     where: {
       status: "AVAILABLE",
       isPerishable: false,
       userId: { not: viewerId },
       ...visibleItemWhere(viewerId),
     },
-    select: { id: true, category: true, createdAt: true },
+    select: { id: true, category: true, createdAt: true, userId: true },
     orderBy: [{ createdAt: "desc" }, { id: "desc" }],
     take: CANDIDATE_SCAN_CAP,
   })
+  return rows.map(({ userId, ...c }) => ({ ...c, ownerId: userId }))
 }
 
 /** Offers, likes and comments per candidate over the popularity window. */

@@ -9,6 +9,7 @@ import { parseQuery } from "@/lib/v1/query"
 import { V1_ITEM_SELECT, V1_ITEM_OWNER_SELECT, v1ItemStatsSelect, v1Item, type V1ItemRow } from "@/lib/v1/item"
 import { categoryLabel } from "@/lib/v1/taxonomy"
 import { SCORE_WEIGHTS, recommendFor, type RecommendReason } from "@/lib/recommend"
+import { LEARNED_WEIGHTS, learnedEnabled, recommendLearnedFor } from "@/lib/recommend-learned"
 
 export const dynamic = "force-dynamic"
 
@@ -53,6 +54,8 @@ function reasonLabel(r: RecommendReason): string {
       return "Popular right now"
     case "NEW":
       return "New on Baylo"
+    case "KNOWN":
+      return "From a trader you know"
   }
 }
 
@@ -65,7 +68,10 @@ export async function GET(req: NextRequest) {
   if (!parsed.ok) return parsed.response
   const { limit } = parsed.data
 
-  const run = await recommendFor(prisma, viewerId)
+  // RECOMMENDER=learned: weights learned from Baylo's activity (29 Nov 2026,
+  // @/lib/recommend-learned). Unset: the hand-set formula.
+  const learned = learnedEnabled()
+  const run = learned ? await recommendLearnedFor(prisma, viewerId) : await recommendFor(prisma, viewerId)
   const top = run.scored.slice(0, limit)
 
   const rows = top.length
@@ -105,10 +111,13 @@ export async function GET(req: NextRequest) {
     },
     {
       personalized: run.personalized,
-      weights: run.personalized
-        ? SCORE_WEIGHTS
-        : { personal: 0, popularity: SCORE_WEIGHTS.personal + SCORE_WEIGHTS.popularity, recency: SCORE_WEIGHTS.recency },
-      candidates: run.candidates.length,
+      ranker: learned ? "learned" : "hand-set",
+      weights: learned
+        ? LEARNED_WEIGHTS
+        : run.personalized
+          ? SCORE_WEIGHTS
+          : { personal: 0, popularity: SCORE_WEIGHTS.personal + SCORE_WEIGHTS.popularity, recency: SCORE_WEIGHTS.recency },
+      candidates: run.scored.length,
     },
   )
 }
