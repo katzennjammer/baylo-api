@@ -8,7 +8,7 @@ import { parseJsonBody } from "@/lib/v1/body"
 import { withJsonErrors } from "@/lib/v1/with-json-errors"
 import { resolveTradeParticipant } from "@/lib/trade-participant"
 import { v1Hub } from "@/lib/safe-zones"
-import { MEETUP_SELECT, allHubs, listingHubIds, proposableHub, v1MeetupPlan } from "@/lib/meetup"
+import { MAX_MEETUP_COUNTERS, MEETUP_SELECT, allHubs, fairMeetupHub, listingHubIds, proposableHub, v1MeetupPlan, type FairHub } from "@/lib/meetup"
 import { notifyMeetupChanged } from "@/lib/meetup-events"
 
 export const dynamic = "force-dynamic"
@@ -114,6 +114,9 @@ const bodySchema = z.strictObject({
  *   MEETUP_CHANGED               the plan the counter named has been replaced
  */
 type PlanRule = "MEETUP_PENDING_FROM_PARTNER" | "MEETUP_ALREADY_AGREED" | "MEETUP_CHANGED"
+//   MEETUP_COUNTER_LIMIT  (29 Nov 2026) this side has countered
+//                         MAX_MEETUP_COUNTERS times; only the fair hub, or a
+//                         free cancel, is left. Carries `fairHub`.
 
 const PLAN_CONFLICT_MESSAGE: Record<PlanRule, string> = {
   MEETUP_PENDING_FROM_PARTNER: "The other trader already suggested a meeting. Agree to it, or suggest another.",
@@ -133,6 +136,8 @@ const TRADE_SELECT = {
   receiverId: true,
   offeredItemId: true,
   requestedItemId: true,
+  meetupCountersBySender: true,
+  meetupCountersByReceiver: true,
   ...MEETUP_SELECT,
 } as const
 
@@ -199,6 +204,12 @@ async function getMeetup(
     /** Which side the viewer is on, so the client can read `plan.proposedBy`. */
     you: viewerIsSender ? "sender" : "receiver",
     yourItemId,
+    /**
+     * The counter limit (29 Nov 2026). `yoursLeft` 0 means the viewer may only
+     * propose `fairHub` (or cancel at no cost). Older clients ignore both.
+     */
+    counters: counterState(trade, viewerIsSender),
+    fairHub: wireFairHub(fairMeetupHub(hubs, named)),
   })
 }
 
@@ -264,6 +275,29 @@ async function proposeMeetup(
   const viewerIsSender = trade.senderId === viewerId
   const replaces = parsed.data.replaces
 
+  // ── The counter limit (29 Nov 2026) ─────────────────────────────────────────
+  // A counter is a POST with `replaces`. Each side gets MAX_MEETUP_COUNTERS;
+  // past that, the only counter allowed is the fair hub (any time), so a
+  // stalemate always has a way out that is fair to both, and cancelling stays
+  // free. A fresh pick or changing your own unanswered suggestion is not a
+  // counter: neither overrides the other person.
+  const usedCounters = viewerIsSender ? trade.meetupCountersBySender : trade.meetupCountersByReceiver
+  let isFairHubProposal = false
+  if (replaces && usedCounters >= MAX_MEETUP_COUNTERS) {
+    const yourItemId = viewerIsSender ? (trade.offeredItemId as string) : trade.requestedItemId
+    const theirItemId = viewerIsSender ? trade.requestedItemId : (trade.offeredItemId as string)
+    const fair = fairMeetupHub(await allHubs(prisma), await listingHubIds(prisma, yourItemId, theirItemId))
+    isFairHubProposal = !!fair && fair.hub.id === hubId
+    if (!isFairHubProposal) {
+      return conflict(
+        fair
+          ? `You have suggested another meeting ${MAX_MEETUP_COUNTERS} times. To settle it, suggest ${fair.hub.name}, the fairest hub for both of you, or cancel the trade at no cost.`
+          : `You have suggested another meeting ${MAX_MEETUP_COUNTERS} times. Agree to the current plan, or cancel the trade at no cost.`,
+        { rule: "MEETUP_COUNTER_LIMIT", plan: v1MeetupPlan(trade), fairHub: wireFairHub(fair), counters: counterState(trade, viewerIsSender) },
+      )
+    }
+  }
+
   /*
    * The precondition, as a WHERE. Read above only to choose WHICH condition
    * applies; whether it still holds is decided by the UPDATE itself.
@@ -275,6 +309,13 @@ async function proposeMeetup(
       meetupHubId: replaces.hubId,
       meetupAt: new Date(replaces.at),
       meetupProposedBySender: replaces.proposedBy === "sender",
+      // Race-safe limit: two counters sent at once cannot both pass the check
+      // above and take this side past the cap. The fair hub is exempt.
+      ...(isFairHubProposal
+        ? {}
+        : viewerIsSender
+          ? { meetupCountersBySender: { lt: MAX_MEETUP_COUNTERS } }
+          : { meetupCountersByReceiver: { lt: MAX_MEETUP_COUNTERS } }),
     }
   } else if (trade.meetupHubId === null) {
     guard = { meetupHubId: null }
@@ -299,6 +340,12 @@ async function proposeMeetup(
       // A new proposal is unanswered by definition, including when it replaces
       // one that had been agreed. The whole group moves together.
       meetupAgreedAt: null,
+      // A counter uses one of this side's MAX_MEETUP_COUNTERS (29 Nov 2026).
+      ...(replaces
+        ? viewerIsSender
+          ? { meetupCountersBySender: { increment: 1 } }
+          : { meetupCountersByReceiver: { increment: 1 } }
+        : {}),
     },
   })
 
@@ -341,4 +388,22 @@ async function proposeMeetup(
   await notifyMeetupChanged(partnerId, { tradeId: trade.id, kind: "proposed", actorId: viewerId })
 
   return ok({ plan: v1MeetupPlan(updated) })
+}
+
+/** The viewer's and the partner's counters left (29 Nov 2026). */
+function counterState(
+  t: { meetupCountersBySender: number; meetupCountersByReceiver: number },
+  viewerIsSender: boolean,
+) {
+  const mine = viewerIsSender ? t.meetupCountersBySender : t.meetupCountersByReceiver
+  const theirs = viewerIsSender ? t.meetupCountersByReceiver : t.meetupCountersBySender
+  return {
+    max: MAX_MEETUP_COUNTERS,
+    yoursLeft: Math.max(0, MAX_MEETUP_COUNTERS - mine),
+    theirsLeft: Math.max(0, MAX_MEETUP_COUNTERS - theirs),
+  }
+}
+
+function wireFairHub(f: FairHub | null) {
+  return f ? { hub: v1Hub(f.hub), kmFromYours: f.kmFromYours, kmFromTheirs: f.kmFromTheirs, shared: f.shared } : null
 }

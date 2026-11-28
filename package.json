@@ -9,17 +9,19 @@
     "dev:v2": "node scripts/v2.mjs dev",
     "v2:tsx": "node scripts/v2.mjs tsx",
     "v2:prisma": "node scripts/v2.mjs prisma",
-    "build": "prisma generate && next build",
+    "build": "node scripts/fetch-models.mjs && prisma generate && next build",
     "start": "next start",
     "start:lan": "next start -H 0.0.0.0",
     "present": "next build && next start -H 0.0.0.0",
     "lint": "eslint",
-    "seed": "tsx prisma/seed.ts"
+    "seed": "tsx prisma/seed.ts",
+    "models": "node scripts/fetch-models.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.104.2",
     "@prisma/adapter-pg": "^7.8.0",
     "@prisma/client": "^7.8.0",
+    "@tesseract.js-data/eng": "^1.0.0",
     "@types/leaflet": "^1.9.21",
     "@types/nodemailer": "^8.0.0",
     "bcryptjs": "^3.0.3",
@@ -32,6 +34,7 @@
     "next": "^16.3.8",
     "next-auth": "^5.0.0-beta.32",
     "nodemailer": "^7.0.13",
+    "onnxruntime-web": "^1.22.0",
     "pg": "^8.23.0",
     "prisma": "^7.8.0",
     "pusher": "^5.3.4",
@@ -40,6 +43,7 @@
     "react-dom": "19.2.4",
     "react-hot-toast": "^2.6.0",
     "sharp": "^0.35.5",
+    "tesseract.js": "^6.0.1",
     "zod": "^4.4.3"
   },
   "devDependencies": {

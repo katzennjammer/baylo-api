@@ -21,6 +21,12 @@
 //
 // Run (from baylo/, with a dev server on BASE):
 //   npx tsx --env-file=.env scripts/verify-id-verification.ts
+//
+// Since 29 Nov 2026 IDs are checked automatically (@/lib/id-auto-check), so
+// this harness's placeholder photos would be refused at once. It tests the
+// ADMIN decision path: start the dev server with ID_AUTO_CHECK=0 so every
+// submission waits for an admin, as it did before. The automatic check has its
+// own measurement, scripts/eval-id-auto-check.ts.
 import prisma from "../src/lib/prisma"
 import { signAccessToken } from "../src/lib/auth-tokens"
 import { hashIdNumber } from "../src/lib/id-verification"

@@ -58,3 +58,4 @@ fix-typo.js
 
 # training data exported by scripts/export-training-data.ts
 ml-data/
+/models/*.onnx

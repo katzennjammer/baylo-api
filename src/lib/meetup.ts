@@ -234,3 +234,78 @@ export async function listingHubIds(
   const theirSet = new Set(theirs)
   return { yours, theirs, shared: yours.filter((id) => theirSet.has(id)) }
 }
+
+// ── The counter limit and the fair hub (29 Nov 2026) ─────────────────────────
+
+/**
+ * How many times each side may counter the other's plan ("Suggest another").
+ *
+ * The panel asked what stops two people disagreeing about the meeting place
+ * forever. Three each: enough to settle a real clash of schedules, few enough
+ * that a stalemate ends. Past it, a side may only propose the FAIR HUB below,
+ * or cancel, which refunds any fee in full (PATCH /api/trades/[id]).
+ */
+export const MAX_MEETUP_COUNTERS = 3
+
+/** Great-circle distance in km. */
+function km(a: { latitude: number; longitude: number }, b: { latitude: number; longitude: number }): number {
+  const rad = Math.PI / 180
+  const dLat = (b.latitude - a.latitude) * rad
+  const dLng = (b.longitude - a.longitude) * rad
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.latitude * rad) * Math.cos(b.latitude * rad) * Math.sin(dLng / 2) ** 2
+  return 6371 * 2 * Math.asin(Math.sqrt(h))
+}
+
+function centroid(hubs: SafeZoneHubRow[]): { latitude: number; longitude: number } | null {
+  if (!hubs.length) return null
+  return {
+    latitude: hubs.reduce((s, h) => s + h.latitude, 0) / hubs.length,
+    longitude: hubs.reduce((s, h) => s + h.longitude, 0) / hubs.length,
+  }
+}
+
+export interface FairHub {
+  hub: SafeZoneHubRow
+  /** km from the centre of each listing's hubs, rounded to 0.1. */
+  kmFromYours: number | null
+  kmFromTheirs: number | null
+  /** True when both listings already named it (so it still earns the Safe-Zone reward). */
+  shared: boolean
+}
+
+/**
+ * The fairest place for two traders who cannot agree.
+ *
+ * Each side's "area" is the centre of the hubs their own listing named (where
+ * they said they can meet). The fair hub is the open hub whose distance to the
+ * FARTHER of the two areas is smallest: neither person is asked to travel much
+ * more than the other (a minimax choice). Hubs both listings named are
+ * preferred, because only those earn the Safe-Zone reward; when they share
+ * none, every open hub is a candidate. Null when neither listing named any hub.
+ */
+export function fairMeetupHub(
+  hubs: SafeZoneHubRow[],
+  named: { yours: string[]; theirs: string[]; shared: string[] },
+): FairHub | null {
+  const open = hubs.filter((h) => h.isActive)
+  const byId = new Map(open.map((h) => [h.id, h]))
+  const yourArea = centroid(named.yours.map((id) => byId.get(id)).filter((h): h is SafeZoneHubRow => !!h))
+  const theirArea = centroid(named.theirs.map((id) => byId.get(id)).filter((h): h is SafeZoneHubRow => !!h))
+  if (!yourArea && !theirArea) return null
+
+  const shared = open.filter((h) => named.shared.includes(h.id))
+  const candidates = shared.length ? shared : open
+  let best: { hub: SafeZoneHubRow; worst: number } | null = null
+  for (const hub of candidates) {
+    const worst = Math.max(yourArea ? km(hub, yourArea) : 0, theirArea ? km(hub, theirArea) : 0)
+    if (!best || worst < best.worst || (worst === best.worst && hub.name < best.hub.name)) best = { hub, worst }
+  }
+  if (!best) return null
+  const round = (n: number) => Math.round(n * 10) / 10
+  return {
+    hub: best.hub,
+    kmFromYours: yourArea ? round(km(best.hub, yourArea)) : null,
+    kmFromTheirs: theirArea ? round(km(best.hub, theirArea)) : null,
+    shared: named.shared.includes(best.hub.id),
+  }
+}

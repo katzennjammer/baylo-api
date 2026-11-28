@@ -70,6 +70,38 @@ function Field({ label, value }: { label: string; value: React.ReactNode }) {
   )
 }
 
+const CHECK_LABEL: Record<string, string> = {
+  readable: "Photo readable",
+  document: "Document type",
+  number: "ID number on card",
+  name: "Name on card",
+  age: "Age 18+",
+  expiry: "Not expired",
+}
+const RESULT_COLOR: Record<string, string> = { pass: "var(--adm-good)", fail: "var(--adm-warn)", unknown: "var(--adm-text-muted)", "n/a": "var(--adm-text-muted)" }
+
+/**
+ * What the automatic ID check found (29 Nov 2026). A PENDING row reaches an
+ * admin only when the system could not approve it on the user's last attempt
+ * or could not run, so this says where it got stuck. Outcomes only: the text
+ * read from the card is never stored.
+ */
+function AutoCheckCard({ decision, confidence, checks }: { decision: string | null; confidence: number | null; checks: unknown }) {
+  const c = (checks ?? {}) as { error?: string; reason?: string | null; checks?: Record<string, string> }
+  return (
+    <div style={card}>
+      <p style={{ fontSize: 15, fontWeight: 800, marginBottom: 8 }}>Automatic check</p>
+      <Field label="System decision" value={`${decision ?? "—"}${confidence !== null ? ` (confidence ${Math.round(confidence * 100)}%)` : ""}`} />
+      {c.reason && <Field label="System reason" value={REJECTION_LABEL[toWireRejectionReason(c.reason)]} />}
+      {c.error && <Field label="Could not run" value={c.error} />}
+      {c.checks &&
+        Object.entries(c.checks).map(([k, v]) => (
+          <Field key={k} label={CHECK_LABEL[k] ?? k} value={<span style={{ color: RESULT_COLOR[v] ?? "inherit" }}>{v}</span>} />
+        ))}
+    </div>
+  )
+}
+
 export default async function IdVerificationDetailPage({ params }: Props) {
   const { id } = await params
 
@@ -86,6 +118,10 @@ export default async function IdVerificationDetailPage({ params }: Props) {
       imagePublicId: true,
       imageDeletedAt: true,
       imageDeleteFailedAt: true,
+      autoDecision: true,
+      autoConfidence: true,
+      autoChecks: true,
+      autoCheckedAt: true,
       user: {
         select: {
           id: true,
@@ -220,7 +256,7 @@ export default async function IdVerificationDetailPage({ params }: Props) {
             {row.reviewedAt && (
               <Field
                 label="Decided"
-                value={`${row.reviewedAt.toLocaleString()} by ${row.reviewedBy?.name ?? "—"}`}
+                value={`${row.reviewedAt.toLocaleString()} by ${row.reviewedBy?.name ?? (row.autoDecision ? "the automatic check" : "—")}`}
               />
             )}
             {row.rejectionReason && (
@@ -230,6 +266,8 @@ export default async function IdVerificationDetailPage({ params }: Props) {
               />
             )}
           </div>
+
+          {row.autoCheckedAt && <AutoCheckCard decision={row.autoDecision} confidence={row.autoConfidence} checks={row.autoChecks} />}
 
           <div style={card}>
             <p style={{ fontSize: 15, fontWeight: 800, marginBottom: 8 }}>The account</p>
