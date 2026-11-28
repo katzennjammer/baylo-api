@@ -840,6 +840,13 @@ model Trade {
   /// and it leaves something on the table instead of a hole.
   meetupAgreedAt DateTime?
 
+  /// How many times each side has COUNTERED the other's plan ("Suggest
+  /// another", a POST with `replaces`). Capped at MAX_MEETUP_COUNTERS (3) per
+  /// side in @/lib/meetup; past it, only the fair hub may be proposed, or the
+  /// trade cancelled at no cost (29 Nov 2026).
+  meetupCountersBySender   Int @default(0)
+  meetupCountersByReceiver Int @default(0)
+
   // Leaves moving from sender to receiver as part of this trade. NULL means
   // none — the same thing the `?? 0` at each old recovery site meant.
   //
