@@ -1,4 +1,4 @@
-// Downloads the open-source image model used for photo similarity (29 Nov 2026).
+// Downloads the open-source image models (29 Nov 2026): photo similarity and photo category.
 //
 //   node scripts/fetch-models.mjs        (run by `npm run build`; safe to re-run)
 //
@@ -18,6 +18,13 @@ const MODELS = [
     file: "models/dinov2-small.onnx",
     url: "https://huggingface.co/Xenova/dinov2-small/resolve/c2bb04a51fab207c420665f1946016107bffc701/onnx/model.onnx",
     sha256: "83141175ec78b4ff9a2bb58a4c7c264ba0054d1c2e122e5a8114b79a8d4179ea",
+  },
+  // CLIP ViT-B/32 image half (OpenAI, MIT), quantised ONNX export, for the
+  // category of a photo (@/lib/item-classifier). 89 MB.
+  {
+    file: "models/clip-vision-q.onnx",
+    url: "https://huggingface.co/Xenova/clip-vit-base-patch32/resolve/6b7c523703ae26e39be4b03774966f8571c7f523/onnx/vision_model_quantized.onnx",
+    sha256: "583fd1110a514667812fee7d684952aaf82a99b959760c8d7dca7e0ab9839299",
   },
 ]
 

@@ -91,6 +91,13 @@ const nextConfig: NextConfig = {
       "./node_modules/tesseract.js/src/**",
       "./node_modules/tesseract.js-core/**",
     ],
+    // Photo category (29 Nov 2026, @/lib/item-classifier).
+    "/api/ai/identify": [
+      "./models/clip-vision-q.onnx",
+      "./models/category-model.json",
+      "./node_modules/onnxruntime-web/dist/ort.node.min.mjs",
+      "./node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.*",
+    ],
     ...Object.fromEntries(
       ["/api/ai/phash", "/api/items", "/api/items/[id]"].map((route) => [
         route,
