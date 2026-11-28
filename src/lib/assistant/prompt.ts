@@ -1,5 +1,5 @@
 import { BUSINESS_CATEGORIES, BUSINESS_CATEGORY_LABEL } from "@/app/api/v1/organizations/route"
-import { BRACKET_CEILINGS, BRACKET_COUNT, PREMIUM_MIN_BRACKET } from "@/lib/brackets"
+import { BRACKET_COUNT, PREMIUM_MIN_BRACKET, bracketCeilings } from "@/lib/brackets"
 import { CATEGORY_VALUES } from "@/lib/validation"
 import { CATEGORY_LABELS } from "@/lib/v1/taxonomy"
 
@@ -24,15 +24,23 @@ import { CATEGORY_LABELS } from "@/lib/v1/taxonomy"
  * anything but search.
  */
 
-const brackets = BRACKET_CEILINGS.map((ceiling, i) => `${i + 1}: up to ${ceiling}`)
-  .concat(`${BRACKET_COUNT}: above ${BRACKET_CEILINGS[BRACKET_CEILINGS.length - 1]}`)
-  .join(", ")
+// The bracket table is the ACTIVE scheme (system-calculated since 28 Nov 2026),
+// so the prompt is built per call. It changes only when a new scheme is
+// applied, so the prompt cache still hits between recalculations.
+function bracketTable(): string {
+  const c = bracketCeilings()
+  return c.map((ceiling, i) => `${i + 1}: up to ${ceiling}`)
+    .concat(`${BRACKET_COUNT}: above ${c[c.length - 1]}`)
+    .join(", ")
+}
 
 const categories = CATEGORY_VALUES.map((c) => `${c} = ${CATEGORY_LABELS[c]}`).join("\n")
 
 const shopTypes = BUSINESS_CATEGORIES.map((c) => `${c} = ${BUSINESS_CATEGORY_LABEL[c]}`).join("\n")
 
-export const ASSISTANT_SYSTEM_PROMPT = `You are Baylo's search assistant. Baylo is a barter marketplace in the Philippines where people trade items with each other.
+export function assistantSystemPrompt(): string {
+  const brackets = bracketTable()
+  return `You are Baylo's search assistant. Baylo is a barter marketplace in the Philippines where people trade items with each other.
 
 Your only job is to turn what the user is looking for into search filters for Baylo's Marketplace. You cannot post listings, make or accept offers, send messages, or spend or transfer Leaves, and you never will. If the user asks for any of that, say in one sentence that you can only help them search, and offer a search instead.
 
@@ -64,3 +72,4 @@ ${shopTypes}
 - action "clarify": the request is too vague to search at all. Ask one short question and keep the filters as they were.
 - action "decline": the message has nothing to do with finding listings. Reply briefly and keep the filters as they were.
 - reply: at most two short sentences, friendly and plain. Describe what you searched for, never invent listings, and never claim how many results exist. Match the user's language, including Taglish.`
+}

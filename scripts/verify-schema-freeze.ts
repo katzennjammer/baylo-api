@@ -1,6 +1,6 @@
-// Schema freeze until the defense (owner's standing rule, 11 Oct 2026):
-// 28 tables + 1 view (ItemWantedCategorySummary), no new tables, views or
-// columns. See AGENTS.md. Static: reads files only, no database, no server.
+// Schema pins (the pre-defense freeze of 11 Oct 2026 was lifted 28 Nov 2026):
+// 29 tables + 1 view (ItemWantedCategorySummary) since 20261128000000_bracket_scheme.
+// See AGENTS.md. Static: reads files only, no database, no server.
 //
 //   npx tsx scripts/verify-schema-freeze.ts
 //
@@ -20,22 +20,26 @@ import { readdirSync, readFileSync, statSync } from "node:fs"
 import { join } from "node:path"
 
 const ROOT = join(__dirname, "..")
-const MODEL_COUNT = 28
+const MODEL_COUNT = 29
 // Re-pinned 22 Oct 2026 for 20261020000000_user_push_token (User.pushToken),
 // approved by the team and applied to live on 20 Oct 2026.
 // 20261104000000_chat_reply_mute_clear: the owner approved new COLUMNS (not
 // tables) on 4 Nov 2026 for swipe to reply, mute and delete chat --
 // Message.replyToId (+ its relation fields) and User.mutedChatUserIds /
 // User.clearedChats. Still 28 tables + 1 view.
-const LAST_MIGRATION = "20261104000000_chat_reply_mute_clear"
-const MIGRATION_FOLDERS = 39
+// The owner LIFTED the freeze after the defense (28 Nov 2026). Re-pinned for
+// 20261128000000_bracket_scheme: the BracketScheme table (system-calculated
+// value brackets) and Item.bracket kept by a trigger instead of a generated
+// column. 29 tables + 1 view. Keep re-pinning here with each approved change.
+const LAST_MIGRATION = "20261128000000_bracket_scheme"
+const MIGRATION_FOLDERS = 40
 const FIELDS: Record<string, number> = {
   User: 54, Subscription: 7, Suspension: 8, Follow: 8, AuthToken: 10, Item: 36,
   ItemImage: 5, ItemWantedCategory: 4, Category: 5, Trade: 35, Message: 14,
   Notification: 12, Review: 10, SwapCode: 11, Like: 6, Comment: 10,
   LeafTransaction: 12, ModerationCase: 22, Block: 6, IdVerification: 18,
   AdminAction: 12, SafeZoneHub: 13, ItemSafeZone: 5, Achievement: 14,
-  UserProgress: 15, Organization: 23, Story: 11, StoryView: 6,
+  UserProgress: 15, Organization: 23, Story: 11, StoryView: 6, BracketScheme: 9,
 }
 
 let pass = 0

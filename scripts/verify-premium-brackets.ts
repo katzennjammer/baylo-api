@@ -26,7 +26,7 @@
 
 import prisma from "../src/lib/prisma"
 import {
-  BRACKET_CEILINGS,
+  DEFAULT_BRACKET_CEILINGS as BRACKET_CEILINGS,
   BRACKET_COUNT,
   bracketOf,
   bracketRange,

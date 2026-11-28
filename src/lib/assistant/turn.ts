@@ -2,7 +2,7 @@ import { z } from "zod"
 import Anthropic from "@anthropic-ai/sdk"
 import { zodOutputFormat } from "@anthropic-ai/sdk/helpers/zod"
 import { anthropic, HAIKU_MODEL, NO_THINKING } from "@/lib/anthropic"
-import { ASSISTANT_SYSTEM_PROMPT } from "@/lib/assistant/prompt"
+import { assistantSystemPrompt } from "@/lib/assistant/prompt"
 import {
   ASSISTANT_ACTIONS,
   NO_FILTERS,
@@ -135,7 +135,7 @@ export async function runAssistantTurn(turns: readonly Turn[], hasLocation: bool
       // No temperature on Haiku 5.5 (a non-default value is a 400); the
       // structured output schema is what keeps the answer to its shape.
       thinking: NO_THINKING,
-      system: ASSISTANT_SYSTEM_PROMPT,
+      system: assistantSystemPrompt(),
       messages: toMessages(turns),
       output_config: { format: zodOutputFormat(assistantOutputSchema) },
     })

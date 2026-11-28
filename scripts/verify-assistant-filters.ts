@@ -14,7 +14,8 @@ import {
   toBrowseSearch,
   type AssistantFilters,
 } from "@/lib/assistant/filters"
-import { ASSISTANT_SYSTEM_PROMPT } from "@/lib/assistant/prompt"
+import { assistantSystemPrompt } from "@/lib/assistant/prompt"
+const ASSISTANT_SYSTEM_PROMPT = assistantSystemPrompt()
 
 let failures = 0
 function check(name: string, cond: boolean, detail?: unknown) {
