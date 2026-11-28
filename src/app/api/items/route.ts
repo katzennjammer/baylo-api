@@ -1,4 +1,5 @@
-import { NextRequest, NextResponse } from "next/server"
+import { NextRequest, NextResponse, after } from "next/server"
+import { embedItemPhotos } from "@/lib/photo-similarity"
 import { headers } from "next/headers"
 import { resolveSession } from "@/lib/api-auth"
 import { ORG_CONTEXT_HEADER, orgPostingRefusal, ownedShopPostingRefusal, resolveActingIdentity } from "@/lib/organizations"
@@ -389,6 +390,11 @@ export async function POST(req: NextRequest) {
     // spread, which would ship the raw `{ hub: { … } }` join shape. Same reason
     // that function deletes the pickup columns instead of trusting a caller to.
     const { safeZones, ...itemRow } = item
+    // The photos' embeddings for the similar-photo check, after the response
+    // (about 0.3 s a photo): they join the pool, and the listing gets its
+    // "X% similar to another listing" note if it earns one (29 Nov 2026).
+    after(() => embedItemPhotos(item.id))
+
     return NextResponse.json(
       {
         // The AUTHOR sees the exact point back — which is the org's row when

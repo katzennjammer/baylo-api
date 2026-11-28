@@ -78,13 +78,25 @@ const nextConfig: NextConfig = {
   // loads a WebAssembly core, which a bundler cannot follow, so it stays a
   // plain node_module. The English model it reads at runtime is listed
   // explicitly so Vercel ships it with that one route.
-  serverExternalPackages: ["tesseract.js", "tesseract.js-core"],
+  //
+  // The similar-photo check (29 Nov 2026, @/lib/image-embedding) runs DINOv2
+  // with onnxruntime-web, which loads its WebAssembly runtime from its own
+  // files at runtime: external for the same reason. The model is downloaded at
+  // build time (scripts/fetch-models.mjs) and shipped with the routes that
+  // embed photos.
+  serverExternalPackages: ["tesseract.js", "tesseract.js-core", "onnxruntime-web"],
   outputFileTracingIncludes: {
     "/api/v1/id-verification": [
       "./node_modules/@tesseract.js-data/eng/4.0.0_best_int/**",
       "./node_modules/tesseract.js/src/**",
       "./node_modules/tesseract.js-core/**",
     ],
+    ...Object.fromEntries(
+      ["/api/ai/phash", "/api/items", "/api/items/[id]"].map((route) => [
+        route,
+        ["./models/dinov2-small.onnx", "./node_modules/onnxruntime-web/dist/ort.node.min.mjs", "./node_modules/onnxruntime-web/dist/ort-wasm-simd-threaded.*"],
+      ]),
+    ),
   },
 
   async redirects() {

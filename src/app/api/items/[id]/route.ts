@@ -1,8 +1,9 @@
-import { NextRequest, NextResponse } from "next/server"
+import { NextRequest, NextResponse, after } from "next/server"
 import { resolveSession } from "@/lib/api-auth"
 import { resolveListingOwners } from "@/lib/listing-owner"
 import { legacyOrgRefusal } from "@/lib/inbox"
 import prisma from "@/lib/prisma"
+import { embedItemPhotos } from "@/lib/photo-similarity"
 import { parseBody, updateItemSchema } from "@/lib/validation"
 import { imageHashRows } from "@/lib/image-hashes"
 import { ITEM_IMAGES, imagesJson, replaceItemImages, setItemImageHashes } from "@/lib/item-images"
@@ -364,6 +365,8 @@ export async function PATCH(req: NextRequest, ctx: { params: Promise<{ id: strin
     // with a restated hash list get only their hashes rewritten.
     if (imagesChanged) {
       await prisma.$transaction((tx) => replaceItemImages(tx, id, body.images ?? [], hashRows))
+      // New photos need embeddings and a fresh similar-photo note (29 Nov 2026).
+      after(() => embedItemPhotos(id))
     } else if (hashesTouched) {
       await prisma.$transaction((tx) => setItemImageHashes(tx, id, hashRows))
     }

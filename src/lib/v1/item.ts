@@ -50,6 +50,7 @@ export const V1_ITEM_SELECT = {
   valueLeaves: true,
   suggestedLeaves: true,
   valuationSource: true,
+  similarPhotoPct: true,
   status: true,
   // The two owner-only facts about a listing nobody else can see. On every
   // public read path they are null/false by construction (the WHERE clause
@@ -266,6 +267,12 @@ export interface V1Item {
   suggestedLeaves: number | null
   /** "comparables" | "category_band" | null for pre-model listings. */
   valuationSource: string | null
+  /**
+   * 80..94 when a photo is that confident a match for ANOTHER trader's photo
+   * (the tiered similar-photo policy, 29 Nov 2026): the listing shows
+   * "X% similar to another listing". Null otherwise.
+   */
+  similarPhotoPct: number | null
   status: string
   /**
    * TRUE when a moderator has taken the listing down. Only ever true on the
@@ -346,6 +353,8 @@ export interface V1ItemRow {
   valueLeaves: number | null
   suggestedLeaves: number | null
   valuationSource: string | null
+  /** Optional: rows from a select that predates 29 Nov 2026 still shape. */
+  similarPhotoPct?: number | null
   status: string
   /** Optional: rows from a select that predates 18 Sep 2026 still shape. */
   moderationHiddenAt?: Date | null
@@ -410,6 +419,7 @@ export function v1Item(
     valueLeaves: row.valueLeaves,
     suggestedLeaves: row.suggestedLeaves,
     valuationSource: row.valuationSource,
+    similarPhotoPct: row.similarPhotoPct ?? null,
     status: row.status,
     hiddenByModerator: row.moderationHiddenAt != null,
     valueRejectionReason: row.valueRejectionReason ?? null,

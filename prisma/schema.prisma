@@ -414,6 +414,12 @@ model Item {
   /// be recalculated from data without a migration.
   bracket Int?
 
+  /// Highest confidence (0..100) that one of this listing's photos is ANOTHER
+  /// trader's photo, kept when it is 80 or more so the listing can show
+  /// "85% similar to another listing" (the tiered policy, 29 Nov 2026). At
+  /// 95+ the photo is refused at posting, so a stored value is 80..94.
+  similarPhotoPct Int?
+
   // TRUE when the owner typed their own value rather than taking the
   // suggestion. Stored, not derived from valueLeaves != suggestedLeaves: an
   // owner can type the suggested number back in, and a category re-valuation
@@ -604,6 +610,9 @@ model ItemImage {
   position Int
   url      String  @db.Text
   hash     String? @db.VarChar(64)
+  /// DINOv2 embedding (384 numbers, unit length) for the similar-photo check,
+  /// @/lib/image-embedding. Empty until computed (29 Nov 2026).
+  embedding Float[] @default([])
   item     Item    @relation(fields: [itemId], references: [id], onDelete: Cascade)
 
   /// The PK's leading column is the only lookup by item anyone needs, and the

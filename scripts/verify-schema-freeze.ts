@@ -34,11 +34,12 @@ const MODEL_COUNT = 29
 // 20261129000000_id_auto_check: IdVerification.auto* (4 columns) and two
 // IdRejectionReason values, for the automatic ID check (owner-approved).
 // 20261129100000_meetup_counter_limit: Trade.meetupCountersBy{Sender,Receiver}.
-const LAST_MIGRATION = "20261129100000_meetup_counter_limit"
-const MIGRATION_FOLDERS = 42
+// 20261129200000_photo_embeddings: ItemImage.embedding, Item.similarPhotoPct.
+const LAST_MIGRATION = "20261129200000_photo_embeddings"
+const MIGRATION_FOLDERS = 43
 const FIELDS: Record<string, number> = {
-  User: 54, Subscription: 7, Suspension: 8, Follow: 8, AuthToken: 10, Item: 36,
-  ItemImage: 5, ItemWantedCategory: 4, Category: 5, Trade: 37, Message: 14,
+  User: 54, Subscription: 7, Suspension: 8, Follow: 8, AuthToken: 10, Item: 37,
+  ItemImage: 6, ItemWantedCategory: 4, Category: 5, Trade: 37, Message: 14,
   Notification: 12, Review: 10, SwapCode: 11, Like: 6, Comment: 10,
   LeafTransaction: 12, ModerationCase: 22, Block: 6, IdVerification: 22,
   AdminAction: 12, SafeZoneHub: 13, ItemSafeZone: 5, Achievement: 14,
