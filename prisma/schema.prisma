@@ -403,23 +403,16 @@ model Item {
 
   /// The value bracket of `valueLeaves`, 1..10. NULL exactly when valueLeaves is.
   ///
-  /// A STORED GENERATED COLUMN, so it cannot drift and nothing writes it:
-  ///   GENERATED ALWAYS AS (CASE WHEN "valueLeaves" IS NULL THEN NULL
-  ///     WHEN "valueLeaves" <= 100 THEN 1 ... WHEN <= 12000 THEN 9 ELSE 10 END) STORED
-  /// Prisma cannot declare a generated column; it lives in
-  /// 20261003000000_schema_v2_core and a `migrate diff` never mentions it. Any
-  /// write that names `bracket` is refused by Postgres, which is the point.
+  /// Set by a Postgres TRIGGER (Item_set_bracket → baylo_bracket_of()) from
+  /// the ACTIVE BracketScheme row, on every insert and every change of
+  /// valueLeaves. Anything written here is overwritten by the trigger, so the
+  /// app never writes it. Activating a new scheme re-brackets every row in the
+  /// same transaction (activateBracketScheme() in @/lib/bracket-scheme).
   ///
-  /// THE CEILINGS ARE COPY THREE of BRACKET_CEILINGS in @/lib/brackets (and
-  /// baylo-mobile/src/lib/brackets.ts). Change the table there, and this column
-  /// needs a migration that re-creates it with the new CASE -- the generation
-  /// expression is fixed at DDL time. scripts/schema-v2/verify-v2.ts compares
-  /// it with bracketOf() on every row.
-  ///
-  /// (The MariaDB 10.4 stored-generated-column hang noted on ModerationCase
-  /// .openKey does not apply: this is Postgres, and the column is in no unique
-  /// index.)
-  bracket Int? @default(dbgenerated())
+  /// Until 28 Nov 2026 this was a GENERATED column with the hand-set ceilings
+  /// in its CASE; 20261128000000_bracket_scheme replaced it so the limits can
+  /// be recalculated from data without a migration.
+  bracket Int?
 
   // TRUE when the owner typed their own value rather than taking the
   // suggestion. Stored, not derived from valueLeaves != suggestedLeaves: an
@@ -2628,4 +2621,29 @@ model StoryView {
 
   @@unique([storyId, viewerId])
   @@index([viewerId])
+}
+
+/// Every value-bracket table Baylo has used or proposed (28 Nov 2026).
+///
+/// Exactly ONE row is status ACTIVE (partial unique index
+/// BracketScheme_one_active, SQL-only). `ceilings` holds the nine inclusive
+/// upper limits in Leaves; bracket 10 is everything above the last.
+/// method "hand-set" is the table used until 28 Nov 2026 (seeded ACTIVE by
+/// the migration); "geometric" rows are calculated by the system from listing
+/// values (@/lib/bracket-math), PROPOSED by the monthly job and ACTIVE once
+/// applied. `stats` records how: the anchors, step ratio, listings per bracket
+/// and the imbalance (Gini), so every table can be justified after the fact.
+model BracketScheme {
+  id          String    @id @default(cuid())
+  ceilings    Int[]
+  method      String
+  /// ACTIVE | PROPOSED | RETIRED (CHECK constraint in the migration)
+  status      String    @default("PROPOSED")
+  sampleSize  Int       @default(0)
+  stats       Json?
+  createdAt   DateTime  @default(now())
+  activatedAt DateTime?
+  retiredAt   DateTime?
+
+  @@index([createdAt])
 }

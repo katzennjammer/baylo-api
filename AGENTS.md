@@ -15,9 +15,9 @@ The defense server runs `integration/defense` in BOTH repos (this API and baylo-
 - Finished features merge INTO `integration/defense` with `git merge --no-ff` (a real merge commit). No rebase, no force-push.
 - `main` is merged later, with the team. Do not merge `integration/defense` into `main`, or `main` into it, on your own.
 
-## Schema freeze until the defense (since 11 Oct 2026)
+## Schema changes (freeze lifted 28 Nov 2026)
 
-The database stays at **28 tables + 1 view** (`ItemWantedCategorySummary`). NO new tables, views or columns, and no new migration folder after `20261020000000_user_push_token` (the one approved exception, 20 Oct 2026).
+The pre-defense schema freeze (11 Oct – 28 Nov 2026) is over: the owner lifted it for the post-defense revisions. The database is now **29 tables + 1 view** (`ItemWantedCategorySummary`); the newest migration is `20261128000000_bracket_scheme`.
 
-- If a fix seems to need a schema change, STOP and tell the owner first. Find a way without one.
-- `npx tsx scripts/verify-schema-freeze.ts` fails if `prisma/schema.prisma` has more or fewer than 28 models, gains a `view` block or a field, or if a migration folder appears after that one. Run it before every commit that touches `prisma/`.
+- Schema changes still need the owner's OK first. Keep migrations additive where possible and say what they change.
+- `npx tsx scripts/verify-schema-freeze.ts` pins the model count, field counts and newest migration. When an approved change lands, re-pin it in the same commit. Run it before every commit that touches `prisma/`.

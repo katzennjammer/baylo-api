@@ -4,6 +4,7 @@ import { auth } from "@root/auth"
 import prisma from "@/lib/prisma"
 import { verifyAccessToken } from "@/lib/auth-tokens"
 import { suspensionState, activeSuspension } from "@/lib/moderation"
+import { ensureBracketScheme } from "@/lib/bracket-scheme"
 
 /**
  * The single authentication entry point for every authenticated API route.
@@ -70,6 +71,16 @@ async function bearerToken(): Promise<string | null> {
  * does, so existing `session?.user?.id` guards keep working verbatim.
  */
 export async function resolveSession(): Promise<AuthSession | null> {
+  // Every signed-in route judges brackets, so make sure the active bracket
+  // table is fresh (at most one tiny read a minute; never throws). Runs
+  // alongside the token check rather than before it.
+  const brackets = ensureBracketScheme()
+  const session = await resolveSessionInner()
+  await brackets
+  return session
+}
+
+async function resolveSessionInner(): Promise<AuthSession | null> {
   const token = await bearerToken()
 
   if (token !== null) {

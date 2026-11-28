@@ -8,7 +8,8 @@ import {
   TRADING_POLICY_VERSION,
   VALUE_RAISE_BRACKETS,
 } from "@/lib/trade-rules"
-import { BRACKET_CEILINGS, PREMIUM_MIN_BRACKET } from "@/lib/brackets"
+import { PREMIUM_MIN_BRACKET, bracketCeilings } from "@/lib/brackets"
+import { activeBracketScheme } from "@/lib/bracket-scheme"
 import { OFFER_EXPIRY_DAYS } from "@/lib/offers"
 import { PolicyDocument } from "@/components/PolicyDocument"
 
@@ -39,8 +40,14 @@ import { PolicyDocument } from "@/components/PolicyDocument"
  * never saw.
  */
 export const metadata = { title: "Baylo trading policy" }
+// The bracket table is the ACTIVE scheme, read from the database per request.
+export const dynamic = "force-dynamic"
 
-export default function TradingPolicyPage() {
+export default async function TradingPolicyPage() {
+  const scheme = await activeBracketScheme()
+  const BRACKET_CEILINGS = bracketCeilings()
+  const stats = (scheme?.stats ?? {}) as { stepRatio?: number; lowQuantile?: number; highQuantile?: number }
+  const trim = Math.round((stats.lowQuantile ?? 0.02) * 100)
   const rows = BRACKET_CEILINGS.map((ceiling, i) => {
     const min = i === 0 ? 1 : BRACKET_CEILINGS[i - 1] + 1
     return { bracket: i + 1, range: `${min.toLocaleString()} – ${ceiling.toLocaleString()}` }
@@ -74,6 +81,17 @@ export default function TradingPolicyPage() {
       </table>
       <p style={{ fontSize: 14, color: "#666" }}>
         Brackets {PREMIUM_MIN_BRACKET} and above need a premium subscription to trade for.
+      </p>
+      {/* Explains how the table is set; it adds no new term, so the policy
+          version is unchanged (28 Nov 2026). */}
+      <p style={{ fontSize: 14, color: "#666" }}>
+        {scheme?.method === "geometric"
+          ? `These limits are worked out by Baylo from ${scheme.sampleSize.toLocaleString()} listing values` +
+            (scheme.activatedAt ? ` (in use since ${scheme.activatedAt.toLocaleDateString("en-PH", { day: "numeric", month: "long", year: "numeric" })})` : "") +
+            `: each bracket covers values about ${stats.stepRatio ?? 2}× the one below, leaving out the cheapest and the most valuable ${trim}% of listings so a few unusual values cannot skew the table. `
+          : "These limits are the starting table. "}
+        Baylo recalculates them from real listing values every month. A listing&apos;s bracket can
+        change when the table does; an offer already sent is checked again when it is accepted.
       </p>
 
       <h2 id="trading" style={{ fontSize: 20, marginTop: 32 }}>Offers and the bridging fee</h2>
