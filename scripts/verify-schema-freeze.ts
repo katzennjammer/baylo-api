@@ -31,13 +31,15 @@ const MODEL_COUNT = 29
 // 20261128000000_bracket_scheme: the BracketScheme table (system-calculated
 // value brackets) and Item.bracket kept by a trigger instead of a generated
 // column. 29 tables + 1 view. Keep re-pinning here with each approved change.
-const LAST_MIGRATION = "20261128000000_bracket_scheme"
-const MIGRATION_FOLDERS = 40
+// 20261129000000_id_auto_check: IdVerification.auto* (4 columns) and two
+// IdRejectionReason values, for the automatic ID check (owner-approved).
+const LAST_MIGRATION = "20261129000000_id_auto_check"
+const MIGRATION_FOLDERS = 41
 const FIELDS: Record<string, number> = {
   User: 54, Subscription: 7, Suspension: 8, Follow: 8, AuthToken: 10, Item: 36,
   ItemImage: 5, ItemWantedCategory: 4, Category: 5, Trade: 35, Message: 14,
   Notification: 12, Review: 10, SwapCode: 11, Like: 6, Comment: 10,
-  LeafTransaction: 12, ModerationCase: 22, Block: 6, IdVerification: 18,
+  LeafTransaction: 12, ModerationCase: 22, Block: 6, IdVerification: 22,
   AdminAction: 12, SafeZoneHub: 13, ItemSafeZone: 5, Achievement: 14,
   UserProgress: 15, Organization: 23, Story: 11, StoryView: 6, BracketScheme: 9,
 }

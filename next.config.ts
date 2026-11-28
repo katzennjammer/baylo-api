@@ -73,6 +73,20 @@ const LAN_DEV_ORIGINS = [
 const nextConfig: NextConfig = {
   allowedDevOrigins: LAN_DEV_ORIGINS,
 
+  // The automatic ID check (29 Nov 2026, @/lib/id-ocr) runs Tesseract inside
+  // the ID route. tesseract.js starts a worker thread from its own files and
+  // loads a WebAssembly core, which a bundler cannot follow, so it stays a
+  // plain node_module. The English model it reads at runtime is listed
+  // explicitly so Vercel ships it with that one route.
+  serverExternalPackages: ["tesseract.js", "tesseract.js-core"],
+  outputFileTracingIncludes: {
+    "/api/v1/id-verification": [
+      "./node_modules/@tesseract.js-data/eng/4.0.0_best_int/**",
+      "./node_modules/tesseract.js/src/**",
+      "./node_modules/tesseract.js-core/**",
+    ],
+  },
+
   async redirects() {
     return [{ source: "/admin/anomalies", destination: "/admin/review-queue", permanent: true }];
   },

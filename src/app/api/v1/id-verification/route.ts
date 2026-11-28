@@ -17,13 +17,22 @@ import {
   hashIdNumber,
   loadIdVerificationState,
   normaliseIdNumber,
+  nearIdNumberHashes,
+  REJECTION_FIX,
+  toWireRejectionReason,
+  type RejectionReasonWire,
   publicIdVerification,
   toDbIdType,
   type IdTypeWire,
 } from "@/lib/id-verification"
 import { destroyIdImage, uploadIdImage } from "@/lib/id-verification-image"
+import { autoCheckEnabled, runIdAutoCheck } from "@/lib/id-auto-verify"
+import type { AutoCheckResult } from "@/lib/id-auto-check"
 
 export const dynamic = "force-dynamic"
+// The automatic ID check reads the photo with OCR (about 1–3 s, longer on a
+// cold start); its own limit is 30 s.
+export const maxDuration = 60
 
 /**
  * /api/v1/id-verification — submit a government ID, and read where yours stands.
@@ -208,22 +217,76 @@ export async function POST(req: NextRequest) {
     )
   }
 
-  // ── Upload, then write the row ─────────────────────────────────────────────
-
-  let image: { url: string; publicId: string }
-  try {
-    image = await uploadIdImage(sanitized.buffer)
-  } catch (err) {
-    console.error(
-      "[id-verification] upload failed:",
-      err instanceof Error ? err.message : "unknown error",
-    )
-    return invalid("We could not store that photo. Try again in a moment.")
-  }
+  // ── The automatic check (29 Nov 2026) ──────────────────────────────────────
+  //
+  // The system decides, not an admin (@/lib/id-auto-check):
+  //   approved by the check                   → APPROVED, now
+  //   refused, with tries left                → REJECTED with the reason, now
+  //                                             (the user retakes or fixes it)
+  //   not approved on the LAST try, the check
+  //   failed to run, or ID_AUTO_CHECK=0       → PENDING, for an admin
+  // The last-try rule is the agreed last resort: a misread must never lock a
+  // real person out, so their final attempt is seen by a person.
+  //
+  // A decided submission's photo is never uploaded at all: it is read here, in
+  // memory, and dropped. Only a PENDING one is stored for the admin to see.
 
   const attemptCount = state.attemptsUsed + 1
-  const autoApprove = devAutoApprove()
+  const lastAttempt = attemptCount >= MAX_ID_SUBMISSIONS
+  const devApprove = devAutoApprove()
+
+  let auto: AutoCheckResult | null = null
+  let autoError: string | null = null
+  if (!devApprove && autoCheckEnabled()) {
+    const account = await prisma.user.findUnique({ where: { id: userId }, select: { name: true, dateOfBirth: true } })
+    const run = await runIdAutoCheck(sanitized.buffer, {
+      selectedType: toDbIdType(idType),
+      typedNumber: idNumberRaw,
+      accountName: account?.name ?? "",
+      accountDob: account?.dateOfBirth ?? null,
+    })
+    if (run.ok) auto = run.result
+    else autoError = run.error
+  }
+
+  // A number accepted with one character read differently could be a card
+  // already registered with one digit typed wrong (see nearIdNumberHashes).
+  if (auto?.decision === "APPROVED" && (auto.detail.numberEdits ?? 0) > 0) {
+    const near = await prisma.idVerification.findFirst({
+      where: { claimKey: { in: nearIdNumberHashes(idNumberRaw) } },
+      select: { id: true },
+    })
+    if (near) {
+      return conflict(
+        "That ID number is already registered. Each government ID can verify one account.",
+        { rule: "ID_ALREADY_REGISTERED" },
+      )
+    }
+  }
+
+  const status: "APPROVED" | "REJECTED" | "PENDING" = devApprove || auto?.decision === "APPROVED"
+    ? "APPROVED"
+    : auto && !lastAttempt
+      ? "REJECTED"
+      : "PENDING"
+  const reason = status === "REJECTED" ? (auto?.reason ?? "BLURRY_PHOTO") : null
+  const decided = status !== "PENDING"
   const now = new Date()
+
+  // ── Upload (only for an admin), then write the row ─────────────────────────
+
+  let image: { url: string; publicId: string } | null = null
+  if (!decided) {
+    try {
+      image = await uploadIdImage(sanitized.buffer)
+    } catch (err) {
+      console.error(
+        "[id-verification] upload failed:",
+        err instanceof Error ? err.message : "unknown error",
+      )
+      return invalid("We could not store that photo. Try again in a moment.")
+    }
+  }
 
   let created: { id: string }
   try {
@@ -233,17 +296,25 @@ export async function POST(req: NextRequest) {
         idType: toDbIdType(idType),
         idNumberHash,
         // The claim, written in the SAME statement as the status. Never on its
-        // own — see the note on the column.
-        claimKey: idNumberHash,
-        status: autoApprove ? "APPROVED" : "PENDING",
+        // own — see the note on the column. A refusal frees it at once, as an
+        // admin's refusal does, so the same ID can be sent again.
+        claimKey: status === "REJECTED" ? null : idNumberHash,
+        status,
+        rejectionReason: reason,
         attemptCount,
         submittedAt: now,
-        // On the auto-approve path the row is decided the instant it is
-        // created, so it never carries a URL a reviewer could open. The
-        // publicId stays, because the image still has to be destroyed below.
-        imageUrl: autoApprove ? null : image.url,
-        imagePublicId: image.publicId,
-        ...(autoApprove ? { reviewedById: userId, reviewedAt: now } : {}),
+        imageUrl: image?.url ?? null,
+        imagePublicId: image?.publicId ?? null,
+        ...(decided ? { reviewedAt: now } : {}),
+        ...(devApprove ? { reviewedById: userId } : {}),
+        autoDecision: auto ? auto.decision : autoError ? "ERROR" : null,
+        autoConfidence: auto?.confidence ?? null,
+        autoChecks: auto
+          ? { reason: auto.reason, checks: auto.checks, detail: auto.detail }
+          : autoError
+            ? { error: autoError.slice(0, 200) }
+            : undefined,
+        autoCheckedAt: auto || autoError ? now : null,
       },
       select: { id: true },
     })
@@ -251,7 +322,7 @@ export async function POST(req: NextRequest) {
     // The unique index on claimKey is what actually enforces one-ID-one-account;
     // the pre-check above is a courtesy. Losing here means another account
     // claimed the same number in the milliseconds since that check.
-    await destroyIdImage(image.publicId)
+    if (image) await destroyIdImage(image.publicId)
     const code = (err as { code?: string })?.code
     if (code === "P2002") {
       return conflict(
@@ -262,33 +333,39 @@ export async function POST(req: NextRequest) {
     throw err
   }
 
-  if (autoApprove) {
-    // The development escape hatch, and it leaves the same trail a real
-    // decision does. The audit row names the submitter as the actor and says
-    // what it was, so a row approved this way can never be mistaken for one a
-    // moderator looked at. If this ever appears in a production audit log, the
-    // log is telling you the env var reached production.
-    await writeAudit(prisma, {
-      actorId: userId,
-      action: "ID_VERIFICATION_APPROVED",
-      targetType: "ID_VERIFICATION",
-      targetId: created.id,
-      reason: "Development auto-approval (ID_VERIFICATION_DEV_AUTO_APPROVE=1). Nobody reviewed this ID.",
-      detail: { devAutoApprove: true, idType, attemptCount },
+  if (decided) {
+    // The same trail an admin's decision leaves: an audit row and a
+    // notification, in one transaction. The audit's actor is the submitter
+    // (there is no person behind the decision) and its reason says so, so a
+    // system decision can never be mistaken for one a moderator made.
+    const remaining = Math.max(0, MAX_ID_SUBMISSIONS - attemptCount)
+    const wireReason = reason ? toWireRejectionReason(reason) : null
+    await prisma.$transaction(async (tx) => {
+      await writeAudit(tx, {
+        actorId: userId,
+        action: status === "APPROVED" ? "ID_VERIFICATION_APPROVED" : "ID_VERIFICATION_REJECTED",
+        targetType: "ID_VERIFICATION",
+        targetId: created.id,
+        reason: devApprove
+          ? "Development auto-approval (ID_VERIFICATION_DEV_AUTO_APPROVE=1). Nobody reviewed this ID."
+          : `Decided by the automatic ID check (system), not by a person. ${status === "APPROVED" ? "Approved" : `Refused: ${REJECTION_LABEL[wireReason as RejectionReasonWire]}`}, confidence ${auto?.confidence ?? "n/a"}.`,
+        detail: devApprove
+          ? { devAutoApprove: true, idType, attemptCount }
+          : { system: "id-auto-check", idType, attemptCount, decision: status, rejectionReason: wireReason, confidence: auto?.confidence, checks: auto?.checks },
+      })
+      await tx.notification.create({
+        data: {
+          userId,
+          type: status === "APPROVED" ? "ID_VERIFICATION_APPROVED" : "ID_VERIFICATION_REJECTED",
+          message: status === "APPROVED"
+            ? "Your ID was approved. You can post items and propose deferred agreements now."
+            : `${REJECTION_FIX[wireReason as RejectionReasonWire]} You have ${remaining} of ${MAX_ID_SUBMISSIONS} attempts left.`,
+          link: "/dashboard",
+          entityType: "id_verification",
+          entityId: created.id,
+        },
+      })
     })
-    // Destroyed here for the same reason a real decision destroys it: the row
-    // is decided, so the image has no remaining purpose.
-    if (await destroyIdImage(image.publicId)) {
-      await prisma.idVerification.update({
-        where: { id: created.id },
-        data: { imagePublicId: null, imageDeletedAt: new Date() },
-      })
-    } else {
-      await prisma.idVerification.update({
-        where: { id: created.id },
-        data: { imageDeleteFailedAt: new Date() },
-      })
-    }
   }
 
   const after = await loadIdVerificationState(userId)
@@ -297,6 +374,11 @@ export async function POST(req: NextRequest) {
       submissionId: created.id,
       ...publicIdVerification(after),
     },
-    { autoApproved: autoApprove },
+    {
+      autoApproved: status === "APPROVED",
+      // Who decided: "system" (the automatic check), or "admin" (still
+      // pending: last attempt, or the check could not run).
+      decidedBy: decided ? "system" : "admin",
+    },
   )
 }

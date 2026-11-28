@@ -143,6 +143,8 @@ export const REJECTION_REASONS = [
   "expired_id",
   "wrong_document_type",
   "not_government_id",
+  "number_mismatch",
+  "underage",
 ] as const
 
 export type RejectionReasonWire = (typeof REJECTION_REASONS)[number]
@@ -152,6 +154,8 @@ export type RejectionReasonDb =
   | "EXPIRED_ID"
   | "WRONG_DOCUMENT_TYPE"
   | "NOT_GOVERNMENT_ID"
+  | "NUMBER_MISMATCH"
+  | "UNDERAGE"
 
 const REASON_TO_DB: Record<RejectionReasonWire, RejectionReasonDb> = {
   blurry_photo: "BLURRY_PHOTO",
@@ -159,6 +163,8 @@ const REASON_TO_DB: Record<RejectionReasonWire, RejectionReasonDb> = {
   expired_id: "EXPIRED_ID",
   wrong_document_type: "WRONG_DOCUMENT_TYPE",
   not_government_id: "NOT_GOVERNMENT_ID",
+  number_mismatch: "NUMBER_MISMATCH",
+  underage: "UNDERAGE",
 }
 
 const REASON_TO_WIRE: Record<RejectionReasonDb, RejectionReasonWire> = {
@@ -167,6 +173,8 @@ const REASON_TO_WIRE: Record<RejectionReasonDb, RejectionReasonWire> = {
   EXPIRED_ID: "expired_id",
   WRONG_DOCUMENT_TYPE: "wrong_document_type",
   NOT_GOVERNMENT_ID: "not_government_id",
+  NUMBER_MISMATCH: "number_mismatch",
+  UNDERAGE: "underage",
 }
 
 export const toDbRejectionReason = (r: RejectionReasonWire): RejectionReasonDb => REASON_TO_DB[r]
@@ -179,6 +187,8 @@ export const REJECTION_LABEL: Record<RejectionReasonWire, string> = {
   expired_id: "ID has expired",
   wrong_document_type: "Not one of the accepted ID types",
   not_government_id: "Not a government-issued ID",
+  number_mismatch: "ID number does not match the photo",
+  underage: "Holder is under 18",
 }
 
 /** What the submitter is told, and what to do about it. */
@@ -193,6 +203,10 @@ export const REJECTION_FIX: Record<RejectionReasonWire, string> = {
     "That document is not one we accept. Student IDs, company IDs and barangay certificates are not on the list; a national ID, driver's licence, passport, UMID, PhilHealth, postal ID or voter's ID is.",
   not_government_id:
     "That is not a government-issued ID. It has to be a document issued by a national agency — the accepted list is on the submission screen.",
+  number_mismatch:
+    "The ID number you typed does not match the one on the photo. Check the number, type it exactly as printed, and retake the photo so every digit is clear.",
+  underage:
+    "Baylo is for people 18 and over, and the date of birth on this ID is under 18.",
 }
 
 // ── The cap ──────────────────────────────────────────────────────────────────
@@ -245,6 +259,26 @@ export function normaliseIdNumber(raw: string): string {
  * who already has the database. Storing the number itself would be worse in
  * every one of those cases, which is the comparison that matters.
  */
+/**
+ * Digests of every number one character away from `raw` (same kind: a digit
+ * for a digit, a letter for a letter). The automatic check accepts a number
+ * that OCR read with one character different, so without this a card already
+ * registered could verify a second account by typing one digit wrong: the
+ * typed number would hash differently. The route refuses if any of these is a
+ * live claim. About 9 x length digests, looked up in one indexed query.
+ */
+export function nearIdNumberHashes(raw: string): string[] {
+  const n = normaliseIdNumber(raw)
+  const out: string[] = []
+  for (let i = 0; i < n.length; i++) {
+    const pool = /[0-9]/.test(n[i]) ? "0123456789" : "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+    for (const ch of pool) {
+      if (ch !== n[i]) out.push(hashIdNumber(n.slice(0, i) + ch + n.slice(i + 1)))
+    }
+  }
+  return out
+}
+
 export function hashIdNumber(raw: string): string {
   return crypto.createHash("sha256").update(normaliseIdNumber(raw)).digest("hex")
 }

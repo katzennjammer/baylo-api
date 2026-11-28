@@ -1729,6 +1729,10 @@ enum IdRejectionReason {
   EXPIRED_ID
   WRONG_DOCUMENT_TYPE
   NOT_GOVERNMENT_ID
+  /// The number typed is not the one on the card (automatic check, 29 Nov 2026).
+  NUMBER_MISMATCH
+  /// The date of birth on the card makes the holder under 18.
+  UNDERAGE
 }
 
 /**
@@ -1846,6 +1850,19 @@ model IdVerification {
    * When a destroy last failed. Non-null with imagePublicId non-null = retry me.
    */
   imageDeleteFailedAt DateTime?
+
+  /**
+   * The automatic ID check (29 Nov 2026, @/lib/id-auto-check). NULL on rows
+   * decided before it existed. autoDecision is what the SYSTEM concluded
+   * (APPROVED / REJECTED / ERROR); `status` is what happened, which differs
+   * only on a last attempt the system could not approve (sent to an admin as
+   * PENDING). autoChecks holds each check's outcome and scores, NEVER the
+   * text read from the card.
+   */
+  autoDecision   String?
+  autoConfidence Float?
+  autoChecks     Json?
+  autoCheckedAt  DateTime?
 
   createdAt DateTime @default(now())
 
