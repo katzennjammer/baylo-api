@@ -55,3 +55,6 @@ next-env.d.ts
 qa-login.mjs
 tmp-db-check.mjs
 fix-typo.js
+
+# training data exported by scripts/export-training-data.ts
+ml-data/
